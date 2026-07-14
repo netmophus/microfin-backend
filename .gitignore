@@ -1,0 +1,36 @@
+# Environnement virtuel
+.venv/
+venv/
+
+# Variables d'environnement (secrets — ne JAMAIS commiter)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+
+# Outils de test et qualité
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / éditeurs
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Logs et fichiers temporaires
+*.log
+*.tmp
