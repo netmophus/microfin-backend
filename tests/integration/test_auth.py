@@ -18,19 +18,22 @@ import secrets
 import string
 import time
 import uuid
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal
+from app.core.database import engine
 from app.modules.parameters.models import Agency
 from app.modules.security.auth import (
     MESSAGE_ECHEC_GENERIQUE,
+    PLAFOND_LOCKOUT_COUNT,
+    SEUIL_VERROUILLAGE,
     CauseEchec,
     EchecAuthentificationError,
+    _selectionner_pour_maj,
     authentifier,
 )
 from app.modules.security.jwt import decoder_access_token, decoder_refresh_token
@@ -52,12 +55,28 @@ def _mot_de_passe_conforme() -> str:
 
 @pytest.fixture
 def db() -> Generator[Session, None, None]:
-    session = SessionLocal()
+    """Session en isolation par SAVEPOINT.
+
+    authentifier COMMITTE désormais (compteur, verrou) : une session rollback-only ne
+    suffirait plus, un commit réel polluerait la base entre tests. Ici, la session est
+    liée à une connexion dont la transaction externe est déjà ouverte ; join_transaction_
+    mode="create_savepoint" fait que chaque db.commit() du code testé ne relâche qu'un
+    savepoint. Le rollback de la transaction externe, au teardown, annule TOUT — y compris
+    ce que le code a « committé ». Patron standard pour tester du code qui committe.
+    """
+    connection = engine.connect()
+    transaction = connection.begin()
+    session = Session(
+        bind=connection,
+        join_transaction_mode="create_savepoint",
+        expire_on_commit=False,
+    )
     try:
         yield session
     finally:
-        session.rollback()
         session.close()
+        transaction.rollback()
+        connection.close()
 
 
 @pytest.fixture
@@ -257,6 +276,11 @@ def test_les_quatre_echecs_donnent_le_meme_message(
 # --- anti-énumération par le timing -------------------------------------------------
 
 
+def _mediane(mesures: list[float]) -> float:
+    mesures.sort()
+    return mesures[len(mesures) // 2]
+
+
 def test_le_compte_inexistant_a_un_timing_comparable_a_un_compte_existant(
     db: Session, utilisateur: User
 ) -> None:
@@ -264,24 +288,37 @@ def test_le_compte_inexistant_a_un_timing_comparable_a_un_compte_existant(
 
     Sinon le temps de réponse (~0 ms contre ~22 ms) trahirait l'existence du compte. On
     compare un ratio plutôt qu'un seuil absolu, pour rester robuste à la vitesse machine :
-    un court-circuit sans Argon2 donnerait un ratio proche de zéro.
+    un court-circuit sans Argon2 donnerait un ratio proche de zéro. Le compteur est remis
+    à zéro entre les itérations pour que chacune mesure le chemin d'écriture complet
+    (UPDATE + COMMIT) sans jamais déclencher le verrou.
     """
 
-    def mesurer(identifiant: str) -> float:
+    def mesurer_existant() -> float:
+        mesures: list[float] = []
+        for _ in range(5):
+            utilisateur.failed_attempts = 0
+            db.flush()
+            debut = time.perf_counter()
+            with pytest.raises(EchecAuthentificationError):
+                authentifier(db, utilisateur.username, _mot_de_passe_conforme())
+            mesures.append(time.perf_counter() - debut)
+        return _mediane(mesures)
+
+    def mesurer_inexistant() -> float:
         mesures: list[float] = []
         for _ in range(5):
             debut = time.perf_counter()
             with pytest.raises(EchecAuthentificationError):
-                authentifier(db, identifiant, _mot_de_passe_conforme())
+                authentifier(db, f"fantome_{uuid.uuid4().hex[:8]}", _mot_de_passe_conforme())
             mesures.append(time.perf_counter() - debut)
-        mesures.sort()
-        return mesures[len(mesures) // 2]  # médiane
+        return _mediane(mesures)
 
-    temps_existant = mesurer(utilisateur.username)
-    temps_inexistant = mesurer(f"fantome_{uuid.uuid4().hex[:8]}")
+    temps_existant = mesurer_existant()
+    temps_inexistant = mesurer_inexistant()
 
     # Le compte absent ne doit pas répondre nettement plus vite : preuve que HASH_LEURRE
-    # a bien fait travailler Argon2. Marge large pour absorber le bruit de mesure.
+    # a bien fait travailler Argon2. Le chemin existant fait EN PLUS un UPDATE + COMMIT
+    # (~quelques ms), donc temps_inexistant est un peu plus court — mais du même ordre.
     assert temps_inexistant >= temps_existant * 0.5
 
 
@@ -291,44 +328,40 @@ def test_un_compte_verrouille_execute_quand_meme_argon2(
     """Le piège de timing signalé dans authentifier : un compte bloqué ne doit pas
     court-circuiter Argon2, sinon sa vitesse de réponse le désignerait comme existant.
 
-    On le prouve en comparant à un mot de passe faux sur compte actif (qui, lui, exécute
-    forcément Argon2) : les deux doivent être du même ordre de grandeur.
+    Comparaison à un mot de passe faux sur compte actif (qui exécute forcément Argon2) :
+    les deux doivent être du même ordre de grandeur.
     """
 
-    def mesurer(prepare: Callable[[], None]) -> float:
+    def mesurer_verrouille() -> float:
         mesures: list[float] = []
         for _ in range(5):
-            prepare()
+            # Verrou frais à chaque itération : la tentative est rejetée sans écriture.
+            utilisateur.is_locked = True
+            utilisateur.locked_until = datetime.now(UTC) + timedelta(minutes=15)
+            db.flush()
             debut = time.perf_counter()
             with pytest.raises(EchecAuthentificationError):
                 authentifier(db, utilisateur.username, mot_de_passe)
             mesures.append(time.perf_counter() - debut)
-        mesures.sort()
-        return mesures[len(mesures) // 2]
+        return _mediane(mesures)
 
-    def verrouiller() -> None:
-        utilisateur.is_active = True
-        utilisateur.is_locked = True
-        db.flush()
+    def mesurer_reference() -> float:
+        mesures: list[float] = []
+        for _ in range(5):
+            # Compte actif, non verrouillé, compteur remis à zéro : mot de passe faux →
+            # Argon2 + écriture, sans jamais atteindre le seuil de verrouillage.
+            utilisateur.is_active = True
+            utilisateur.is_locked = False
+            utilisateur.locked_until = None
+            utilisateur.failed_attempts = 0
+            db.flush()
+            debut = time.perf_counter()
+            with pytest.raises(EchecAuthentificationError):
+                authentifier(db, utilisateur.username, _mot_de_passe_conforme())
+            mesures.append(time.perf_counter() - debut)
+        return _mediane(mesures)
 
-    def desactiver_mdp() -> None:
-        utilisateur.is_active = True
-        utilisateur.is_locked = False
-        db.flush()
-
-    temps_verrouille = mesurer(verrouiller)
-    # Référence : mot de passe faux sur compte actif — Argon2 s'exécute à coup sûr.
-    desactiver_mdp()
-    mesures_ref: list[float] = []
-    for _ in range(5):
-        debut = time.perf_counter()
-        with pytest.raises(EchecAuthentificationError):
-            authentifier(db, utilisateur.username, _mot_de_passe_conforme())
-        mesures_ref.append(time.perf_counter() - debut)
-    mesures_ref.sort()
-    temps_reference = mesures_ref[len(mesures_ref) // 2]
-
-    assert temps_verrouille >= temps_reference * 0.5
+    assert mesurer_verrouille() >= mesurer_reference() * 0.5
 
 
 # --- non-exposition -----------------------------------------------------------------
@@ -348,3 +381,154 @@ def test_la_cause_nest_pas_dans_le_repr_de_lexception(db: Session, utilisateur: 
     with pytest.raises(EchecAuthentificationError) as capture:
         authentifier(db, utilisateur.username, _mot_de_passe_conforme())
     assert "mot_de_passe" not in repr(capture.value)
+
+
+# --- verrouillage progressif C7 (3b) ------------------------------------------------
+
+
+def _echouer(db: Session, user: User, fois: int) -> None:
+    """Enchaîne `fois` tentatives à mot de passe faux (chacune committe son incrément)."""
+    for _ in range(fois):
+        with pytest.raises(EchecAuthentificationError):
+            authentifier(db, user.username, _mot_de_passe_conforme())
+
+
+def test_quatre_echecs_ne_verrouillent_pas(db: Session, utilisateur: User) -> None:
+    _echouer(db, utilisateur, 4)
+    assert utilisateur.failed_attempts == 4
+    assert utilisateur.is_locked is False
+    assert utilisateur.locked_until is None
+
+
+def test_le_compteur_est_persiste_entre_les_tentatives(db: Session, utilisateur: User) -> None:
+    # Preuve que l'incrément est bien committé et non perdu au raise : on recharge la
+    # ligne depuis la base (populate_existing force la relecture, pas l'objet en mémoire).
+    _echouer(db, utilisateur, 3)
+    recharge = db.execute(
+        select(User).where(User.id == utilisateur.id).execution_options(populate_existing=True)
+    ).scalar_one()
+    assert recharge.failed_attempts == 3
+
+
+def test_le_cinquieme_echec_pose_un_verrou_de_quinze_minutes(
+    db: Session, utilisateur: User
+) -> None:
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    assert utilisateur.is_locked is True
+    assert utilisateur.lockout_count == 1
+    assert utilisateur.last_lockout_at is not None
+    # locked_until ≈ now + 15 min (un peu moins : du temps s'est écoulé depuis la pose).
+    assert utilisateur.locked_until is not None
+    delta = utilisateur.locked_until - datetime.now(UTC)
+    assert timedelta(minutes=14) <= delta <= timedelta(minutes=15)
+    # Les échecs sont consommés dans le verrou.
+    assert utilisateur.failed_attempts == 0
+
+
+def test_une_connexion_reussie_remet_le_compteur_a_zero(
+    db: Session, utilisateur: User, mot_de_passe: str
+) -> None:
+    _echouer(db, utilisateur, 3)
+    assert utilisateur.failed_attempts == 3
+    authentifier(db, utilisateur.username, mot_de_passe)
+    assert utilisateur.failed_attempts == 0
+    assert utilisateur.is_locked is False
+
+
+def test_le_deuxieme_cycle_de_verrouillage_dure_trente_minutes(
+    db: Session, utilisateur: User
+) -> None:
+    # 1er verrou : 15 min, lockout_count = 1.
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    assert utilisateur.lockout_count == 1
+
+    # On simule l'expiration de la fenêtre (locked_until dans le passé), en gardant
+    # last_lockout_at récent : l'escalade ne doit PAS être réinitialisée.
+    utilisateur.locked_until = datetime.now(UTC) - timedelta(minutes=1)
+    db.flush()
+
+    # 2e cycle : 5 échecs de plus → verrou de 30 min, lockout_count = 2.
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    assert utilisateur.lockout_count == 2
+    assert utilisateur.locked_until is not None
+    delta = utilisateur.locked_until - datetime.now(UTC)
+    assert timedelta(minutes=29) <= delta <= timedelta(minutes=30)
+
+
+def test_lockout_count_est_reinitialise_apres_vingt_quatre_heures(
+    db: Session, utilisateur: User
+) -> None:
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    assert utilisateur.lockout_count == 1
+
+    # On simule 25 h écoulées depuis le dernier verrou, fenêtre expirée : la progression
+    # doit repartir de 15 min et lockout_count de 1.
+    utilisateur.last_lockout_at = datetime.now(UTC) - timedelta(hours=25)
+    utilisateur.locked_until = datetime.now(UTC) - timedelta(hours=25)
+    db.flush()
+
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    assert utilisateur.lockout_count == 1  # reparti de zéro, +1
+    assert utilisateur.locked_until is not None
+    delta = utilisateur.locked_until - datetime.now(UTC)
+    assert timedelta(minutes=14) <= delta <= timedelta(minutes=15)
+
+
+def test_une_tentative_sur_compte_verrouille_ne_prolonge_pas_le_verrou(
+    db: Session, utilisateur: User, mot_de_passe: str
+) -> None:
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    verrou_initial = utilisateur.locked_until
+    compteur_initial = utilisateur.lockout_count
+
+    # Plusieurs tentatives PENDANT le verrou (mot de passe correct ou non) : aucune ne
+    # doit prolonger locked_until ni réincrémenter lockout_count.
+    for _ in range(3):
+        with pytest.raises(EchecAuthentificationError) as capture:
+            authentifier(db, utilisateur.username, mot_de_passe)
+        assert capture.value.cause == CauseEchec.COMPTE_VERROUILLE
+
+    assert utilisateur.locked_until == verrou_initial
+    assert utilisateur.lockout_count == compteur_initial
+    assert utilisateur.failed_attempts == 0
+
+
+def test_un_verrou_expire_repart_sur_un_compteur_neuf(db: Session, utilisateur: User) -> None:
+    # Le cas limite vicieux : après expiration du verrou, un seul mauvais mot de passe ne
+    # doit PAS re-verrouiller aussitôt — le compte repart sur SEUIL tentatives.
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    utilisateur.locked_until = datetime.now(UTC) - timedelta(minutes=1)
+    db.flush()
+
+    _echouer(db, utilisateur, 1)  # une seule tentative après expiration
+    assert utilisateur.is_locked is False
+    assert utilisateur.failed_attempts == 1  # compteur neuf, pas 6
+
+
+def test_la_duree_de_verrou_plafonne_a_cent_vingt_minutes(db: Session, utilisateur: User) -> None:
+    # Au-delà du palier max, la durée ne double plus : elle reste à 120 min.
+    utilisateur.lockout_count = PLAFOND_LOCKOUT_COUNT
+    utilisateur.last_lockout_at = datetime.now(UTC)
+    db.flush()
+
+    _echouer(db, utilisateur, SEUIL_VERROUILLAGE)
+    assert utilisateur.locked_until is not None
+    delta = utilisateur.locked_until - datetime.now(UTC)
+    assert timedelta(minutes=119) <= delta <= timedelta(minutes=120)
+
+
+# --- concurrence : preuve du verrou de ligne ----------------------------------------
+
+
+def test_le_chargement_prend_un_verrou_de_ligne_for_update() -> None:
+    """Preuve déterministe que la lecture-modification du compteur est protégée.
+
+    Un vrai test à deux connexions serait instable (ordonnancement des threads) et
+    polluerait la base (la ligne de test n'est pas committée, donc invisible d'une autre
+    connexion sous l'isolation par savepoint). On vérifie plutôt que la requête compile
+    en SQL avec FOR UPDATE : le mécanisme de sérialisation est en place.
+    """
+    # Compilé avec le dialecte du vrai engine PostgreSQL : le rendu FOR UPDATE est
+    # celui qui partira en base.
+    sql = str(_selectionner_pour_maj("peu-importe").compile(engine))
+    assert "FOR UPDATE" in sql
