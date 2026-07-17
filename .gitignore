@@ -3,9 +3,12 @@
 venv/
 
 # Variables d'environnement (secrets — ne JAMAIS commiter)
+# Tout .env* est ignoré, SAUF le modèle. La liste précédente (.env, .env.local,
+# .env.*.local) laissait passer .env.backup, .env.prod, .env.old — les noms qu'on
+# improvise justement le jour où on manipule un secret dans l'urgence.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # Python
 __pycache__/
