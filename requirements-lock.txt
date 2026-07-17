@@ -2,8 +2,11 @@ alembic==1.18.5
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.14.2
+argon2-cffi==25.1.0
+argon2-cffi-bindings==25.1.0
 ast_serialize==0.6.0
 certifi==2026.6.17
+cffi==2.1.0
 click==8.4.2
 colorama==0.4.6
 coverage==7.15.1
@@ -28,6 +31,7 @@ pathspec==1.1.1
 pluggy==1.6.0
 psycopg==3.3.4
 psycopg-binary==3.3.4
+pycparser==3.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
