@@ -1,40 +1,55 @@
-"""Service d'authentification — connexion et verrouillage progressif (§6). Sous-blocs 3a + 3b.
+"""Service d'authentification — connexion, verrouillage, sessions (§6). Sous-blocs 3a+3b+3c.
 
-Périmètre : identifiant + mot de passe → jetons (3a), plus le compteur d'échecs et le
-verrouillage progressif C7 (3b, premier sous-bloc qui ÉCRIT en base).
+Périmètre : identifiant + mot de passe → jetons (3a) ; compteur d'échecs et verrouillage
+progressif C7 (3b) ; sessions en base et rotation des refresh tokens avec détection de vol
+(3c).
 
 Hors périmètre, volontairement absent :
-  - 3c : sessions en base et rotation des refresh tokens.
   - 3d : écriture d'audit (C5) et choix d'agence courante en multi-agences.
+  - Bloc 4 : les endpoints API. Ici on fait la LOGIQUE, pas l'API.
+  - La purge des sessions révoquées (job de nettoyage différé) : à écrire plus tard.
 
-3b écrit sur DEUX chemins seulement — échec de mot de passe (compte existant, actif) et
-succès. Les trois autres (inexistant, désactivé, verrouillé) restent sans écriture. Les
-mutations et le commit sont isolés dans _enregistrer_echec / _enregistrer_succes : c'est
-LE point où 3d insérera la trace d'audit, dans la MÊME transaction que le compteur.
+Les mutations et le commit sont isolés dans des helpers (_enregistrer_echec,
+_enregistrer_succes, _appliquer_rotation, _revoquer_toutes_les_sessions) : c'est LE point
+où 3d insérera la trace d'audit, dans la MÊME transaction que l'écriture métier. L'ordre
+des verrous reste constant — ligne user/session (FOR UPDATE) puis verrou consultatif du
+chaînage d'audit — donc pas de deadlock avec le trigger de chaînage.
 
-DEUX SECRETS À NE JAMAIS LAISSER SORTIR :
+SECRETS À NE JAMAIS LAISSER SORTIR :
 
-  1. password_hash ne quitte jamais ce module. Aucun retour, aucun message, aucun log.
-  2. La RAISON d'un échec ne sort jamais non plus. À l'extérieur, les quatre causes
-     donnent le MÊME message générique — sinon la réponse dirait à un attaquant si le
-     compte existe, s'il est actif, s'il est verrouillé. En interne, la cause est
-     distinguée (CauseEchec, hors de args) pour le compteur (3b) et l'audit (3d).
+  1. password_hash et le refresh token EN CLAIR ne quittent jamais ce module. En base, le
+     refresh n'existe que sous forme de hash SHA-256 (refresh_token_hash) ; le clair n'est
+     ni stocké ni journalisé.
+  2. La RAISON d'un refus ne sort jamais non plus. À l'extérieur, toutes les causes donnent
+     le MÊME message générique — au login pour ne pas révéler l'existence/l'état d'un
+     compte, au refresh pour ne pas dire à un attaquant « vol détecté ». En interne, la
+     cause est distinguée (hors de args) pour le compteur (3b) et l'audit (3d).
 
-DEUX PIÈGES, détaillés à leur emplacement :
-  - l'ordre des contrôles est un oracle de timing (voir authentifier) ;
-  - le commit du compteur doit précéder le raise, sinon un échec perd l'incrément.
+PIÈGES, détaillés à leur emplacement :
+  - l'ordre des contrôles au login est un oracle de timing (voir authentifier) ;
+  - le commit du compteur doit précéder le raise, sinon un échec perd l'incrément ;
+  - la rotation d'un refresh est atomique sous FOR UPDATE (voir rafraichir).
 """
 
+import hashlib
+import hmac
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, select, update
 from sqlalchemy.orm import Session, lazyload
 
-from app.modules.security.jwt import creer_access_token, creer_refresh_token
-from app.modules.security.models import User
+from app.modules.security.jwt import (
+    JetonExpireError,
+    JetonInvalideError,
+    TypeDeJetonInvalideError,
+    creer_access_token,
+    creer_refresh_token,
+    decoder_refresh_token,
+)
+from app.modules.security.models import User, UserSession
 from app.modules.security.password import (
     HASH_LEURRE,
     rehachage_necessaire,
@@ -88,6 +103,40 @@ class EchecAuthentificationError(Exception):
 
     def __init__(self, cause: CauseEchec, user_id: uuid.UUID | None = None) -> None:
         super().__init__(MESSAGE_ECHEC_GENERIQUE)
+        self.cause = cause
+        self.user_id = user_id
+
+
+# Message unique pour TOUT refus de rafraîchissement. Ne jamais dire dehors laquelle des
+# causes s'applique — surtout pas « réutilisation détectée », qui préviendrait le voleur.
+MESSAGE_REFRESH_REFUSE = "Session invalide. Veuillez vous reconnecter."
+
+
+class CauseRefresh(StrEnum):
+    """Cause INTERNE d'un refus de rafraîchissement. Ne franchit jamais la frontière.
+
+    Distinguée pour l'audit (3d) ; à l'extérieur, toutes donnent MESSAGE_REFRESH_REFUSE.
+    """
+
+    TOKEN_INVALIDE = "token_invalide"
+    TOKEN_EXPIRE = "token_expire"
+    TYPE_INVALIDE = "type_invalide"
+    SESSION_INTROUVABLE = "session_introuvable"
+    SESSION_EXPIREE = "session_expiree"
+    HASH_INCOHERENT = "hash_incoherent"
+    COMPTE_INDISPONIBLE = "compte_indisponible"
+    REUTILISATION_DETECTEE = "reutilisation_detectee"
+
+
+class RafraichissementError(Exception):
+    """Refus de rafraîchissement. Message générique dehors, cause distincte dedans.
+
+    Même contrat que EchecAuthentificationError : args[0] est toujours le message
+    générique ; cause et user_id sont des attributs hors de args, pour l'audit (3d).
+    """
+
+    def __init__(self, cause: CauseRefresh, user_id: uuid.UUID | None = None) -> None:
+        super().__init__(MESSAGE_REFRESH_REFUSE)
         self.cause = cause
         self.user_id = user_id
 
@@ -170,6 +219,79 @@ def _duree_verrou(palier: int) -> timedelta:
     return DUREE_BASE_VERROU * multiplicateur
 
 
+# --- sessions et refresh tokens (C7 sessions, 3c) ----------------------------------
+
+
+def _hash_refresh(refresh_token: str) -> str:
+    """SHA-256 du refresh token — jamais le clair en base.
+
+    SHA-256 et non Argon2, décidé : un refresh token est une chaîne aléatoire à haute
+    entropie (jti uuid4 + signature), pas un mot de passe humain. La lenteur d'Argon2
+    n'apporte rien contre une force brute déjà impraticable ; le seul rôle du hash est
+    qu'un vol de la base ne permette pas de REJOUER les tokens. Pas de sel non plus,
+    inutile sur une entrée déjà imprévisible.
+    """
+    return hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()
+
+
+def _creer_session(
+    user_id: uuid.UUID, refresh_token: str, ip: str | None, user_agent: str | None
+) -> UserSession:
+    """Fabrique la ligne user_sessions d'un refresh token, SANS l'ajouter à la session DB.
+
+    L'id de la session EST le jti du token (pas de colonne jti dédiée, pas de migration) :
+    chaque refresh correspond à une session, retrouvée par son jti = clé primaire. issued_at
+    et expires_at viennent des claims signés, pour rester cohérents avec le token lui-même.
+    """
+    claims = decoder_refresh_token(refresh_token)
+    return UserSession(
+        id=claims.jti,
+        user_id=user_id,
+        refresh_token_hash=_hash_refresh(refresh_token),
+        issued_at=claims.iat,
+        expires_at=claims.exp,
+        ip=ip,
+        user_agent=user_agent,
+    )
+
+
+def _revoquer_toutes_les_sessions(db: Session, user_id: uuid.UUID, maintenant: datetime) -> None:
+    """Révoque TOUTES les sessions actives d'un utilisateur — réaction à une détection de vol.
+
+    Ne committe pas : l'appelant committe, pour laisser 3d insérer l'audit « vol détecté »
+    dans la même transaction. synchronize_session="fetch" tient à jour les objets déjà en
+    mémoire, pour que l'appelant et les tests voient la révocation sans relire la base.
+    """
+    db.execute(
+        update(UserSession)
+        .where(UserSession.user_id == user_id, UserSession.revoked_at.is_(None))
+        .values(revoked_at=maintenant)
+        .execution_options(synchronize_session="fetch")
+    )
+
+
+def _appliquer_rotation(
+    db: Session, ancienne: UserSession, nouvelle: UserSession, maintenant: datetime
+) -> None:
+    """Rotation atomique : révoque l'ancienne session, la chaîne à la nouvelle, COMMITTE.
+
+    Sous le FOR UPDATE tenu par rafraichir : révocation + création + chaînage forment un
+    tout. Une panne au milieu laisserait soit deux sessions valides pour un même token,
+    soit zéro — l'unique commit l'interdit.
+
+    POINT DE COUTURE 3d : la trace d'audit (rafraîchissement) s'insérera juste avant.
+    """
+    # La nouvelle session doit EXISTER avant que l'ancienne la référence : replaced_by_
+    # session_id est une FK auto-référente. On fixe la colonne directement (pas la
+    # relation), donc l'unit-of-work ne connaît pas la dépendance et ordonnerait l'UPDATE
+    # avant l'INSERT → violation de FK. Le flush explicite insère la nouvelle d'abord.
+    db.add(nouvelle)
+    db.flush()
+    ancienne.revoked_at = maintenant
+    ancienne.replaced_by_session_id = nouvelle.id
+    db.commit()
+
+
 def _enregistrer_echec(db: Session, user: User, maintenant: datetime) -> None:
     """Compte l'échec, pose le verrou au seuil, puis COMMITTE — avant que l'appelant lève.
 
@@ -203,8 +325,13 @@ def _enregistrer_echec(db: Session, user: User, maintenant: datetime) -> None:
     db.commit()
 
 
-def _enregistrer_succes(db: Session, user: User, maintenant: datetime) -> None:
-    """Remet le compteur à zéro, lève tout verrou résiduel, puis COMMITTE.
+def _enregistrer_succes(
+    db: Session, user: User, session: UserSession, maintenant: datetime
+) -> None:
+    """Remet le compteur à zéro, PERSISTE la nouvelle session, puis COMMITTE.
+
+    La session est créée dans la MÊME transaction que la remise à zéro du compteur (3c) :
+    une connexion réussie et sa session naissent ou échouent ensemble.
 
     POINT DE COUTURE 3d : la trace d'audit (connexion réussie) s'insérera juste avant le
     commit, dans cette transaction.
@@ -219,10 +346,18 @@ def _enregistrer_succes(db: Session, user: User, maintenant: datetime) -> None:
     ):
         user.lockout_count = 0
 
+    db.add(session)
     db.commit()
 
 
-def authentifier(db: Session, identifiant: str, mot_de_passe: str) -> ResultatConnexion:
+def authentifier(
+    db: Session,
+    identifiant: str,
+    mot_de_passe: str,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> ResultatConnexion:
     """Authentifie par (username OU email) + mot de passe. Émet access + refresh.
 
     identifiant : username (sensible à la casse, VARCHAR) ou email (insensible, CITEXT).
@@ -267,11 +402,10 @@ def authentifier(db: Session, identifiant: str, mot_de_passe: str) -> ResultatCo
         _enregistrer_echec(db, user, maintenant)  # committe AVANT de lever
         raise EchecAuthentificationError(CauseEchec.MOT_DE_PASSE_INVALIDE, user.id)
 
-    # Succès : remise à zéro du compteur, puis émission des jetons. En 3a/3b, l'agence
+    # Succès : émission des jetons, création de la session, remise à zéro du compteur —
+    # le tout dans une seule transaction (cf. _enregistrer_succes). En 3a/3b/3c, l'agence
     # courante du jeton EST l'agence de rattachement ; le choix d'une autre agence
     # (multi-agences, C6) viendra en 3d. roles vient de la relation viewonly User.roles.
-    _enregistrer_succes(db, user, maintenant)
-
     roles = tuple(role.code for role in user.roles)
     access_token = creer_access_token(
         user_id=user.id,
@@ -280,10 +414,113 @@ def authentifier(db: Session, identifiant: str, mot_de_passe: str) -> ResultatCo
         agency_id=user.primary_agency_id,
     )
     refresh_token = creer_refresh_token(user_id=user.id)
+    session = _creer_session(user.id, refresh_token, ip, user_agent)
+
+    _enregistrer_succes(db, user, session, maintenant)
 
     return ResultatConnexion(
         user_id=user.id,
         access_token=access_token,
         refresh_token=refresh_token,
         rehash_recommande=rehachage_necessaire(user.password_hash),
+    )
+
+
+def rafraichir(
+    db: Session,
+    refresh_token: str,
+    *,
+    ip: str | None = None,
+    user_agent: str | None = None,
+) -> ResultatConnexion:
+    """Rotation d'un refresh token : émet un nouveau couple, révoque l'ancien, détecte le vol.
+
+    Étapes : décoder (via jwt.py — signature, expiration ET type refresh, le piège du
+    bloc 2) → charger la session par son jti sous FOR UPDATE → vérifier existence,
+    non-réutilisation, non-expiration, authenticité du hash, état du compte → tourner.
+
+    DÉTECTION DE VOL (le cœur de 3c). Si la session existe mais est DÉJÀ RÉVOQUÉE, c'est
+    qu'un token consommé recircule : quelqu'un rejoue un refresh déjà tourné. On révoque
+    TOUTES les sessions de l'utilisateur (déconnexion totale) et on refuse. Ce cas englobe
+    le double-submit d'un même token — voulu : présenter deux fois le même refresh est
+    traité comme un vol, pas comme une erreur bénigne.
+
+    PAS DE FAUX POSITIF MULTI-APPAREILS. Chaque appareil a SA session (son jti, son token).
+    Rafraîchir l'appareil A ne révoque que la session de A ; celle de B, d'un autre jti,
+    est intacte. La détection ne se déclenche que sur la réutilisation d'un token révoqué,
+    jamais sur des sessions actives distinctes qui coexistent légitimement.
+
+    CONCURRENCE. Le FOR UPDATE sérialise deux rotations parallèles du MÊME token : la
+    seconde attend le commit de la première, puis voit la session révoquée → détection de
+    vol. Deux sessions valides ne peuvent donc jamais naître d'un seul token.
+
+    Refuse via RafraichissementError (message générique) dans tous les cas.
+    """
+    maintenant = datetime.now(UTC)
+
+    # Les erreurs de jwt.py sont traduites en RafraichissementError : un seul type de refus
+    # pour l'appelant. On ne chaîne pas (from None) — la traceback de jwt porterait le token.
+    try:
+        claims = decoder_refresh_token(refresh_token)
+    except JetonExpireError:
+        raise RafraichissementError(CauseRefresh.TOKEN_EXPIRE) from None
+    except TypeDeJetonInvalideError:
+        raise RafraichissementError(CauseRefresh.TYPE_INVALIDE) from None
+    except JetonInvalideError:
+        raise RafraichissementError(CauseRefresh.TOKEN_INVALIDE) from None
+
+    session = db.execute(
+        select(UserSession).where(UserSession.id == claims.jti).with_for_update()
+    ).scalar_one_or_none()
+
+    if session is None:
+        # Token signé valide mais aucune session : ni preuve de réutilisation (la session
+        # a pu être purgée un jour), ni token que l'on reconnaît. Refus simple, sans
+        # révocation totale — voir la décision « session introuvable » de 3c.
+        raise RafraichissementError(CauseRefresh.SESSION_INTROUVABLE)
+
+    if session.revoked_at is not None:
+        _revoquer_toutes_les_sessions(db, session.user_id, maintenant)
+        db.commit()  # 3d : audit « vol détecté » juste avant ce commit
+        raise RafraichissementError(CauseRefresh.REUTILISATION_DETECTEE, session.user_id)
+
+    # Défense en profondeur : le token a déjà été jugé non expiré par jwt.py, mais la
+    # session porte sa propre échéance (un futur outil d'admin pourrait la raccourcir).
+    if session.expires_at <= maintenant:
+        raise RafraichissementError(CauseRefresh.SESSION_EXPIREE, session.user_id)
+
+    # Authenticité : le jti a trouvé la ligne, le hash prouve que c'est bien CE token.
+    # Comparaison à temps constant, par principe (le jti est déjà public dans le token).
+    if not hmac.compare_digest(session.refresh_token_hash, _hash_refresh(refresh_token)):
+        raise RafraichissementError(CauseRefresh.HASH_INCOHERENT, session.user_id)
+
+    # État du compte re-vérifié à CHAQUE rotation : sans cela, un compte désactivé,
+    # verrouillé ou supprimé après sa connexion garderait un accès pendant 8 h, rendant
+    # le verrouillage (3b) et la désactivation contournables via le refresh.
+    user = db.get(User, session.user_id)
+    if user is None or user.deleted_at is not None or not user.is_active:
+        raise RafraichissementError(CauseRefresh.COMPTE_INDISPONIBLE, session.user_id)
+    if _verrou_actif(user, maintenant):
+        raise RafraichissementError(CauseRefresh.COMPTE_INDISPONIBLE, user.id)
+
+    # Rotation. Les rôles sont RELUS en base ici — c'est précisément pourquoi le refresh
+    # n'en portait pas (bloc 2) : une habilitation révoquée entre-temps ne survit pas.
+    roles = tuple(role.code for role in user.roles)
+    nouvel_access = creer_access_token(
+        user_id=user.id,
+        roles=roles,
+        primary_agency_id=user.primary_agency_id,
+        agency_id=user.primary_agency_id,
+    )
+    nouveau_refresh = creer_refresh_token(user_id=user.id)
+    nouvelle_session = _creer_session(user.id, nouveau_refresh, ip, user_agent)
+
+    _appliquer_rotation(db, session, nouvelle_session, maintenant)
+
+    return ResultatConnexion(
+        user_id=user.id,
+        access_token=nouvel_access,
+        refresh_token=nouveau_refresh,
+        # Sans rapport avec le mot de passe, non évalué ici : toujours False au refresh.
+        rehash_recommande=False,
     )
