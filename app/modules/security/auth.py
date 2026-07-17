@@ -1,25 +1,33 @@
-"""Service d'authentification — connexion, verrouillage, sessions (§6). Sous-blocs 3a+3b+3c.
+"""Service d'authentification — connexion, verrouillage, sessions, audit (§6). Sous-blocs 3a→3d.
 
 Périmètre : identifiant + mot de passe → jetons (3a) ; compteur d'échecs et verrouillage
 progressif C7 (3b) ; sessions en base et rotation des refresh tokens avec détection de vol
-(3c).
+(3c) ; audit transactionnel C5 et choix d'agence courante multi-agences C6 (3d).
 
 Hors périmètre, volontairement absent :
-  - 3d : écriture d'audit (C5) et choix d'agence courante en multi-agences.
   - Bloc 4 : les endpoints API. Ici on fait la LOGIQUE, pas l'API.
   - La purge des sessions révoquées (job de nettoyage différé) : à écrire plus tard.
 
-Les mutations et le commit sont isolés dans des helpers (_enregistrer_echec,
-_enregistrer_succes, _appliquer_rotation, _revoquer_toutes_les_sessions) : c'est LE point
-où 3d insérera la trace d'audit, dans la MÊME transaction que l'écriture métier. L'ordre
-des verrous reste constant — ligne user/session (FOR UPDATE) puis verrou consultatif du
-chaînage d'audit — donc pas de deadlock avec le trigger de chaînage.
+AUDIT (C5). Les événements SIGNIFICATIFS sont écrits dans audit.audit_logs, dans la MÊME
+transaction que l'écriture métier (pas de trace, pas d'opération). Sont audités : la
+connexion réussie, la pose d'un verrou (le 5e échec, pas chaque échec), la détection de
+vol de jeton, le refus de refresh pour compte devenu indisponible, et la tentative de
+connexion sur une agence non autorisée. NE SONT PAS audités : chaque échec de mot de passe
+isolé (résumé par failed_attempts et par l'événement de verrouillage), les tentatives sur
+compte inexistant/désactivé (flooding d'un journal indélébile 5 ans + anti-énumération),
+ni le rafraîchissement RÉUSSI (bruit routinier). C5 vise les opérations métier, pas chaque
+sollicitation réseau.
+
+L'audit s'insère juste avant chaque commit, après les FOR UPDATE déjà tenus : l'ordre des
+verrous reste constant — ligne user/session puis verrou consultatif du chaînage d'audit —
+donc pas de deadlock avec le trigger de chaînage. L'insertion passe par du SQL paramétré,
+jamais par l'ORM (le modèle AuditLog lève à l'insertion, par construction).
 
 SECRETS À NE JAMAIS LAISSER SORTIR :
 
   1. password_hash et le refresh token EN CLAIR ne quittent jamais ce module. En base, le
-     refresh n'existe que sous forme de hash SHA-256 (refresh_token_hash) ; le clair n'est
-     ni stocké ni journalisé.
+     refresh n'existe que sous forme de hash SHA-256 ; aucun secret ne figure dans l'audit
+     (old_values / new_values ne portent que ce qu'on y met explicitement).
   2. La RAISON d'un refus ne sort jamais non plus. À l'extérieur, toutes les causes donnent
      le MÊME message générique — au login pour ne pas révéler l'existence/l'état d'un
      compte, au refresh pour ne pas dire à un attaquant « vol détecté ». En interne, la
@@ -28,17 +36,20 @@ SECRETS À NE JAMAIS LAISSER SORTIR :
 PIÈGES, détaillés à leur emplacement :
   - l'ordre des contrôles au login est un oracle de timing (voir authentifier) ;
   - le commit du compteur doit précéder le raise, sinon un échec perd l'incrément ;
-  - la rotation d'un refresh est atomique sous FOR UPDATE (voir rafraichir).
+  - la rotation d'un refresh est atomique sous FOR UPDATE (voir rafraichir) ;
+  - l'audit s'écrit en SQL paramétré, jamais via l'ORM gardé (voir _ecrire_audit).
 """
 
 import hashlib
 import hmac
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Any
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, select, text, update
 from sqlalchemy.orm import Session, lazyload
 
 from app.modules.security.jwt import (
@@ -49,7 +60,7 @@ from app.modules.security.jwt import (
     creer_refresh_token,
     decoder_refresh_token,
 )
-from app.modules.security.models import User, UserSession
+from app.modules.security.models import User, UserAgency, UserSession
 from app.modules.security.password import (
     HASH_LEURRE,
     rehachage_necessaire,
@@ -59,6 +70,83 @@ from app.modules.security.password import (
 # Message unique renvoyé à l'extérieur pour TOUT échec. Un seul littéral, partagé, pour
 # qu'aucune divergence ne se glisse entre les cas. Ne jamais y ajouter la cause.
 MESSAGE_ECHEC_GENERIQUE = "Identifiant ou mot de passe incorrect."
+
+
+# --- audit (C5, 3d) ----------------------------------------------------------------
+
+
+class ActionAudit(StrEnum):
+    """Les cinq événements d'auth jugés significatifs (§6). Format module.action.
+
+    Ne PAS ajouter ici l'échec de mot de passe isolé ni la tentative sur compte inconnu :
+    ils rempliraient un journal indélébile de 5 ans et rouvriraient l'écart de timing.
+    Ni le rafraîchissement réussi : bruit routinier (un client rafraîchit toutes les 15 min).
+    """
+
+    LOGIN_SUCCESS = "auth.login.success"
+    ACCOUNT_LOCKED = "auth.account.locked"
+    TOKEN_REUSE_DETECTED = "auth.token.reuse_detected"
+    REFRESH_DENIED_ACCOUNT_UNAVAILABLE = "auth.token.refresh_denied_account_unavailable"
+    LOGIN_AGENCY_DENIED = "auth.login.agency_denied"
+
+
+@dataclass(frozen=True)
+class ContexteRequete:
+    """Origine de la requête, propagée jusqu'à l'audit. Le bloc 4 (API) la construira.
+
+    Regroupée pour ne pas multiplier les paramètres à travers les helpers. Ne porte que
+    des données d'origine (IP, agent, corrélation), jamais de secret.
+    """
+
+    ip: str | None = None
+    user_agent: str | None = None
+    request_id: uuid.UUID | None = None
+
+
+CONTEXTE_VIDE = ContexteRequete()
+
+
+def _ecrire_audit(
+    db: Session,
+    *,
+    action: ActionAudit,
+    contexte: ContexteRequete,
+    user_id: uuid.UUID | None,
+    agency_id: uuid.UUID | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Insère une ligne d'audit — SQL paramétré, JAMAIS via l'ORM (le modèle AuditLog lève).
+
+    Ne fournit pas chain_hash : le trigger de la 0003 le pose sous verrou consultatif. À
+    appeler le plus tard possible dans la transaction (juste avant le commit) pour tenir
+    l'ordre des verrous et éviter le deadlock avec le chaînage.
+
+    details devient new_values (JSONB). N'Y METTRE AUCUN SECRET : ni password_hash, ni
+    refresh_token_hash, ni token en clair. Le helper n'écrit que ce qui lui est passé —
+    la garantie tient au site d'appel, pas ici.
+
+    CAST(:x AS type) et non « :x::type » : le « :: » empêche SQLAlchemy de reconnaître le
+    paramètre, qui partirait littéralement dans le SQL (piège documenté des tests d'audit).
+    """
+    db.execute(
+        text(
+            "INSERT INTO audit.audit_logs "
+            "(user_id, action, agency_id, ip_address, user_agent, request_id, new_values) "
+            "VALUES (CAST(:user_id AS uuid), :action, CAST(:agency_id AS uuid), "
+            "        CAST(:ip AS inet), :user_agent, CAST(:request_id AS uuid), "
+            "        CAST(:details AS jsonb))"
+        ),
+        {
+            "user_id": user_id,
+            "action": action.value,
+            "agency_id": agency_id,
+            "ip": contexte.ip,
+            "user_agent": contexte.user_agent,
+            "request_id": contexte.request_id,
+            "details": json.dumps(details) if details is not None else None,
+        },
+    )
+
 
 # --- verrouillage progressif (C7) --------------------------------------------------
 
@@ -90,6 +178,9 @@ class CauseEchec(StrEnum):
     MOT_DE_PASSE_INVALIDE = "mot_de_passe_invalide"
     COMPTE_DESACTIVE = "compte_desactive"
     COMPTE_VERROUILLE = "compte_verrouille"
+    # Mot de passe correct mais agence courante demandée non habilitée (C6). Refus
+    # d'autorisation, pas d'authentification : le compteur d'échecs n'est pas touché.
+    AGENCE_NON_AUTORISEE = "agence_non_autorisee"
 
 
 class EchecAuthentificationError(Exception):
@@ -292,16 +383,18 @@ def _appliquer_rotation(
     db.commit()
 
 
-def _enregistrer_echec(db: Session, user: User, maintenant: datetime) -> None:
+def _enregistrer_echec(
+    db: Session, user: User, maintenant: datetime, contexte: ContexteRequete
+) -> None:
     """Compte l'échec, pose le verrou au seuil, puis COMMITTE — avant que l'appelant lève.
 
     Le commit précède le raise à dessein : un échec de connexion ne doit pas empêcher la
     persistance du compteur, sinon le verrouillage ne servirait à rien.
 
-    POINT DE COUTURE 3d : la trace d'audit (échec / verrouillage) s'insérera juste avant
-    le commit, dans CETTE transaction. L'ordre des verrous reste constant — ligne user
-    (FOR UPDATE) d'abord, verrou consultatif du chaînage d'audit ensuite — donc pas de
-    deadlock avec le trigger de chaînage.
+    AUDIT (C5) : SEULE la pose d'un verrou est auditée (l'événement significatif), pas
+    chaque échec — sinon un pilonnage remplirait le journal indélébile. L'audit s'insère
+    juste avant le commit ; l'ordre des verrous reste constant (ligne user FOR UPDATE puis
+    verrou consultatif du chaînage), donc pas de deadlock avec le trigger de chaînage.
     """
     # Un verrou temporisé échu laisse is_locked à true : on le nettoie avant de compter,
     # pour repartir sur une série fraîche (failed_attempts a été remis à 0 à la pose).
@@ -310,7 +403,8 @@ def _enregistrer_echec(db: Session, user: User, maintenant: datetime) -> None:
         user.locked_until = None
 
     tentatives = user.failed_attempts + 1
-    if tentatives >= SEUIL_VERROUILLAGE:
+    verrou_pose = tentatives >= SEUIL_VERROUILLAGE
+    if verrou_pose:
         palier = _palier_effectif(user, maintenant)
         user.locked_until = maintenant + _duree_verrou(palier)
         user.is_locked = True
@@ -322,19 +416,35 @@ def _enregistrer_echec(db: Session, user: User, maintenant: datetime) -> None:
     else:
         user.failed_attempts = tentatives
 
+    if verrou_pose:
+        _ecrire_audit(
+            db,
+            action=ActionAudit.ACCOUNT_LOCKED,
+            contexte=contexte,
+            user_id=user.id,
+            details={"lockout_count": user.lockout_count},
+        )
+
     db.commit()
 
 
 def _enregistrer_succes(
-    db: Session, user: User, session: UserSession, maintenant: datetime
+    db: Session,
+    user: User,
+    session: UserSession,
+    maintenant: datetime,
+    contexte: ContexteRequete,
+    agency_id: uuid.UUID | None,
+    roles: tuple[str, ...],
 ) -> None:
-    """Remet le compteur à zéro, PERSISTE la nouvelle session, puis COMMITTE.
+    """Remet le compteur à zéro, PERSISTE la nouvelle session, AUDITE, puis COMMITTE.
 
-    La session est créée dans la MÊME transaction que la remise à zéro du compteur (3c) :
-    une connexion réussie et sa session naissent ou échouent ensemble.
+    Remise à zéro du compteur, création de session (3c) et audit de la connexion réussie
+    (3d) sont dans la MÊME transaction : la connexion, sa session et sa trace naissent ou
+    échouent ensemble (C5).
 
-    POINT DE COUTURE 3d : la trace d'audit (connexion réussie) s'insérera juste avant le
-    commit, dans cette transaction.
+    L'audit (connexion réussie) est écrit juste avant le commit. roles y figure — ce n'est
+    pas un secret — mais jamais le password_hash.
     """
     user.failed_attempts = 0
     user.is_locked = False
@@ -347,7 +457,59 @@ def _enregistrer_succes(
         user.lockout_count = 0
 
     db.add(session)
+    _ecrire_audit(
+        db,
+        action=ActionAudit.LOGIN_SUCCESS,
+        contexte=contexte,
+        user_id=user.id,
+        agency_id=agency_id,
+        details={"roles": list(roles)},
+    )
     db.commit()
+
+
+def _resoudre_agence(
+    db: Session,
+    user: User,
+    agence_demandee: uuid.UUID | None,
+    maintenant: datetime,
+    contexte: ContexteRequete,
+) -> uuid.UUID | None:
+    """Résout l'agence courante de la session (C6). Refuse et audite si non habilitée.
+
+    - Rien de demandé → l'agence de rattachement (primary_agency_id), cas du mono-agent.
+    - Demandée et habilitée (== agence de rattachement OU ligne dans user_agencies) → elle.
+    - Demandée et NON habilitée → audit puis refus. Jamais de repli silencieux sur l'agence
+      principale : ça masquerait une tentative d'accès à un périmètre non autorisé.
+
+    L'audit + commit précèdent le raise, pour que la trace survive au refus (C5).
+    """
+    if agence_demandee is None:
+        return user.primary_agency_id
+
+    habilitee = (
+        agence_demandee == user.primary_agency_id
+        or db.execute(
+            select(UserAgency.agency_id).where(
+                UserAgency.user_id == user.id,
+                UserAgency.agency_id == agence_demandee,
+            )
+        ).first()
+        is not None
+    )
+
+    if habilitee:
+        return agence_demandee
+
+    _ecrire_audit(
+        db,
+        action=ActionAudit.LOGIN_AGENCY_DENIED,
+        contexte=contexte,
+        user_id=user.id,
+        details={"agence_demandee": str(agence_demandee)},
+    )
+    db.commit()
+    raise EchecAuthentificationError(CauseEchec.AGENCE_NON_AUTORISEE, user.id)
 
 
 def authentifier(
@@ -355,13 +517,20 @@ def authentifier(
     identifiant: str,
     mot_de_passe: str,
     *,
+    agence_demandee: uuid.UUID | None = None,
     ip: str | None = None,
     user_agent: str | None = None,
+    request_id: uuid.UUID | None = None,
 ) -> ResultatConnexion:
     """Authentifie par (username OU email) + mot de passe. Émet access + refresh.
 
     identifiant : username (sensible à la casse, VARCHAR) ou email (insensible, CITEXT).
     Une seule requête couvre les deux ; la casse de l'email est gérée par le type CITEXT.
+
+    agence_demandee (C6) : agence courante voulue pour la session. Omise → l'agence de
+    rattachement (primary_agency_id). Fournie, elle doit être habilitée (== l'agence de
+    rattachement OU présente dans user_agencies) ; sinon la connexion est REFUSÉE et
+    auditée, jamais rabattue en silence sur l'agence principale.
 
     ORDRE CRITIQUE — NE PAS RÉORGANISER. Exactement UNE vérification Argon2 est faite
     AVANT tout branchement sur l'état du compte : contre le password_hash si le compte
@@ -382,6 +551,7 @@ def authentifier(
     Lève EchecAuthentificationError (message générique) dans tous les cas d'échec.
     """
     maintenant = datetime.now(UTC)
+    contexte = ContexteRequete(ip=ip, user_agent=user_agent, request_id=request_id)
     user = db.execute(_selectionner_pour_maj(identifiant)).scalar_one_or_none()
 
     # Toujours exactement un Argon2, quel que soit le sort du compte (cf. ORDRE CRITIQUE).
@@ -399,24 +569,28 @@ def authentifier(
         # lockout_count à chaque tentative, sinon le délai enflerait artificiellement.
         raise EchecAuthentificationError(CauseEchec.COMPTE_VERROUILLE, user.id)
     if not mot_de_passe_ok:
-        _enregistrer_echec(db, user, maintenant)  # committe AVANT de lever
+        _enregistrer_echec(db, user, maintenant, contexte)  # committe AVANT de lever
         raise EchecAuthentificationError(CauseEchec.MOT_DE_PASSE_INVALIDE, user.id)
 
-    # Succès : émission des jetons, création de la session, remise à zéro du compteur —
-    # le tout dans une seule transaction (cf. _enregistrer_succes). En 3a/3b/3c, l'agence
-    # courante du jeton EST l'agence de rattachement ; le choix d'une autre agence
-    # (multi-agences, C6) viendra en 3d. roles vient de la relation viewonly User.roles.
+    # Le mot de passe est bon : l'identité est prouvée. Reste l'AUTORISATION d'agence (C6).
+    # Un refus ici n'est pas un échec d'authentification, donc le compteur d'échecs n'est
+    # pas touché ; mais la tentative sur une agence non habilitée est auditée.
+    agency_id = _resoudre_agence(db, user, agence_demandee, maintenant, contexte)
+
+    # Succès : émission des jetons, création de la session, remise à zéro du compteur,
+    # audit — le tout dans une seule transaction (cf. _enregistrer_succes). roles vient de
+    # la relation viewonly User.roles.
     roles = tuple(role.code for role in user.roles)
     access_token = creer_access_token(
         user_id=user.id,
         roles=roles,
         primary_agency_id=user.primary_agency_id,
-        agency_id=user.primary_agency_id,
+        agency_id=agency_id,
     )
     refresh_token = creer_refresh_token(user_id=user.id)
     session = _creer_session(user.id, refresh_token, ip, user_agent)
 
-    _enregistrer_succes(db, user, session, maintenant)
+    _enregistrer_succes(db, user, session, maintenant, contexte, agency_id, roles)
 
     return ResultatConnexion(
         user_id=user.id,
@@ -432,6 +606,7 @@ def rafraichir(
     *,
     ip: str | None = None,
     user_agent: str | None = None,
+    request_id: uuid.UUID | None = None,
 ) -> ResultatConnexion:
     """Rotation d'un refresh token : émet un nouveau couple, révoque l'ancien, détecte le vol.
 
@@ -457,6 +632,7 @@ def rafraichir(
     Refuse via RafraichissementError (message générique) dans tous les cas.
     """
     maintenant = datetime.now(UTC)
+    contexte = ContexteRequete(ip=ip, user_agent=user_agent, request_id=request_id)
 
     # Les erreurs de jwt.py sont traduites en RafraichissementError : un seul type de refus
     # pour l'appelant. On ne chaîne pas (from None) — la traceback de jwt porterait le token.
@@ -481,7 +657,14 @@ def rafraichir(
 
     if session.revoked_at is not None:
         _revoquer_toutes_les_sessions(db, session.user_id, maintenant)
-        db.commit()  # 3d : audit « vol détecté » juste avant ce commit
+        _ecrire_audit(
+            db,
+            action=ActionAudit.TOKEN_REUSE_DETECTED,
+            contexte=contexte,
+            user_id=session.user_id,
+            details={"session_reutilisee": str(session.id)},
+        )
+        db.commit()
         raise RafraichissementError(CauseRefresh.REUTILISATION_DETECTEE, session.user_id)
 
     # Défense en profondeur : le token a déjà été jugé non expiré par jwt.py, mais la
@@ -496,12 +679,24 @@ def rafraichir(
 
     # État du compte re-vérifié à CHAQUE rotation : sans cela, un compte désactivé,
     # verrouillé ou supprimé après sa connexion garderait un accès pendant 8 h, rendant
-    # le verrouillage (3b) et la désactivation contournables via le refresh.
+    # le verrouillage (3b) et la désactivation contournables via le refresh. Ce refus est
+    # audité (événement significatif) puis committé avant le raise, pour que la trace tienne.
     user = db.get(User, session.user_id)
-    if user is None or user.deleted_at is not None or not user.is_active:
+    compte_indisponible = user is None or user.deleted_at is not None or not user.is_active
+    if not compte_indisponible:
+        assert user is not None  # pour mypy : compte_indisponible garantit user non None
+        compte_indisponible = _verrou_actif(user, maintenant)
+    if compte_indisponible:
+        _ecrire_audit(
+            db,
+            action=ActionAudit.REFRESH_DENIED_ACCOUNT_UNAVAILABLE,
+            contexte=contexte,
+            user_id=session.user_id,
+            details={"cause": CauseRefresh.COMPTE_INDISPONIBLE.value},
+        )
+        db.commit()
         raise RafraichissementError(CauseRefresh.COMPTE_INDISPONIBLE, session.user_id)
-    if _verrou_actif(user, maintenant):
-        raise RafraichissementError(CauseRefresh.COMPTE_INDISPONIBLE, user.id)
+    assert user is not None  # les cas None sont couverts par compte_indisponible ci-dessus
 
     # Rotation. Les rôles sont RELUS en base ici — c'est précisément pourquoi le refresh
     # n'en portait pas (bloc 2) : une habilitation révoquée entre-temps ne survit pas.
