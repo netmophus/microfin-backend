@@ -10,9 +10,11 @@ def test_naming_convention_est_active() -> None:
     assert Base.metadata.naming_convention["pk"] == "pk_%(table_name)s"
 
 
-def test_aucune_table_metier_declaree() -> None:
-    # Garde-fou de cette étape : la fondation ne définit encore aucun modèle.
-    assert dict(Base.metadata.tables) == {}
+# Le garde-fou « aucune table déclarée » vivait ici tant que la fondation ne définissait
+# aucun modèle. Le socle Sécurité en déclare 11 : l'assertion « metadata vide » est
+# devenue intenable, et son intention — les modèles se mappent, ils ne créent jamais — est
+# désormais tenue par tests/integration/test_modeles_socle.py, qui la vérifie contre la
+# base réelle plutôt que contre une metadata vide.
 
 
 @pytest.mark.integration
