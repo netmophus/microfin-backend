@@ -53,6 +53,7 @@ from sqlalchemy import Select, select, text, update
 from sqlalchemy.orm import Session, lazyload
 
 from app.modules.security.jwt import (
+    JetonError,
     JetonExpireError,
     JetonInvalideError,
     TypeDeJetonInvalideError,
@@ -190,12 +191,23 @@ class EchecAuthentificationError(Exception):
     que la couche API renverra. cause et user_id sont des attributs hors de args, donc
     absents du repr par défaut — ils servent le compteur (3b) et l'audit (3d), jamais la
     réponse HTTP. user_id est None quand le compte est introuvable.
+
+    verrou_jusqua : renseigné UNIQUEMENT sur COMPTE_VERROUILLE ET quand le mot de passe
+    fourni était correct — donc quand le demandeur est le vrai titulaire. C'est le seul
+    canal par lequel l'API peut révéler le verrou (et son échéance) à qui connaît le mot
+    de passe, sans jamais l'apprendre à un attaquant qui l'ignore. Voir authentifier().
     """
 
-    def __init__(self, cause: CauseEchec, user_id: uuid.UUID | None = None) -> None:
+    def __init__(
+        self,
+        cause: CauseEchec,
+        user_id: uuid.UUID | None = None,
+        verrou_jusqua: datetime | None = None,
+    ) -> None:
         super().__init__(MESSAGE_ECHEC_GENERIQUE)
         self.cause = cause
         self.user_id = user_id
+        self.verrou_jusqua = verrou_jusqua
 
 
 # Message unique pour TOUT refus de rafraîchissement. Ne jamais dire dehors laquelle des
@@ -567,7 +579,13 @@ def authentifier(
     if _verrou_actif(user, maintenant):
         # Aucune écriture : un verrou actif ne se re-déclenche pas et ne réincrémente pas
         # lockout_count à chaque tentative, sinon le délai enflerait artificiellement.
-        raise EchecAuthentificationError(CauseEchec.COMPTE_VERROUILLE, user.id)
+        # locked_until n'est joint QUE si le mot de passe est bon (déjà calculé, aucun
+        # Argon2 en plus, aucun changement d'ordre) : l'API ne révélera le verrou qu'au
+        # vrai titulaire. Pour un mot de passe faux, verrou_jusqua reste None → 401 générique.
+        verrou_jusqua = user.locked_until if mot_de_passe_ok else None
+        raise EchecAuthentificationError(
+            CauseEchec.COMPTE_VERROUILLE, user.id, verrou_jusqua=verrou_jusqua
+        )
     if not mot_de_passe_ok:
         _enregistrer_echec(db, user, maintenant, contexte)  # committe AVANT de lever
         raise EchecAuthentificationError(CauseEchec.MOT_DE_PASSE_INVALIDE, user.id)
@@ -719,3 +737,57 @@ def rafraichir(
         # Sans rapport avec le mot de passe, non évalué ici : toujours False au refresh.
         rehash_recommande=False,
     )
+
+
+# --- déconnexion (bloc 4) ----------------------------------------------------------
+
+
+def _revoquer_session_courante(db: Session, refresh_token: str, maintenant: datetime) -> None:
+    """Révoque la SEULE session portée par le refresh token présenté (le jti = l'id).
+
+    Best-effort et idempotent : un token illisible, expiré, sans session, ou déjà révoqué
+    ne fait rien. La déconnexion est une intention bénigne — on ne lève jamais et on ne
+    révèle rien (pas de détection de vol ici : rejouer son propre token pour se déconnecter
+    est légitime).
+    """
+    try:
+        claims = decoder_refresh_token(refresh_token)
+    except JetonError:
+        return
+
+    session = db.execute(
+        select(UserSession).where(UserSession.id == claims.jti).with_for_update()
+    ).scalar_one_or_none()
+    if session is None or session.revoked_at is not None:
+        return
+
+    session.revoked_at = maintenant
+    db.commit()
+
+
+def deconnecter(db: Session, refresh_token: str) -> None:
+    """Déconnexion simple : révoque la session courante. Idempotent, ne lève jamais."""
+    _revoquer_session_courante(db, refresh_token, datetime.now(UTC))
+
+
+def deconnecter_tout(db: Session, refresh_token: str) -> None:
+    """Déconnexion totale : révoque TOUTES les sessions de l'utilisateur (tous appareils).
+
+    Exige que le token présenté corresponde à une session ENCORE ACTIVE : un token dont la
+    session est révoquée ou absente ne déclenche rien (idempotent, et un token périmé ne
+    doit pas pouvoir déconnecter un utilisateur à distance). Ne lève jamais.
+    """
+    maintenant = datetime.now(UTC)
+    try:
+        claims = decoder_refresh_token(refresh_token)
+    except JetonError:
+        return
+
+    session = db.execute(
+        select(UserSession).where(UserSession.id == claims.jti).with_for_update()
+    ).scalar_one_or_none()
+    if session is None or session.revoked_at is not None:
+        return
+
+    _revoquer_toutes_les_sessions(db, session.user_id, maintenant)
+    db.commit()
