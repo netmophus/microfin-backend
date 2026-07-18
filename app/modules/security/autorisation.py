@@ -13,10 +13,10 @@ soit trivial :
 type) ; exige lève 403 (authentifié mais pas le droit). Jamais l'un pour l'autre.
 
 PORTÉE (C6). L'utilisateur courant expose voit_tout (détient-il perimetre.reseau ?) et
-perimetre_agence() — None s'il voit tout, sinon l'agence à laquelle un service doit filtrer.
-Le gate de permission est GROSSIER (403 « tu ne peux pas faire cette action du tout », sans
-fuite). Le cloisonnement fin par agence est un FILTRE de requête : une ligne hors périmètre
-n'est pas trouvée → 404 naturel, jamais un 403 qui révélerait son existence.
+condition_perimetre(colonne), qui rend la condition SQL de cloisonnement à poser dans le
+WHERE. Le gate de permission est GROSSIER (403 « tu ne peux pas faire cette action du tout »,
+sans fuite). Le cloisonnement fin par agence est un FILTRE de requête : une ligne hors
+périmètre n'est pas trouvée → 404 naturel, jamais un 403 qui révélerait son existence.
 
 RÉSOLUTION. Le token porte les CODES de rôles, pas les permissions : on résout rôles →
 permissions en base à chaque requête. La matrice reste ainsi source unique de vérité, et un
@@ -37,8 +37,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import false, select, true
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 from starlette.applications import Starlette
 
 from app.core.database import get_db
@@ -74,13 +75,34 @@ class UtilisateurCourant:
     def a_permission(self, code: str) -> bool:
         return code in self.permissions
 
-    def perimetre_agence(self) -> uuid.UUID | None:
-        """None = voit tout le réseau (aucun filtre). Sinon l'agence à laquelle filtrer.
+    def condition_perimetre(self, colonne: ColumnElement[uuid.UUID | None]) -> ColumnElement[bool]:
+        """Rend la condition SQL de cloisonnement à poser dans le WHERE d'une requête.
 
-        Un service écrit alors : WHERE (:perimetre IS NULL OR agency_id = :perimetre).
-        Une ligne hors périmètre n'est pas trouvée → 404 naturel, pas de fuite.
+            .where(courant.condition_perimetre(User.primary_agency_id))
+
+        Trois cas, dont le troisième est celui qui compte :
+
+          - voit tout le réseau        → vrai, aucun filtre ;
+          - cloisonné à une agence     → colonne == cette agence ;
+          - ni réseau, NI agence       → faux : il ne voit RIEN.
+
+        Ce troisième cas est atteignable — primary_agency_id est nullable, un compte peut
+        n'être rattaché à aucune agence — et c'est pour lui que cette méthode rend une
+        CONDITION plutôt qu'un identifiant d'agence. Rendre « l'agence à filtrer » obligeait
+        l'appelant à interpréter None, or None y était ambigu : « voit tout » ET « aucune
+        agence » donnaient la même valeur, si bien qu'un compte sans agence et sans
+        perimetre.reseau se serait retrouvé SANS filtre, donc omniscient. Ici l'ambiguïté
+        n'existe plus : le cas indécidable devient un refus, jamais une ouverture.
+
+        Le filtre doit vivre DANS la requête, pas dans un contrôle après lecture : une ligne
+        hors périmètre ne doit pas être trouvée du tout, sinon on choisit entre révéler son
+        existence (403) et l'oubli d'un garde-fou.
         """
-        return None if self.voit_tout else self.agency_id
+        if self.voit_tout:
+            return true()
+        if self.agency_id is None:
+            return false()
+        return colonne == self.agency_id
 
 
 def _permissions_des_roles(db: Session, codes: tuple[str, ...]) -> frozenset[str]:

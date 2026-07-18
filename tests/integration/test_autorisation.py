@@ -80,8 +80,7 @@ def client(db: Session) -> Generator[TestClient, None, None]:
     def perimetre(
         courant: Annotated[UtilisateurCourant, Depends(exige("users.read"))],
     ) -> dict[str, Any]:
-        agence = courant.perimetre_agence()
-        return {"voit_tout": courant.voit_tout, "perimetre": str(agence) if agence else None}
+        return {"voit_tout": courant.voit_tout, "agence": str(courant.agency_id)}
 
     jetable.dependency_overrides[get_db] = lambda: db
     with TestClient(jetable) as testclient:
@@ -251,18 +250,94 @@ def test_sans_permission_reseau_le_perimetre_est_l_agence(
 
     reponse = client.get("/perimetre", headers=_entete(user, "RESPONSABLE_AGENCE"))
 
-    assert reponse.json() == {"voit_tout": False, "perimetre": str(user.primary_agency_id)}
+    assert reponse.json() == {"voit_tout": False, "agence": str(user.primary_agency_id)}
 
 
-def test_avec_la_permission_reseau_le_perimetre_est_nul(
+def test_avec_la_permission_reseau_voit_tout(
     client: TestClient, utilisateur: Callable[[str], User]
 ) -> None:
-    """AUDITEUR_INTERNE détient perimetre.reseau : aucun filtre d'agence ne s'applique."""
+    """AUDITEUR_INTERNE détient perimetre.reseau : aucun filtre d'agence ne s'appliquera."""
     user = utilisateur("AUDITEUR_INTERNE")
 
     reponse = client.get("/perimetre", headers=_entete(user, "AUDITEUR_INTERNE"))
 
-    assert reponse.json() == {"voit_tout": True, "perimetre": None}
+    assert reponse.json()["voit_tout"] is True
+
+
+# --- condition_perimetre : la condition SQL de cloisonnement -------------------------
+
+
+def _courant(voit_tout: bool, agency_id: uuid.UUID | None) -> UtilisateurCourant:
+    """Utilisateur courant fabriqué directement : c'est la PORTÉE qu'on teste, pas le jeton."""
+    return UtilisateurCourant(
+        user_id=uuid.uuid4(),
+        roles=(),
+        permissions=frozenset(),
+        primary_agency_id=agency_id,
+        agency_id=agency_id,
+        voit_tout=voit_tout,
+    )
+
+
+@pytest.fixture
+def deux_agences(db: Session, utilisateur: Callable[[str], User]) -> tuple[User, User]:
+    """Deux utilisateurs dans deux agences distinctes, pour observer ce qu'un filtre laisse."""
+    return utilisateur("CAISSIER"), utilisateur("CAISSIER")
+
+
+def _visibles(
+    db: Session, courant: UtilisateurCourant, connus: tuple[User, User]
+) -> set[uuid.UUID]:
+    """Ceux des deux utilisateurs connus que la condition laisse passer.
+
+    Restreint aux deux lignes créées par le test : la base porte d'autres utilisateurs, et
+    un test de cloisonnement doit être déterministe.
+    """
+    lignes = db.execute(
+        select(User.id).where(
+            User.id.in_([u.id for u in connus]),
+            courant.condition_perimetre(User.primary_agency_id),
+        )
+    ).scalars()
+    return set(lignes)
+
+
+def test_la_portee_reseau_ne_filtre_rien(db: Session, deux_agences: tuple[User, User]) -> None:
+    un, deux = deux_agences
+
+    visibles = _visibles(db, _courant(voit_tout=True, agency_id=un.primary_agency_id), deux_agences)
+
+    assert visibles == {un.id, deux.id}
+
+
+def test_le_cloisonnement_ne_laisse_que_son_agence(
+    db: Session, deux_agences: tuple[User, User]
+) -> None:
+    un, _ = deux_agences
+
+    visibles = _visibles(
+        db, _courant(voit_tout=False, agency_id=un.primary_agency_id), deux_agences
+    )
+
+    assert visibles == {un.id}
+
+
+def test_sans_reseau_ni_agence_on_ne_voit_rien(
+    db: Session, deux_agences: tuple[User, User]
+) -> None:
+    """RÉGRESSION DE SÉCURITÉ — le cas qui rendait omniscient.
+
+    primary_agency_id est nullable : un compte peut n'être rattaché à aucune agence. Tant que
+    la portée était rendue sous forme d'« agence à filtrer », ce compte donnait None, valeur
+    que l'appelant lisait comme « voit tout le réseau » — une élévation de privilège obtenue
+    sans aucune permission, invisible dans la matrice.
+
+    Le cas indécidable doit être un REFUS. Si ce test passe au vert en voyant des lignes,
+    c'est que le fail-secure a été perdu.
+    """
+    visibles = _visibles(db, _courant(voit_tout=False, agency_id=None), deux_agences)
+
+    assert visibles == set()
 
 
 # --- méta-test : aucune route ne doit rester non protégée par oubli ------------------
