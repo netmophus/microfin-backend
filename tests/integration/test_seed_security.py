@@ -1,4 +1,4 @@
-"""Vérifie le seed du socle Sécurité : 11 rôles système, 17 permissions, matrice (§4, §5)."""
+"""Vérifie le seed du socle Sécurité : 11 rôles système, 18 permissions, matrice (§4, §5)."""
 
 from collections.abc import Generator
 
@@ -43,10 +43,31 @@ def test_les_donnees_declarees_sont_coherentes() -> None:
     codes_permissions = {permission.code for permission in PERMISSIONS}
 
     assert len(ROLES) == 11
-    assert len(PERMISSIONS) == 17
+    assert len(PERMISSIONS) == 18  # 17 du §5 + perimetre.reseau (portée réseau, 4a)
     assert set(MATRICE) == codes_roles
     for role_code, accordees in MATRICE.items():
         assert accordees <= codes_permissions, f"{role_code} cite une permission inconnue"
+
+
+def test_la_portee_reseau_est_accordee_aux_seuls_roles_transverses() -> None:
+    """Qui voit tout le réseau se lit ici, en une assertion — c'est l'intérêt de l'option
+    « portée = permission » : la réponse est une ligne de matrice, pas une constante enfouie.
+
+    RESPONSABLE_AGENCE en est délibérément absent : il est cloisonné à SON agence, et
+    c'est tout l'objet du cloisonnement. Ce test est le verrou qui empêche qu'on la lui
+    accorde par inadvertance.
+    """
+    detenteurs = {
+        code for code, permissions in MATRICE.items() if "perimetre.reseau" in permissions
+    }
+
+    assert detenteurs == {
+        "DIRECTION_GENERALE",
+        "AUDITEUR_INTERNE",
+        "ADMIN_FONCTIONNEL",
+        "ADMIN_TECHNIQUE",
+        "RESPONSABLE_LBC_FT",
+    }
 
 
 def test_le_seed_installe_les_roles_et_permissions(session: Session) -> None:
@@ -58,7 +79,7 @@ def test_le_seed_installe_les_roles_et_permissions(session: Session) -> None:
     nb_permissions = session.execute(text("SELECT count(*) FROM security.permissions")).scalar_one()
 
     assert nb_roles == 11
-    assert nb_permissions == 17
+    assert nb_permissions == 18
 
 
 def test_le_seed_est_idempotent(session: Session) -> None:

@@ -1,4 +1,11 @@
-"""Seed du socle Sécurité : 11 rôles système et 17 permissions (§4 et §5 du document).
+"""Seed du socle Sécurité : 11 rôles système et 18 permissions (§4 et §5 du document).
+
+18 et non 17 : le §5 en fige 17, plus « perimetre.reseau » ajoutée au bloc 4a — le
+marqueur de PORTÉE RÉSEAU. Un rôle qui la détient voit toutes les agences ; sinon il est
+cloisonné à son agence courante (claim agency_id du JWT, C6). Modéliser la portée comme
+une permission la rend attribuable à un rôle personnalisé sans toucher au code, et
+auditable en base (« qui voit tout ? » = une ligne de matrice). Divergence au §5 à porter
+au document (17 → 18).
 
 Données versionnées, rejouées à chaque installation d'une IMF et à chaque montée de
 version — pas un script jetable. La commande est idempotente : les rôles et permissions
@@ -128,8 +135,15 @@ ROLES: tuple[RoleSysteme, ...] = (
     ),
 )
 
-# --- §5 — les 17 permissions du périmètre Sécurité -----------------------------------
+# --- §5 — les 17 permissions du périmètre Sécurité + la portée réseau (4a) ------------
 PERMISSIONS: tuple[Permission, ...] = (
+    # Marqueur de portée (4a). Transverse à tous les modules : la détenir, c'est voir
+    # tout le réseau ; ne pas la détenir, c'est être cloisonné à son agence courante.
+    Permission(
+        "perimetre.reseau",
+        "perimetre",
+        "Portée réseau : accès à toutes les agences, sinon cloisonné à l'agence courante",
+    ),
     Permission("users.read", "users", "Consulter les utilisateurs (sans champs sensibles)"),
     Permission("users.create", "users", "Créer un utilisateur"),
     Permission("users.update", "users", "Modifier une fiche (activation/désactivation incluse)"),
@@ -163,6 +177,12 @@ PERMISSIONS: tuple[Permission, ...] = (
 #
 # audit.export (exfiltration du journal complet) reste chez AUDITEUR_INTERNE et
 # DIRECTION_GENERALE uniquement.
+#
+# PORTÉE RÉSEAU (perimetre.reseau) : accordée aux rôles dont la fonction couvre TOUT le
+# réseau — Direction (pilotage), Auditeur (contrôle réseau), les deux Admins (gestion
+# transverse), et Responsable LBC/FT (le blanchiment se surveille sur tout le réseau, pas
+# une agence). PAS au Responsable d'agence : il est cloisonné à SON agence, c'est tout
+# l'intérêt du cloisonnement.
 MATRICE: dict[str, frozenset[str]] = {
     "CAISSIER": frozenset(),
     "CHARGE_CLIENTELE": frozenset(),
@@ -171,14 +191,22 @@ MATRICE: dict[str, frozenset[str]] = {
     "COMPTABLE": frozenset(),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
     # cela permettrait d'entrer dans le compte d'un caissier et d'agir sous son nom.
+    # PAS de perimetre.reseau : cloisonné à son agence.
     "RESPONSABLE_AGENCE": frozenset(
         {"users.read", "users.unlock", "sessions.read", "sessions.revoke"}
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, et lire le journal.
     "AUDITEUR_INTERNE": frozenset(
-        {"users.read", "roles.read", "sessions.read", "audit.read", "audit.export"}
+        {
+            "users.read",
+            "roles.read",
+            "sessions.read",
+            "audit.read",
+            "audit.export",
+            "perimetre.reseau",
+        }
     ),
-    "RESPONSABLE_LBC_FT": frozenset({"users.read", "audit.read"}),
+    "RESPONSABLE_LBC_FT": frozenset({"users.read", "audit.read", "perimetre.reseau"}),
     "DIRECTION_GENERALE": frozenset(
         {
             "users.read",
@@ -189,6 +217,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "sessions.read",
             "audit.read",
             "audit.export",
+            "perimetre.reseau",
         }
     ),
     "ADMIN_FONCTIONNEL": frozenset(
@@ -205,10 +234,13 @@ MATRICE: dict[str, frozenset[str]] = {
             "roles.assign",
             "sessions.read",
             "sessions.revoke",
+            "perimetre.reseau",
         }
     ),
     # Administration système, pas administration des personnes : aucun droit sur users.*.
-    "ADMIN_TECHNIQUE": frozenset({"sessions.read", "sessions.revoke", "audit.read"}),
+    "ADMIN_TECHNIQUE": frozenset(
+        {"sessions.read", "sessions.revoke", "audit.read", "perimetre.reseau"}
+    ),
 }
 
 
