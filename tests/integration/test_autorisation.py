@@ -16,7 +16,7 @@ from typing import Annotated, Any
 
 import jwt as pyjwt
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,6 +29,7 @@ from app.modules.security.autorisation import (
     PERMISSION_RESEAU,
     UtilisateurCourant,
     exige,
+    routes_api,
     routes_sans_permission,
     utilisateur_courant,
 )
@@ -372,23 +373,50 @@ def test_aucune_route_n_est_exposee_sans_permission() -> None:
     )
 
 
-def test_le_meta_test_detecte_bien_une_route_non_protegee() -> None:
+def test_le_meta_test_voit_les_routes_montees_par_routeur() -> None:
+    """LE test qui empêche le garde-fou de redevenir aveugle.
+
+    app.routes ne contient pas les routes des routeurs inclus à plat : FastAPI y dépose un
+    _IncludedRouter qui les garde dans .original_router.routes. Un parcours naïf ne voyait
+    donc que les routes déclarées par @app.get — presque aucune, puisque tout module passe
+    par un APIRouter. Le garde-fou restait vert en n'inspectant RIEN (défaut trouvé au bloc
+    4b, alors qu'il était vert depuis deux commits).
+
+    Ce test échoue si la descente cesse de fonctionner — par exemple après une montée de
+    version de FastAPI qui réorganiserait ses internes.
+    """
+    chemins = {route.path for route in routes_api(application_reelle)}
+
+    assert "/auth/login" in chemins, "les routes du routeur auth ne sont pas parcourues"
+    assert "/users" in chemins, "les routes du routeur users ne sont pas parcourues"
+    assert "/health" in chemins
+
+
+def test_le_meta_test_detecte_une_route_nue_montee_par_routeur() -> None:
     """Le garde-fou ne sert à rien s'il ne détecte pas. On lui montre une route nue.
 
-    Sans ce test, ROUTES_PUBLIQUES pourrait avaler la liste entière (ou route_protegee
-    répondre toujours vrai) sans que rien ne le signale.
+    Elle est montée PAR UN ROUTEUR, et non par @app.get : c'est ainsi que tous les modules
+    à venir déclareront les leurs. Le premier jet de ce test utilisait @app.get et passait
+    au vert alors que la détection ne descendait pas dans les routeurs — un test négatif qui
+    ne reproduit pas les conditions réelles donne une fausse assurance.
+
+    Sans lui, ROUTES_PUBLIQUES pourrait avaler la liste entière (ou route_protegee répondre
+    toujours vrai) sans que rien ne le signale.
     """
     nue = FastAPI()
+    routeur = APIRouter(prefix="/module")
 
-    @nue.get("/oubliee")
+    @routeur.get("/oubliee")
     def oubliee() -> dict[str, bool]:
         return {"ok": True}
 
-    @nue.get("/protegee", dependencies=[Depends(exige("users.read"))])
+    @routeur.get("/protegee", dependencies=[Depends(exige("users.read"))])
     def protegee() -> dict[str, bool]:
         return {"ok": True}
 
-    assert routes_sans_permission(nue, frozenset()) == ["GET /oubliee"]
+    nue.include_router(routeur)
+
+    assert routes_sans_permission(nue, frozenset()) == ["GET /module/oubliee"]
 
 
 def test_la_permission_de_portee_existe_bien_en_base(db: Session) -> None:

@@ -29,7 +29,7 @@ refresh tout de suite.
 """
 
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -75,10 +75,33 @@ class UtilisateurCourant:
     def a_permission(self, code: str) -> bool:
         return code in self.permissions
 
+    def condition_perimetre_sur(
+        self, construire: Callable[[uuid.UUID], ColumnElement[bool]]
+    ) -> ColumnElement[bool]:
+        """Variante pour les périmètres qui ne se lisent pas sur une seule colonne.
+
+        `construire` reçoit l'agence à filtrer et rend la condition correspondante — un OR,
+        un EXISTS sur une table de liaison, ce que le module veut. Elle n'est appelée QUE
+        dans le cas où filtrer a un sens ; les deux cas limites (réseau, aucune agence) sont
+        tranchés ici, une fois pour toutes.
+
+        C'est le point : la règle fail-secure ne doit exister qu'à UN endroit. Un module qui
+        recopierait « si voit_tout … sinon si agency_id is None … » finirait par en oublier
+        une branche, et ce serait exactement la faille que ce fichier vient de corriger.
+        """
+        if self.voit_tout:
+            return true()
+        if self.agency_id is None:
+            return false()
+        return construire(self.agency_id)
+
     def condition_perimetre(self, colonne: ColumnElement[uuid.UUID | None]) -> ColumnElement[bool]:
         """Rend la condition SQL de cloisonnement à poser dans le WHERE d'une requête.
 
             .where(courant.condition_perimetre(User.primary_agency_id))
+
+        Cas simple — le périmètre se lit sur une seule colonne. Pour un périmètre composite
+        (rattachement OU habilitation), voir condition_perimetre_sur.
 
         Trois cas, dont le troisième est celui qui compte :
 
@@ -98,11 +121,7 @@ class UtilisateurCourant:
         hors périmètre ne doit pas être trouvée du tout, sinon on choisit entre révéler son
         existence (403) et l'oubli d'un garde-fou.
         """
-        if self.voit_tout:
-            return true()
-        if self.agency_id is None:
-            return false()
-        return colonne == self.agency_id
+        return self.condition_perimetre_sur(lambda agence: colonne == agence)
 
 
 def _permissions_des_roles(db: Session, codes: tuple[str, ...]) -> frozenset[str]:
@@ -202,17 +221,44 @@ def route_protegee(route: APIRoute) -> bool:
     )
 
 
+def routes_api(conteneur: object) -> Iterator[APIRoute]:
+    """Toutes les APIRoute d'une application, y compris celles montées par include_router.
+
+    LA DESCENTE EST LE POINT DÉLICAT. app.routes ne contient PAS les routes des routeurs
+    inclus à plat : depuis FastAPI 0.13x, include_router y dépose un objet _IncludedRouter
+    qui garde ses routes dans .original_router.routes. Un parcours naïf de app.routes ne
+    voit donc que les routes déclarées par @app.get — c'est-à-dire presque aucune, puisque
+    tout module sérieux passe par un APIRouter.
+
+    Le défaut est SILENCIEUX : le garde-fou reste vert en n'inspectant rien. Il a été trouvé
+    au bloc 4b, en constatant que /auth/login et /users n'apparaissaient nulle part dans le
+    parcours. D'où test_le_meta_test_voit_les_routes_montees_par_routeur, qui vérifie que
+    cette descente ramène bien des routes connues : sans lui, une montée de version de
+    FastAPI pourrait rendre le garde-fou aveugle sans faire rougir un seul test.
+
+    La descente est volontairement tolérante (routes, puis original_router.routes) : elle
+    doit survivre à la prochaine réorganisation interne de FastAPI, pas coller à celle-ci.
+    """
+    routes = getattr(conteneur, "routes", None)
+    if routes is None:
+        original = getattr(conteneur, "original_router", None)
+        routes = getattr(original, "routes", ()) if original is not None else ()
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        else:
+            yield from routes_api(route)
+
+
 def routes_sans_permission(app: Starlette, publiques: frozenset[str]) -> list[str]:
     """Liste les routes (hors allowlist publique) qui n'exigent AUCUNE permission.
 
-    Réutilisable par tout module : son test parcourt app.routes et affirme que le résultat
-    est vide. Oublier de protéger une route devient un échec de test, pas une faille
-    découverte en production.
+    Réutilisable par tout module : son test parcourt l'application et affirme que le
+    résultat est vide. Oublier de protéger une route devient un échec de test, pas une
+    faille découverte en production.
     """
     manquantes: list[str] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
+    for route in routes_api(app):
         if route.path in publiques:
             continue
         if not route_protegee(route):
