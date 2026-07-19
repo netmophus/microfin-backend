@@ -22,11 +22,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.modules.audit.service import ContexteRequete
 from app.modules.security.auth import (
     MESSAGE_ECHEC_GENERIQUE,
     MESSAGE_REFRESH_REFUSE,
     CauseEchec,
-    ContexteRequete,
     EchecAuthentificationError,
     RafraichissementError,
     authentifier,

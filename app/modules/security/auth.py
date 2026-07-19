@@ -42,16 +42,16 @@ PIÈGES, détaillés à leur emplacement :
 
 import hashlib
 import hmac
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Select, select, text, update
+from sqlalchemy import Select, select, update
 from sqlalchemy.orm import Session, lazyload
 
+from app.modules.audit.service import ContexteRequete, ecrire_audit
 from app.modules.security.jwt import (
     JetonError,
     JetonExpireError,
@@ -91,20 +91,10 @@ class ActionAudit(StrEnum):
     LOGIN_AGENCY_DENIED = "auth.login.agency_denied"
 
 
-@dataclass(frozen=True)
-class ContexteRequete:
-    """Origine de la requête, propagée jusqu'à l'audit. Le bloc 4 (API) la construira.
-
-    Regroupée pour ne pas multiplier les paramètres à travers les helpers. Ne porte que
-    des données d'origine (IP, agent, corrélation), jamais de secret.
-    """
-
-    ip: str | None = None
-    user_agent: str | None = None
-    request_id: uuid.UUID | None = None
-
-
-CONTEXTE_VIDE = ContexteRequete()
+# ContexteRequete et CONTEXTE_VIDE vivent désormais dans app.modules.audit.service : ils
+# servent à TOUS les modules qui auditent, pas seulement à l'authentification. Les
+# appelants (router.py, tests) les importent de là, pas d'ici — un module ne doit pas
+# devenir le point d'entrée d'un type qui ne lui appartient plus.
 
 
 def _ecrire_audit(
@@ -116,36 +106,22 @@ def _ecrire_audit(
     agency_id: uuid.UUID | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
-    """Insère une ligne d'audit — SQL paramétré, JAMAIS via l'ORM (le modèle AuditLog lève).
+    """Adaptateur vers le service d'audit partagé, pour les événements d'AUTHENTIFICATION.
 
-    Ne fournit pas chain_hash : le trigger de la 0003 le pose sous verrou consultatif. À
-    appeler le plus tard possible dans la transaction (juste avant le commit) pour tenir
-    l'ordre des verrous et éviter le deadlock avec le chaînage.
+    Ici l'acteur EST le sujet : c'est le titulaire du compte qui se connecte, échoue ou se
+    fait voler un jeton. resource_id reste donc vide — il n'y a pas de « cible » distincte
+    de l'auteur. Les écritures administratives (4c), elles, appellent ecrire_audit
+    directement pour renseigner les deux.
 
-    details devient new_values (JSONB). N'Y METTRE AUCUN SECRET : ni password_hash, ni
-    refresh_token_hash, ni token en clair. Le helper n'écrit que ce qui lui est passé —
-    la garantie tient au site d'appel, pas ici.
-
-    CAST(:x AS type) et non « :x::type » : le « :: » empêche SQLAlchemy de reconnaître le
-    paramètre, qui partirait littéralement dans le SQL (piège documenté des tests d'audit).
+    À appeler le plus tard possible dans la transaction (verrou consultatif du chaînage).
     """
-    db.execute(
-        text(
-            "INSERT INTO audit.audit_logs "
-            "(user_id, action, agency_id, ip_address, user_agent, request_id, new_values) "
-            "VALUES (CAST(:user_id AS uuid), :action, CAST(:agency_id AS uuid), "
-            "        CAST(:ip AS inet), :user_agent, CAST(:request_id AS uuid), "
-            "        CAST(:details AS jsonb))"
-        ),
-        {
-            "user_id": user_id,
-            "action": action.value,
-            "agency_id": agency_id,
-            "ip": contexte.ip,
-            "user_agent": contexte.user_agent,
-            "request_id": contexte.request_id,
-            "details": json.dumps(details) if details is not None else None,
-        },
+    ecrire_audit(
+        db,
+        action=action.value,
+        contexte=contexte,
+        acteur_id=user_id,
+        agency_id=agency_id,
+        new_values=details,
     )
 
 
