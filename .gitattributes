@@ -1,0 +1,32 @@
+# Fins de ligne : LF dans le dépôt, toujours.
+#
+# POURQUOI. Sans ce fichier, un outil qui réécrit un source sous Windows peut le convertir
+# en CRLF sans que personne ne le remarque : les tests passent, le linter passe, mais le
+# diff enfle. C'est arrivé au bloc 4c — six fichiers convertis en silence, et auth.py
+# affichait 1607 lignes modifiées au lieu de 107. Le vrai dommage n'est pas le bruit du
+# diff, c'est `git blame` : chaque ligne se met à pointer vers un commit qui ne l'a jamais
+# touchée, et l'historique cesse de répondre à « pourquoi cette ligne existe-t-elle ? ».
+#
+# Le risque augmente avec le frontend : l'outillage Node (prettier, eslint, vite) écrit
+# beaucoup de fichiers, et multiplie donc les occasions de recréer le problème.
+#
+# text=auto : git détecte le texte et normalise en LF DANS le dépôt.
+# eol=lf     : et le restitue en LF à la copie de travail, y compris sous Windows.
+#              Les éditeurs modernes (VS Code, PyCharm) lisent le LF sans difficulté.
+* text=auto eol=lf
+
+# Binaires DÉCLARÉS explicitement plutôt que laissés à la détection automatique.
+# La détection de git est fiable, mais le coût d'une erreur est asymétrique : un .docx
+# « normalisé » par erreur est un fichier détruit, et docs/decisions_socle_securite.docx
+# est le document de conception validé qui fait autorité sur tout le socle.
+*.docx binary
+*.xlsx binary
+*.pdf  binary
+*.zip  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff  binary
+*.woff2 binary
