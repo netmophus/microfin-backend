@@ -233,6 +233,9 @@ class ResultatConnexion:
     access_token: str
     refresh_token: str
     rehash_recommande: bool
+    # §6 — le jeton émis n'ouvre rien tant que c'est vrai (cf. exige()). Exposé ici pour
+    # que l'API le dise au client, qui doit alors présenter l'écran de changement.
+    doit_changer_mot_de_passe: bool = False
 
 
 def _selectionner_pour_maj(identifiant: str) -> Select[tuple[User]]:
@@ -347,6 +350,42 @@ def _revoquer_toutes_les_sessions(db: Session, user_id: uuid.UUID, maintenant: d
         .values(revoked_at=maintenant)
         .execution_options(synchronize_session="fetch")
     )
+
+
+def revoquer_les_sessions(db: Session, user_id: uuid.UUID) -> int:
+    """Révoque TOUTES les sessions d'un utilisateur, sur ordre d'un ADMINISTRATEUR (4c).
+
+    Distincte de deconnecter_tout, qui part d'un refresh token : là, c'est le titulaire qui
+    se déconnecte lui-même. Ici, un tiers agit sur un compte dont il ne détient aucun jeton
+    — désactivation, suppression, réinitialisation de mot de passe.
+
+    C'est cette fonction qui referme la fenêtre laissée ouverte par la brique
+    d'autorisation : celle-ci ne relit pas l'état du compte, si bien qu'un compte désactivé
+    garderait 8 h d'accès par son refresh token. Désactiver sans révoquer ne désactive rien
+    d'utile.
+
+    Ne committe pas : l'appelant tient la transaction, pour que l'audit y entre aussi.
+    Rend le nombre de sessions effectivement révoquées (0 si le compte n'en avait aucune).
+    """
+    # Les identifiants sont relus AVANT la mise à jour : Result.rowcount n'est pas typé
+    # (ni garanti) sur un UPDATE ORM, et compter les lignes visées est plus honnête que
+    # d'interroger le pilote sur ce qu'il a touché.
+    identifiants = list(
+        db.execute(
+            select(UserSession.id).where(
+                UserSession.user_id == user_id, UserSession.revoked_at.is_(None)
+            )
+        ).scalars()
+    )
+    if not identifiants:
+        return 0
+    db.execute(
+        update(UserSession)
+        .where(UserSession.id.in_(identifiants))
+        .values(revoked_at=datetime.now(UTC))
+        .execution_options(synchronize_session="fetch")
+    )
+    return len(identifiants)
 
 
 def _appliquer_rotation(
@@ -580,6 +619,7 @@ def authentifier(
         roles=roles,
         primary_agency_id=user.primary_agency_id,
         agency_id=agency_id,
+        must_change_password=user.must_change_password,
     )
     refresh_token = creer_refresh_token(user_id=user.id)
     session = _creer_session(user.id, refresh_token, ip, user_agent)
@@ -588,6 +628,7 @@ def authentifier(
 
     return ResultatConnexion(
         user_id=user.id,
+        doit_changer_mot_de_passe=user.must_change_password,
         access_token=access_token,
         refresh_token=refresh_token,
         rehash_recommande=rehachage_necessaire(user.password_hash),
@@ -700,6 +741,9 @@ def rafraichir(
         roles=roles,
         primary_agency_id=user.primary_agency_id,
         agency_id=user.primary_agency_id,
+        # RELU en base à chaque rotation, comme les rôles : un mot de passe réinitialisé
+        # entre-temps doit refermer l'accès, pas attendre la prochaine connexion.
+        must_change_password=user.must_change_password,
     )
     nouveau_refresh = creer_refresh_token(user_id=user.id)
     nouvelle_session = _creer_session(user.id, nouveau_refresh, ip, user_agent)
@@ -708,6 +752,7 @@ def rafraichir(
 
     return ResultatConnexion(
         user_id=user.id,
+        doit_changer_mot_de_passe=user.must_change_password,
         access_token=nouvel_access,
         refresh_token=nouveau_refresh,
         # Sans rapport avec le mot de passe, non évalué ici : toujours False au refresh.

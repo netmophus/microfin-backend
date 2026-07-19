@@ -52,6 +52,13 @@ PERMISSION_RESEAU = "perimetre.reseau"
 
 MESSAGE_NON_AUTHENTIFIE = "Authentification requise."
 MESSAGE_PERMISSION_INSUFFISANTE = "Vous n'avez pas la permission requise."
+MESSAGE_MOT_DE_PASSE_A_RENOUVELER = (
+    "Votre mot de passe doit être renouvelé avant toute autre action."
+)
+# Code machine renvoyé avec le 403 quand le renouvellement est dû. Le SPA s'en sert pour
+# rediriger vers l'écran de changement au lieu d'afficher « accès refusé » — un message
+# d'échec sur une contrainte que l'utilisateur PEUT lever lui-même serait une impasse.
+CODE_MOT_DE_PASSE_A_RENOUVELER = "password_change_required"
 
 
 @dataclass(frozen=True)
@@ -71,6 +78,9 @@ class UtilisateurCourant:
     # signée dans le token : on peut lui faire confiance.
     agency_id: uuid.UUID | None
     voit_tout: bool
+    # §6 — mot de passe provisoire (compte créé, ou réinitialisé par un administrateur).
+    # Tant qu'il est vrai, exige() refuse TOUTE action.
+    doit_changer_mot_de_passe: bool = False
 
     def a_permission(self, code: str) -> bool:
         return code in self.permissions
@@ -172,6 +182,7 @@ def utilisateur_courant(
         primary_agency_id=claims.primary_agency_id,
         agency_id=claims.agency_id,
         voit_tout=PERMISSION_RESEAU in permissions,
+        doit_changer_mot_de_passe=claims.must_change_password,
     )
 
 
@@ -189,6 +200,16 @@ class ExigerPermission:
     def __call__(
         self, courant: Annotated[UtilisateurCourant, Depends(utilisateur_courant)]
     ) -> UtilisateurCourant:
+        # AVANT la permission : un mot de passe provisoire n'ouvre rien, même à qui détient
+        # le droit. Placé ici parce que exige() est le point de passage OBLIGÉ de toute
+        # route protégée — la contrainte hérite donc de la couverture du méta-test, au lieu
+        # d'être un contrôle de plus que chaque module devrait penser à écrire.
+        if courant.doit_changer_mot_de_passe:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=MESSAGE_MOT_DE_PASSE_A_RENOUVELER,
+                headers={"X-Erreur-Code": CODE_MOT_DE_PASSE_A_RENOUVELER},
+            )
         if self.permission_requise not in courant.permissions:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -202,6 +223,38 @@ def exige(permission: str) -> ExigerPermission:
     return ExigerPermission(permission)
 
 
+class ExigerAuthentification:
+    """Protection « authentifié, sans permission particulière » — cas rare et justifié.
+
+    Sert aux routes que TOUT utilisateur connecté doit pouvoir appeler, quel que soit son
+    rôle : changer son propre mot de passe, demain consulter son profil. Leur donner une
+    permission obligerait à l'accorder aux onze rôles, ce qui ferait du bruit dans la
+    matrice sans rien y décider.
+
+    Elle porte permission_requise = None : le méta-test la reconnaît comme une protection
+    DÉLIBÉRÉE, et ces routes n'ont donc pas à rejoindre ROUTES_PUBLIQUES. C'est important —
+    l'allowlist doit continuer à ne lister que des routes réellement ouvertes, sinon elle
+    cesse d'être lisible comme l'inventaire de la surface non authentifiée.
+    """
+
+    permission_requise: str | None = None
+
+    def __call__(
+        self, courant: Annotated[UtilisateurCourant, Depends(utilisateur_courant)]
+    ) -> UtilisateurCourant:
+        return courant
+
+
+def exige_authentification() -> ExigerAuthentification:
+    """Dépendance « il faut un jeton valide, rien de plus ».
+
+    NE VÉRIFIE PAS doit_changer_mot_de_passe, contrairement à exige() : c'est justement par
+    une de ces routes que l'utilisateur lève le drapeau. La contrôler ici enfermerait le
+    compte dehors — il ne pourrait plus rien faire, pas même ce qu'on lui demande de faire.
+    """
+    return ExigerAuthentification()
+
+
 # --- détection des routes non protégées (garde-fou anti-oubli) ----------------------
 
 
@@ -213,12 +266,17 @@ def _calls_du_dependant(dependant: Dependant) -> Iterator[object]:
         yield from _calls_du_dependant(sous)
 
 
+# Marqueur d'une protection délibérée. Les deux dépendances de ce module le portent :
+# ExigerPermission avec un code, ExigerAuthentification avec None. C'est l'ATTRIBUT qui
+# fait foi, pas sa valeur — sinon une route « authentifiée sans permission » passerait
+# pour non protégée et devrait rejoindre l'allowlist des routes ouvertes, qui cesserait
+# alors de dire la vérité.
+ATTRIBUT_PROTECTION = "permission_requise"
+
+
 def route_protegee(route: APIRoute) -> bool:
-    """Une route est protégée si son arbre de dépendances contient un ExigerPermission."""
-    return any(
-        getattr(call, "permission_requise", None) is not None
-        for call in _calls_du_dependant(route.dependant)
-    )
+    """Une route est protégée si son arbre de dépendances porte une protection déclarée."""
+    return any(hasattr(call, ATTRIBUT_PROTECTION) for call in _calls_du_dependant(route.dependant))
 
 
 def routes_api(conteneur: object) -> Iterator[APIRoute]:

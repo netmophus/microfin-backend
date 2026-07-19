@@ -128,3 +128,17 @@ class PageUtilisateurs(BaseModel):
     total: int
     page: int
     taille: int
+
+
+class ChangePasswordRequest(BaseModel):
+    """Entrée de POST /auth/change-password.
+
+    Les deux valeurs sont des SecretStr : leur repr est masqué, donc ni une exception de
+    validation ni un log de requête ne peuvent les faire apparaître.
+
+    L'ancien mot de passe est exigé bien que l'appelant soit déjà authentifié — c'est ce qui
+    empêche un voleur de jeton de s'approprier définitivement le compte.
+    """
+
+    mot_de_passe_actuel: SecretStr
+    nouveau_mot_de_passe: SecretStr

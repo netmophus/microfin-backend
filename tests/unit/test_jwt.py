@@ -21,6 +21,7 @@ from app.modules.security.jwt import (
     DUREE_ACCES,
     DUREE_RAFRAICHISSEMENT,
     ClaimsAcces,
+    ClaimsRafraichissement,
     JetonExpireError,
     JetonInvalideError,
     TypeDeJetonInvalideError,
@@ -428,3 +429,36 @@ def test_le_modele_de_claims_refuse_un_type_incoherent(user_id: uuid.UUID) -> No
             primary_agency_id=None,
             agency_id=None,
         )
+
+
+# --- garde-fou : tout claim déclaré doit réellement partir dans le jeton ---------------
+
+
+def test_chaque_champ_de_claims_acces_est_bien_encode(user_id: uuid.UUID) -> None:
+    """MÉTA-TEST. _encoder construit la charge CHAMP PAR CHAMP — c'est voulu (PyJWT refuse
+    les UUID, exige des dates NumericDate), mais ça rend l'oubli possible et SILENCIEUX.
+
+    Un claim ajouté au modèle et non à _encoder ne part pas dans le jeton : il retombe sur
+    son défaut au décodage, sans qu'aucune signature n'échoue ni qu'aucun test existant ne
+    rougisse. C'est arrivé au bloc 4c avec must_change_password, dont le défaut False
+    signifie « aucune restriction » — le mécanisme de mot de passe provisoire était inerte
+    alors que tout paraissait fonctionner.
+
+    Ce test compare les champs DÉCLARÉS aux champs ÉMIS. Il rougit à l'ajout d'un claim
+    oublié, et c'est exactement le moment où l'auteur peut encore comprendre pourquoi.
+    """
+    jeton = creer_access_token(user_id=user_id, roles=["CAISSIER"])
+    charge = pyjwt.decode(jeton, options={"verify_signature": False})
+
+    assert set(ClaimsAcces.model_fields) == set(charge), (
+        "Champ déclaré dans ClaimsAcces mais absent de la charge (ou l'inverse) : "
+        f"{set(ClaimsAcces.model_fields) ^ set(charge)}. "
+        "Un claim non encodé retombe sur son défaut — vérifiez _encoder."
+    )
+
+
+def test_chaque_champ_de_claims_rafraichissement_est_bien_encode(user_id: uuid.UUID) -> None:
+    jeton = creer_refresh_token(user_id=user_id)
+    charge = pyjwt.decode(jeton, options={"verify_signature": False})
+
+    assert set(ClaimsRafraichissement.model_fields) == set(charge)

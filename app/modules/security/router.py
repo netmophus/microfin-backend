@@ -34,8 +34,22 @@ from app.modules.security.auth import (
     deconnecter_tout,
     rafraichir,
 )
+from app.modules.security.autorisation import (
+    MESSAGE_NON_AUTHENTIFIE,
+    UtilisateurCourant,
+    exige_authentification,
+)
 from app.modules.security.jwt import DUREE_ACCES, DUREE_RAFRAICHISSEMENT
-from app.modules.security.schemas import LoginRequest, TokenResponse
+from app.modules.security.models import User
+from app.modules.security.mots_de_passe import (
+    MESSAGE_MOT_DE_PASSE_ACTUEL_INVALIDE,
+    PROFONDEUR_HISTORIQUE,
+    MotDePasseActuelInvalideError,
+    MotDePasseDejaUtiliseError,
+    MotDePasseInvalideError,
+    changer_son_mot_de_passe,
+)
+from app.modules.security.schemas import ChangePasswordRequest, LoginRequest, TokenResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -205,3 +219,59 @@ def logout_all(
     if refresh_token:
         deconnecter_tout(db, refresh_token)
     _effacer_cookie_refresh(response)
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(
+    corps: ChangePasswordRequest,
+    courant: Annotated[UtilisateurCourant, Depends(exige_authentification())],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Changement self-service. La SEULE porte par laquelle must_change_password se lève.
+
+    Protégée par exige_authentification et NON par exige(...) : d'une part tout utilisateur
+    doit pouvoir changer son mot de passe quel que soit son rôle, d'autre part exige()
+    refuse toute action tant que le renouvellement est dû — l'utiliser ici enfermerait le
+    compte dehors, incapable de faire ce qu'on exige justement de lui.
+
+    204 sans corps : rien à renvoyer, et surtout aucun jeton réémis ici. Les jetons courants
+    portent encore must_change_password=true ; le client doit se reconnecter (ou
+    rafraîchir), ce qui produit des jetons propres. C'est plus sûr que de réémettre : la
+    réémission silencieuse masquerait au client qu'il détenait un jeton restreint.
+
+    409 si le nouveau mot de passe a déjà servi (C12), 422 s'il viole la politique, 400 si
+    l'ancien est faux — trois causes distinctes, toutes actionnables par le titulaire, donc
+    sans intérêt à être confondues.
+    """
+    user = db.get(User, courant.user_id)
+    if user is None:  # jeton valide dont le compte a disparu entre-temps
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=MESSAGE_NON_AUTHENTIFIE
+        )
+    try:
+        changer_son_mot_de_passe(
+            db,
+            user,
+            corps.mot_de_passe_actuel.get_secret_value(),
+            corps.nouveau_mot_de_passe.get_secret_value(),
+        )
+    except MotDePasseActuelInvalideError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=MESSAGE_MOT_DE_PASSE_ACTUEL_INVALIDE,
+        ) from None
+    except MotDePasseDejaUtiliseError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Ce mot de passe a déjà été utilisé (les {PROFONDEUR_HISTORIQUE} derniers "
+            "sont refusés).",
+        ) from None
+    except MotDePasseInvalideError as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Mot de passe non conforme à la politique.",
+                "violations": [regle.value for regle in erreur.violations],
+            },
+        ) from None
+    db.commit()

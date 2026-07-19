@@ -100,6 +100,15 @@ class ClaimsAcces(_ClaimsBase):
     # Vaut primary_agency_id par défaut. C'est ce claim qui portera le cloisonnement,
     # pas la colonne scope des permissions.
     agency_id: uuid.UUID | None
+    # Mot de passe à renouveler (§6). Porté par le JETON et non relu en base à chaque
+    # requête : la brique d'autorisation n'interroge pas users, et on ne veut pas qu'elle
+    # commence. Défaut False pour que les jetons émis avant ce claim restent décodables.
+    #
+    # La péremption est sûre DANS LES DEUX SENS, ce qui est la condition pour se fier à un
+    # état figé dans un jeton : vrai -> faux, le changement de mot de passe réémet le
+    # couple de jetons ; faux -> vrai (un administrateur réinitialise), la réinitialisation
+    # RÉVOQUE les sessions, donc les jetons portant l'ancien claim meurent avec elles.
+    must_change_password: bool = False
 
 
 class ClaimsRafraichissement(_ClaimsBase):
@@ -156,6 +165,13 @@ def _encoder(claims: _ClaimsBase) -> str:
             str(claims.primary_agency_id) if claims.primary_agency_id else None
         )
         charge["agency_id"] = str(claims.agency_id) if claims.agency_id else None
+        # À N'OUBLIER SOUS AUCUN PRÉTEXTE : la charge est construite champ par champ, donc
+        # un claim ajouté à ClaimsAcces sans l'être ICI ne part PAS dans le jeton. Il
+        # retombe alors sur son défaut au décodage — pour must_change_password, le défaut
+        # est False, c'est-à-dire « aucune restriction » : le mécanisme entier deviendrait
+        # inerte, silencieusement, sans qu'aucun décodage n'échoue. C'est exactement ce qui
+        # s'est produit au premier jet du bloc 4c ; seul un test de bout en bout l'a montré.
+        charge["must_change_password"] = claims.must_change_password
 
     return jwt.encode(charge, _cle_signature(), algorithm=settings.JWT_ALGORITHM)
 
@@ -165,6 +181,7 @@ def creer_access_token(
     roles: Sequence[str],
     primary_agency_id: uuid.UUID | None = None,
     agency_id: uuid.UUID | None = None,
+    must_change_password: bool = False,
 ) -> str:
     """Fabrique un access token de 15 min.
 
@@ -186,6 +203,7 @@ def creer_access_token(
         roles=tuple(roles),
         primary_agency_id=primary_agency_id,
         agency_id=agency_id if agency_id is not None else primary_agency_id,
+        must_change_password=must_change_password,
     )
     return _encoder(claims)
 
