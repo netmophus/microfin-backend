@@ -40,13 +40,39 @@ class User(Base):
     """
 
     __tablename__ = "users"
-    __table_args__ = ({"schema": "security"},)
+    # Unicité PARTIELLE, limitée aux comptes vivants (migration 0006) : la suppression est
+    # logique, donc une ligne supprimée resterait dans un index inconditionnel et
+    # confisquerait son identifiant à jamais — un employé de retour ne pourrait pas
+    # retrouver son matricule, une adresse de service ne serait jamais réattribuable.
+    # Déclaré ici et non par unique=True sur la colonne : unique=True produirait une
+    # CONTRAINTE inconditionnelle, et `alembic check` signalerait une dérive perpétuelle.
+    __table_args__ = (
+        sa.Index(
+            "uq_users_matricule_vivants",
+            "matricule",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "uq_users_email_vivants",
+            "email",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "uq_users_username_vivants",
+            "username",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        {"schema": "security"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
-    matricule: Mapped[str] = mapped_column(sa.String(30), nullable=False, unique=True)
+    matricule: Mapped[str] = mapped_column(sa.String(30), nullable=False)
     # CITEXT (C14) : deux comptes ne peuvent pas différer par la seule casse de l'email.
-    email: Mapped[str] = mapped_column(postgresql.CITEXT(), nullable=False, unique=True)
-    username: Mapped[str] = mapped_column(sa.String(50), nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(postgresql.CITEXT(), nullable=False)
+    username: Mapped[str] = mapped_column(sa.String(50), nullable=False)
     # Argon2id (OWASP). Jamais sérialisé, jamais journalisé.
     password_hash: Mapped[str] = mapped_column(sa.Text(), nullable=False)
     last_name: Mapped[str] = mapped_column(sa.String(100), nullable=False)
