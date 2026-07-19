@@ -142,3 +142,72 @@ class ChangePasswordRequest(BaseModel):
 
     mot_de_passe_actuel: SecretStr
     nouveau_mot_de_passe: SecretStr
+
+
+# --- écritures sur les utilisateurs (bloc 4c) ----------------------------------------
+
+# Contrôle de forme DÉLIBÉRÉMENT SOMMAIRE : « quelque chose @ quelque chose . quelque
+# chose », sans espace. On ne cherche pas la conformité RFC 5322 — une validation stricte
+# rejette des adresses parfaitement valides (guillemets, IDN, sous-adressage), ce qui est
+# pire qu'une passoire quand un agent ne peut pas saisir l'adresse réelle d'un collègue.
+# La seule preuve qu'une adresse existe est un message qui arrive ; ce projet n'envoie pas
+# de courriel, donc le motif attrape les fautes de frappe, rien de plus. C'est aussi ce qui
+# évite d'ajouter la dépendance email-validator pour une garantie qu'elle ne donne pas.
+MOTIF_EMAIL = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+
+class CreerUtilisateurRequest(BaseModel):
+    """Entrée de POST /users.
+
+    Pas de champ « mot de passe » : il est GÉNÉRÉ. Laisser l'administrateur le choisir lui
+    ferait connaître celui de son employé, donc lui permettrait d'agir sous son nom sans
+    laisser de trace distinguable dans l'audit.
+    """
+
+    matricule: str = Field(min_length=1, max_length=30)
+    email: str = Field(max_length=255, pattern=MOTIF_EMAIL)
+    username: str = Field(min_length=3, max_length=50)
+    last_name: str = Field(min_length=1, max_length=100)
+    first_name: str = Field(min_length=1, max_length=100)
+    phone: str | None = Field(default=None, max_length=30)
+    # Doit être dans le périmètre du créateur (contrôlé par le service) : sans quoi un
+    # responsable créerait un compte qu'il ne pourrait plus voir à la seconde suivante.
+    primary_agency_id: uuid.UUID | None = None
+
+
+class ModifierUtilisateurRequest(BaseModel):
+    """Entrée de PATCH /users/{id}. Modification PARTIELLE : seuls les champs fournis bougent.
+
+    model_fields_set distingue « absent » de « explicitement mis à null » — sans quoi
+    effacer un téléphone serait impossible, ou toute requête écraserait les champs omis.
+
+    matricule et username ne sont volontairement PAS modifiables : ce sont les clés par
+    lesquelles l'audit et les écritures comptables désignent une personne. Les changer
+    rendrait l'historique illisible pour un contrôleur.
+    """
+
+    email: str | None = Field(default=None, max_length=255, pattern=MOTIF_EMAIL)
+    phone: str | None = Field(default=None, max_length=30)
+    last_name: str | None = Field(default=None, min_length=1, max_length=100)
+    first_name: str | None = Field(default=None, min_length=1, max_length=100)
+    # Mutation d'agence : exige la portée réseau (contrôlé par le service).
+    primary_agency_id: uuid.UUID | None = None
+
+    def modifications(self) -> dict[str, object]:
+        """Ne rend que les champs RÉELLEMENT fournis par le client."""
+        return {champ: getattr(self, champ) for champ in self.model_fields_set}
+
+
+class UtilisateurCreeResponse(BaseModel):
+    """Sortie de POST /users et de POST /users/{id}/reset-password.
+
+    mot_de_passe_provisoire n'apparaît QUE dans cette réponse, et une seule fois : il n'est
+    stocké nulle part (seul son hash), ni journalisé, ni auditable. L'administrateur le
+    transmet de vive voix ou sur papier ; l'employé le change à sa première connexion.
+
+    C'est une chaîne nue et non un SecretStr : le masquage servirait à protéger des logs,
+    or c'est précisément la valeur que cette réponse doit livrer au client.
+    """
+
+    utilisateur: UtilisateurFiche
+    mot_de_passe_provisoire: str

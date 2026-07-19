@@ -268,7 +268,7 @@ def change_password(
         ) from None
     except MotDePasseInvalideError as erreur:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "message": "Mot de passe non conforme à la politique.",
                 "violations": [regle.value for regle in erreur.violations],
