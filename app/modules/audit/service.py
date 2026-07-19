@@ -21,6 +21,11 @@ c'est pourquoi _sans_secret refuse activement les clés interdites plutôt que d
 confiance. Une fuite dans un journal immuable ne se rattrape pas — on ne peut ni l'effacer
 ni la réécrire.
 
+La détection est volontairement GROSSIÈRE (sous-chaînes), donc elle produit des faux
+positifs : « must_change_password » contient « password » sans rien révéler. Ils sont levés
+par une liste d'exceptions explicites plutôt qu'en affinant la règle — une règle fine
+finirait par laisser passer un champ vraiment sensible, alors qu'une exception se relit.
+
 ÉCRIRE TARD. À appeler le plus près possible du commit. Le trigger de chaînage (0003) prend
 un verrou consultatif ; écrire l'audit tôt dans une transaction qui verrouille ensuite des
 lignes métier inverse l'ordre des verrous et finit en interblocage.
@@ -38,6 +43,18 @@ from sqlalchemy.orm import Session
 # Comparaison sur le nom de clé en minuscules, sous-chaîne comprise : « password_hash »,
 # « new_password », « mot_de_passe_genere » tombent tous.
 FRAGMENTS_INTERDITS = ("password", "mot_de_passe", "secret", "token", "hash")
+
+# Exceptions EXPLICITES aux fragments ci-dessus : des champs dont le nom contient un
+# fragment interdit alors qu'ils ne portent aucun secret. Chaque entrée est une décision
+# relue, jamais un contournement de confort — et la liste doit rester courte assez pour se
+# lire d'un coup d'œil, comme l'allowlist des routes publiques.
+#
+#   must_change_password : booléen d'ÉTAT (« un renouvellement est-il dû ? »). Ne dit rien
+#       du mot de passe lui-même, et sa trace est nécessaire : elle prouve qu'une
+#       réinitialisation a bien imposé le renouvellement.
+#   password_changed_at  : horodatage. Utile au contrôle de la politique d'expiration (C9),
+#       et ne révèle pas plus qu'une date de modification ordinaire.
+CHAMPS_AUTORISES = frozenset({"must_change_password", "password_changed_at"})
 
 
 class SecretDansAuditError(RuntimeError):
@@ -71,6 +88,8 @@ def _sans_secret(valeurs: dict[str, Any] | None, ou: str) -> dict[str, Any] | No
         return None
     for cle in valeurs:
         minuscule = cle.lower()
+        if minuscule in CHAMPS_AUTORISES:
+            continue
         if any(fragment in minuscule for fragment in FRAGMENTS_INTERDITS):
             raise SecretDansAuditError(
                 f"Champ « {cle} » interdit dans {ou} : le journal d'audit est immuable, "

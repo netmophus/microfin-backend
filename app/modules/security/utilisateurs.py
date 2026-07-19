@@ -5,11 +5,12 @@ agence cesse d'être une intention et devient une clause WHERE.
 
 DEUX RÈGLES QUI TIENNENT TOUT LE FICHIER
 
-1. UNE SEULE fonction de visibilité, _condition_visibilite, partagée par la liste, la fiche
-   ET le compteur de total. Si ces trois-là appliquaient des filtres écrits séparément, ils
-   divergeraient un jour — et la divergence serait silencieuse : la fiche répondrait 200 sur
-   une ligne que la liste cache, ou le total annoncerait des résultats invisibles. Un seul
-   endroit à lire pour savoir ce qu'un utilisateur a le droit de voir.
+1. UNE SEULE fonction de visibilité, condition_visibilite, partagée par la liste, la fiche,
+   le compteur de total ET le module d'écriture (4c). S'ils appliquaient des filtres écrits
+   séparément, ils divergeraient un jour — et la divergence serait silencieuse : la fiche
+   répondrait 200 sur une ligne que la liste cache, ou l'on pourrait modifier quelqu'un qu'on
+   ne peut pas voir. Un seul endroit à lire pour savoir ce qu'un utilisateur a le droit de
+   voir, et donc de toucher.
 
 2. Le filtre est DANS la requête, jamais après. On ne charge pas une ligne pour comparer son
    agence ensuite : on ne la trouve pas du tout. C'est ce qui donne le 404 naturel sur une
@@ -132,15 +133,21 @@ def _releve_de_agence(agence_id: uuid.UUID) -> ColumnElement[bool]:
     )
 
 
-def _condition_visibilite(courant: UtilisateurCourant) -> ColumnElement[bool]:
-    """CE QUE `courant` A LE DROIT DE VOIR. La seule porte d'entrée de tout ce module.
+def condition_visibilite(courant: UtilisateurCourant) -> ColumnElement[bool]:
+    """CE QUE `courant` A LE DROIT DE VOIR — et donc aussi de MODIFIER.
+
+    PUBLIQUE, et c'est un choix : le module d'écriture (4c) l'importe telle quelle. On ne
+    doit pas pouvoir modifier quelqu'un qu'on ne peut pas voir, et deux définitions du
+    périmètre — une pour lire, une pour écrire — finiraient par diverger sans que rien ne
+    le signale. Une seule fonction, deux usages.
 
     Deux clauses, toutes deux non négociables :
       - soft-delete : un utilisateur supprimé n'existe plus pour l'API, nulle part ;
       - périmètre   : réseau -> tout ; agence -> son agence ; ni l'un ni l'autre -> RIEN.
 
-    Le fail-secure du troisième cas vit dans condition_perimetre_sur (4a), pas ici : le
-    recopier dans chaque service est précisément ce qui a produit la faille corrigée en 4a.
+    Deux clauses non négociables : soft-delete, et périmètre. Le fail-secure du cas « ni
+    réseau ni agence » vit dans condition_perimetre_sur (4a), pas ici : le recopier dans
+    chaque service est précisément ce qui a produit la faille corrigée en 4a.
     """
     return sa.and_(
         User.deleted_at.is_(None),
@@ -190,7 +197,7 @@ def lister(
     filtres = filtres or FiltresUtilisateurs()
     taille = max(1, min(taille, TAILLE_PAGE_MAX))
     page = max(1, page)
-    conditions = [_condition_visibilite(courant), *_conditions_filtres(filtres)]
+    conditions = [condition_visibilite(courant), *_conditions_filtres(filtres)]
 
     total = db.execute(select(func.count()).select_from(User).where(*conditions)).scalar_one()
 
@@ -230,5 +237,5 @@ def lire(db: Session, courant: UtilisateurCourant, user_id: uuid.UUID) -> User |
             selectinload(User.agencies),
             selectinload(User.primary_agency),
         )
-        .where(User.id == user_id, _condition_visibilite(courant))
+        .where(User.id == user_id, condition_visibilite(courant))
     ).scalar_one_or_none()
