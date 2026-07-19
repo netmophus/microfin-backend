@@ -1,0 +1,14 @@
+# Commits à IGNORER dans git blame : ils ne changent aucun contenu.
+#
+# N'y inscrire QUE des commits purement mécaniques — normalisation de fins de ligne,
+# reformatage automatique intégral. Jamais un commit qui modifie du comportement : ce
+# fichier sert à retrouver l'auteur réel d'une ligne, pas à effacer une trace.
+#
+# Pour l'activer dans votre clone (réglage local, non versionné) :
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub et GitLab le lisent automatiquement.
+
+# chore(repo): imposer LF dans le dépôt et normaliser l'existant (.gitattributes)
+# 11 fichiers passés de CRLF à LF, aucun changement de contenu — vérifié par
+# `git diff --ignore-cr-at-eol`, qui ne montrait que .gitattributes lui-même.
+d538dda2ac2b2b57a1d075eb15fcb58359e5bc6a
