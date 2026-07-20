@@ -23,7 +23,11 @@ class Settings(BaseSettings):
 
     ENV: str = "dev"
     DATABASE_URL: str
-    REDIS_URL: str
+    # Optionnel TANT QUE le rate limiting par IP n'est pas branché : aucun code ne lit
+    # encore Redis. Le rendre obligatoire ferait échouer le démarrage d'une installation
+    # pour un service qu'elle n'utilise pas — une contrainte inutile à l'installation. Il
+    # redeviendra requis le jour où le rate limiting (chantier post-4c) en dépendra.
+    REDIS_URL: str | None = None
 
     # Clé de signature des jetons (§6). Sans valeur par défaut, délibérément : un défaut
     # serait un secret en dur, et une instance mal configurée démarrerait en signant avec

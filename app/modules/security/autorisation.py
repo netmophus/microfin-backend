@@ -82,9 +82,6 @@ class UtilisateurCourant:
     # Tant qu'il est vrai, exige() refuse TOUTE action.
     doit_changer_mot_de_passe: bool = False
 
-    def a_permission(self, code: str) -> bool:
-        return code in self.permissions
-
     def condition_perimetre_sur(
         self, construire: Callable[[uuid.UUID], ColumnElement[bool]]
     ) -> ColumnElement[bool]:
