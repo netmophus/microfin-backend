@@ -163,7 +163,11 @@ def login(
         ) from None
 
     _poser_cookie_refresh(response, resultat.refresh_token)
-    return TokenResponse(access_token=resultat.access_token, expires_in=EXPIRES_IN_ACCESS)
+    return TokenResponse(
+        access_token=resultat.access_token,
+        expires_in=EXPIRES_IN_ACCESS,
+        must_change_password=resultat.doit_changer_mot_de_passe,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -194,7 +198,11 @@ def refresh(
         ) from None
 
     _poser_cookie_refresh(response, resultat.refresh_token)
-    return TokenResponse(access_token=resultat.access_token, expires_in=EXPIRES_IN_ACCESS)
+    return TokenResponse(
+        access_token=resultat.access_token,
+        expires_in=EXPIRES_IN_ACCESS,
+        must_change_password=resultat.doit_changer_mot_de_passe,
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

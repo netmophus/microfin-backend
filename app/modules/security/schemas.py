@@ -40,6 +40,18 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     # Durée de validité de l'access token, en secondes (15 min).
     expires_in: int
+    # État du COMPTE, déclaré explicitement plutôt que laissé à déduire.
+    #
+    # L'information existe aussi dans le claim du jeton, et un client pourrait l'y lire —
+    # mais ce serait le coupler au FORMAT INTERNE du jeton. Or ce format évoluera : passage
+    # à RS256, nouveaux claims, renommages. Chaque évolution devrait alors se souvenir qu'un
+    # client lit dedans, et le jour où on l'oublie, le client casse en silence.
+    #
+    # Le jeton reste donc une boîte noire signée, et l'API déclare ce dont le client a
+    # besoin. Ce champ dit au front qu'il doit conduire l'utilisateur vers l'écran de
+    # renouvellement — il ne DÉCIDE rien : c'est exige() qui refuse les actions, côté
+    # serveur, que le client en tienne compte ou non.
+    must_change_password: bool = False
 
 
 # --- annuaire des utilisateurs (bloc 4b) --------------------------------------------

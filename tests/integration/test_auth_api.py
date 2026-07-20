@@ -313,3 +313,66 @@ def test_aucune_reponse_ne_contient_de_hash(
     empreinte = connexion.text + str(dict(connexion.headers))
     assert hash_mdp not in empreinte
     assert hash_refresh not in empreinte
+
+
+# --- must_change_password déclaré explicitement dans la réponse (préalable au front) ----
+
+
+def _poser_drapeau(db: Session, user: User) -> None:
+    user.must_change_password = True
+    db.flush()
+
+
+def test_login_declare_le_renouvellement_requis(
+    client: TestClient, db: Session, utilisateur: User, mot_de_passe: str
+) -> None:
+    """L'API DÉCLARE l'état du compte ; le client n'a pas à le déduire du jeton.
+
+    L'information existe aussi dans le claim, et un front pourrait l'y lire — mais il
+    serait alors couplé au format interne du jeton, qui évoluera (RS256, nouveaux claims,
+    renommages). Le jour où une évolution oublie qu'un client lit dedans, le client casse
+    en silence. Ce champ est le contrat explicite qui l'en dispense.
+    """
+    _poser_drapeau(db, utilisateur)
+
+    reponse = _login(client, utilisateur.username, mot_de_passe)
+
+    assert reponse.status_code == 200
+    assert reponse.json()["must_change_password"] is True
+
+
+def test_login_sans_renouvellement_requis(
+    client: TestClient, utilisateur: User, mot_de_passe: str
+) -> None:
+    assert (
+        _login(client, utilisateur.username, mot_de_passe).json()["must_change_password"] is False
+    )
+
+
+def test_refresh_declare_aussi_le_renouvellement(
+    client: TestClient, db: Session, utilisateur: User, mot_de_passe: str
+) -> None:
+    """LE cas qui compte : le drapeau se lève PENDANT la session.
+
+    Un administrateur réinitialise le mot de passe d'un agent déjà connecté. Le refresh
+    relit l'état en base, donc la réponse doit annoncer le renouvellement — sans quoi le
+    client continuerait de croire la session pleine et n'afficherait que des refus.
+    """
+    _login(client, utilisateur.username, mot_de_passe)
+    _poser_drapeau(db, utilisateur)
+
+    reponse = client.post("/auth/refresh")
+
+    assert reponse.status_code == 200
+    assert reponse.json()["must_change_password"] is True
+
+
+def test_le_champ_ne_fait_entrer_aucun_secret(
+    client: TestClient, db: Session, utilisateur: User, mot_de_passe: str
+) -> None:
+    """Garde-fou : ajouter un champ à une réponse est l'occasion d'en laisser passer un autre."""
+    _poser_drapeau(db, utilisateur)
+
+    corps = _login(client, utilisateur.username, mot_de_passe).json()
+
+    assert set(corps) == {"access_token", "token_type", "expires_in", "must_change_password"}
