@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Generator
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
@@ -149,11 +149,26 @@ def test_seule_la_pose_du_verrou_est_auditee(db: Session, utilisateur: User) -> 
 
 
 def test_un_compte_inexistant_nest_jamais_audite(db: Session, mot_de_passe: str) -> None:
+    """Aucune trace : ni flooding par énumération, ni écriture qui rouvrirait le timing.
+
+    L'assertion porte sur le NOMBRE DE LIGNES AJOUTÉES par cette tentative, et non sur le
+    contenu global de la table. Le premier jet interrogeait tout `audit.audit_logs` et
+    affirmait qu'aucun `login.success` n'y figurait : il ne passait que tant qu'aucune
+    connexion RÉELLE n'avait été committée. La première validation de bout en bout du
+    frontend en a écrit — dans une table immuable, donc définitivement — et le test a viré
+    au rouge sans qu'aucun code de production n'ait changé.
+
+    Compter avant et après est à la fois plus juste (c'est bien « cette tentative n'écrit
+    rien » qu'on veut affirmer, pas « la table est vierge ») et indépendant de ce que la
+    base contient par ailleurs.
+    """
+    avant = db.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+
     with pytest.raises(EchecAuthentificationError):
         authentifier(db, f"fantome_{uuid.uuid4().hex[:8]}", mot_de_passe)
-    # Aucune trace : ni flooding par énumération, ni écriture qui rouvrirait le timing.
-    total = db.execute(select(AuditLog).where(AuditLog.action.like("auth.%"))).scalars().all()
-    assert all(ligne.action != ActionAudit.LOGIN_SUCCESS for ligne in total)
+
+    apres = db.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    assert apres == avant
 
 
 def test_un_refresh_reussi_nest_pas_audite(
