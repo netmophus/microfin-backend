@@ -16,7 +16,6 @@ la fenêtre des douze.
 """
 
 import secrets
-import string
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +24,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.modules.security.models import User, UserPasswordHistory
+from app.modules.security.mots_lisibles import MOTS_LISIBLES
 from app.modules.security.password import (
     POLITIQUE_PAR_DEFAUT,
     PolitiqueMotDePasse,
@@ -42,8 +42,6 @@ PROFONDEUR_HISTORIQUE = 12
 # passe provisoire transite à l'oral ou sur papier, il doit résister sans être ressaisi
 # mille fois. 16 caractères tirés au sort donnent une entropie hors de portée d'une attaque
 # hors ligne, même si le hash fuitait.
-LONGUEUR_GENEREE = 16
-
 MESSAGE_MOT_DE_PASSE_ACTUEL_INVALIDE = "Le mot de passe actuel est incorrect."
 
 
@@ -75,36 +73,56 @@ class ResultatGeneration:
     hash: str
 
 
+# Nombre de mots assemblés, et chiffres finaux. C'est ICI qu'on gagne de la marge
+# d'entropie, pas en agrandissant la liste (qui deviendrait plus dure à vérifier) : chaque
+# mot de plus multiplie l'espace par la taille de la liste. Cinq mots + deux chiffres sur
+# une liste de ~130 mots donnent ~2^42 pour qui connaît le format — très largement suffisant
+# pour un mot de passe À USAGE UNIQUE, changé à la première connexion, face à Argon2id.
+NB_MOTS = 5
+NB_CHIFFRES = 2
+# Chiffres 2 à 9 : on écarte 0 et 1, qui se confondent à l'écrit avec O et l/I. Les lettres
+# étant des mots réels dictés (« sable »), pas épelées, elles n'ont pas cette ambiguïté.
+CHIFFRES_LISIBLES = "23456789"
+
+# Séparateur ET caractère spécial de la politique en un seul signe : « - » appartient à
+# string.punctuation, donc il satisfait l'exigence de caractère spécial sans imposer un
+# « $ » ou « % » qui se dictent mal. Il sépare aussi les mots, empêchant qu'ils se lisent
+# accolés.
+SEPARATEUR = "-"
+
+
 def generer_mot_de_passe(
     politique: PolitiqueMotDePasse = POLITIQUE_PAR_DEFAUT,
 ) -> ResultatGeneration:
-    """Tire un mot de passe conforme à la politique, avec `secrets` (CSPRNG).
+    """Assemble un mot de passe LISIBLE et conforme, à partir de la liste fermée de mots.
 
-    La construction garantit la conformité au lieu de tirer puis retenter : un caractère
-    est pris dans chaque famille exigée, le reste est complété au hasard, puis l'ensemble
-    est mélangé — sans quoi les premiers caractères trahiraient l'ordre des familles.
+    Forme : cinq mots neutres séparés par des tirets, le premier capitalisé, suivi de deux
+    chiffres. Exemple : « Sable-pont-rive-midi-champ-47 ». Il se dicte mot par mot au
+    téléphone et se recopie sans erreur, tout en satisfaisant la politique du §6 :
+
+        majuscule -> l'initiale du premier mot (une seule) ;
+        minuscule -> le reste des mots ;
+        chiffre   -> le groupe final ;
+        spécial   -> les tirets (« - » est dans string.punctuation) ;
+        longueur  -> cinq mots la portent bien au-delà de 12 caractères.
+
+    On ne génère RIEN librement : les mots viennent tous de MOTS_LISIBLES, dont la relecture
+    humaine garantit qu'aucun n'est une grossièreté (cf. l'en-tête de mots_lisibles.py). Un
+    générateur de syllabes aléatoires produirait tôt ou tard un mot réel malheureux.
+
+    secrets.SystemRandom().sample : tirage SANS remise, donc cinq mots DISTINCTS — pas de
+    « chat-chat » disgracieux à dicter. La perte d'entropie face à un tirage avec remise est
+    négligeable.
 
     L'assertion finale n'est pas décorative : si la politique était durcie d'une règle que
-    cette fonction ignore, elle produirait des mots de passe que le service refuserait
-    ensuite. Mieux vaut échouer ici, bruyamment.
+    cette forme ne couvre pas, elle refuserait au lieu de sortir un mot de passe non
+    conforme. Elle reste le garde-fou, quel que soit le format.
     """
-    familles: list[str] = []
-    if politique.exige_majuscule:
-        familles.append(string.ascii_uppercase)
-    if politique.exige_minuscule:
-        familles.append(string.ascii_lowercase)
-    if politique.exige_chiffre:
-        familles.append(string.digits)
-    if politique.exige_caractere_special:
-        familles.append("!@#$%&*+-=?")
-
-    alphabet = "".join(familles) or string.ascii_letters + string.digits
-    longueur = max(LONGUEUR_GENEREE, politique.longueur_minimale)
-
-    caracteres = [secrets.choice(famille) for famille in familles]
-    caracteres += [secrets.choice(alphabet) for _ in range(longueur - len(caracteres))]
-    secrets.SystemRandom().shuffle(caracteres)
-    clair = "".join(caracteres)
+    tirage = secrets.SystemRandom()
+    mots = tirage.sample(MOTS_LISIBLES, NB_MOTS)
+    mots[0] = mots[0].capitalize()
+    chiffres = "".join(tirage.choice(CHIFFRES_LISIBLES) for _ in range(NB_CHIFFRES))
+    clair = SEPARATEUR.join(mots) + SEPARATEUR + chiffres
 
     resultat = valider_politique(clair, politique)
     assert resultat.est_conforme, f"générateur non conforme à la politique : {resultat.violations}"

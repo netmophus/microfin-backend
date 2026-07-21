@@ -24,7 +24,12 @@ from app.modules.security.autorisation import CODE_MOT_DE_PASSE_A_RENOUVELER
 from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserPasswordHistory, UserRole
 from app.modules.security.mots_de_passe import generer_mot_de_passe
-from app.modules.security.password import hasher_mot_de_passe, verifier_mot_de_passe
+from app.modules.security.mots_lisibles import MOTS_LISIBLES
+from app.modules.security.password import (
+    hasher_mot_de_passe,
+    valider_politique,
+    verifier_mot_de_passe,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -280,10 +285,33 @@ def test_le_mot_de_passe_genere_est_conforme_et_jamais_deux_fois_le_meme() -> No
 
     assert len(tirages) == 50
     for clair in tirages:
-        assert len(clair) >= 16
-        assert any(c.isupper() for c in clair)
-        assert any(c.islower() for c in clair)
-        assert any(c.isdigit() for c in clair)
+        # Conforme À LA POLITIQUE — la vraie exigence, quel que soit le format.
+        assert valider_politique(clair).est_conforme
+
+
+def test_le_mot_de_passe_genere_est_lisible_et_dictable() -> None:
+    """La forme « Mot-mot-mot-mot-mot-NN » : cinq mots de la liste, séparés par des tirets,
+    le premier capitalisé, deux chiffres à la fin. C'est ce qui le rend dictable."""
+    clair = generer_mot_de_passe().clair
+    corps, chiffres = clair.rsplit("-", 1)
+    mots = corps.split("-")
+
+    assert len(mots) == 5
+    assert chiffres.isdigit() and len(chiffres) == 2
+    # Le premier mot est capitalisé, les autres en minuscules.
+    assert mots[0][0].isupper()
+    assert all(mot.islower() for mot in mots[1:])
+    # CHAQUE mot vient de la liste fermée — rien n'est généré librement. C'est ce qui
+    # garantit qu'aucune grossièreté ne peut sortir.
+    for mot in mots:
+        assert mot.lower() in MOTS_LISIBLES
+
+
+def test_les_chiffres_evitent_zero_et_un() -> None:
+    """0 et 1 se confondent à l'écrit avec O et l/I : on les écarte pour la recopie."""
+    for _ in range(50):
+        chiffres = generer_mot_de_passe().clair.rsplit("-", 1)[1]
+        assert "0" not in chiffres and "1" not in chiffres
 
 
 def test_le_hash_genere_correspond_au_clair() -> None:
