@@ -223,3 +223,30 @@ class UtilisateurCreeResponse(BaseModel):
 
     utilisateur: UtilisateurFiche
     mot_de_passe_provisoire: str
+
+
+class MonProfilResponse(BaseModel):
+    """Sortie de GET /auth/me : l'identité de l'utilisateur connecté.
+
+    Sert deux usages du frontend : afficher un nom qui SURVIT au rechargement de page (le
+    jeton vit en mémoire et se perd au F5 ; ce profil se re-demande), et savoir quelles
+    entrées de menu montrer — d'où la liste explicite des permissions.
+
+    Construit champ par champ, jamais dérivé d'un modèle ORM : password_hash et les compteurs
+    de sécurité de la table users ne peuvent donc pas fuiter par accident. On expose les
+    PERMISSIONS (résolues depuis les rôles) et non le simple fait d'être connecté : le
+    frontend en a besoin pour n'afficher que ce qui est permis. Ce n'est pas une faille — ces
+    permissions sont déjà dans le jeton de l'utilisateur ; les lui rendre lisiblement ne lui
+    apprend rien qu'il ne détienne. Le serveur reste seul juge (403 sur chaque route).
+    """
+
+    id: uuid.UUID
+    username: str
+    last_name: str
+    first_name: str
+    roles: list[RoleBref]
+    permissions: list[str]
+    # Agence COURANTE de la session (C6), None si l'utilisateur n'est rattaché à aucune.
+    agence_courante: AgenceBreve | None
+    # Utile au front pour rediriger vers l'écran de renouvellement dès le chargement.
+    must_change_password: bool

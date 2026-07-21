@@ -376,3 +376,67 @@ def test_le_champ_ne_fait_entrer_aucun_secret(
     corps = _login(client, utilisateur.username, mot_de_passe).json()
 
     assert set(corps) == {"access_token", "token_type", "expires_in", "must_change_password"}
+
+
+# --- GET /auth/me : identité de l'utilisateur connecté (pour la barre et le menu) -------
+
+
+def test_me_renvoie_l_identite_et_les_permissions(
+    client: TestClient, db: Session, utilisateur: User, mot_de_passe: str
+) -> None:
+    """Le front s'en sert pour un nom qui survit au F5 et pour filtrer le menu."""
+    jetons = _login(client, utilisateur.username, mot_de_passe).json()
+    entete = {"Authorization": f"Bearer {jetons['access_token']}"}
+
+    reponse = client.get("/auth/me", headers=entete)
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["username"] == utilisateur.username
+    assert corps["last_name"] == utilisateur.last_name
+    assert corps["first_name"] == utilisateur.first_name
+    assert [r["code"] for r in corps["roles"]] == ["CAISSIER"]
+    # CAISSIER n'a aucune permission du périmètre Sécurité (moindre privilège).
+    assert corps["permissions"] == []
+    assert corps["must_change_password"] is False
+
+
+def test_me_expose_les_permissions_resolues(
+    client: TestClient, db: Session, mot_de_passe: str
+) -> None:
+    """Un ADMIN_FONCTIONNEL doit voir users.read dans ses permissions — c'est ce qui
+    permettra au front d'afficher l'entrée « Utilisateurs »."""
+    role = db.execute(select(Role).where(Role.code == "ADMIN_FONCTIONNEL")).scalar_one()
+    suffixe = uuid.uuid4().hex[:8]
+    admin = User(
+        matricule=f"MAT-{suffixe}",
+        email=f"{suffixe}@example.com",
+        username=f"admin_{suffixe}",
+        password_hash=hasher_mot_de_passe(mot_de_passe),
+        last_name="Bah",
+        first_name="A",
+    )
+    db.add(admin)
+    db.flush()
+    db.add(UserRole(user_id=admin.id, role_id=role.id))
+    db.flush()
+
+    jetons = _login(client, admin.username, mot_de_passe).json()
+    reponse = client.get("/auth/me", headers={"Authorization": f"Bearer {jetons['access_token']}"})
+
+    assert "users.read" in reponse.json()["permissions"]
+
+
+def test_me_exige_une_authentification(client: TestClient) -> None:
+    assert client.get("/auth/me").status_code == 401
+
+
+def test_me_ne_laisse_fuir_aucun_secret(
+    client: TestClient, utilisateur: User, mot_de_passe: str
+) -> None:
+    jetons = _login(client, utilisateur.username, mot_de_passe).json()
+    reponse = client.get("/auth/me", headers={"Authorization": f"Bearer {jetons['access_token']}"})
+
+    texte = reponse.text.lower()
+    for interdit in ("password_hash", "argon2", "failed_attempts", "secret"):
+        assert interdit not in texte

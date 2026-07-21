@@ -18,11 +18,13 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.modules.audit.service import ContexteRequete
+from app.modules.parameters.models import Agency
 from app.modules.security.auth import (
     MESSAGE_ECHEC_GENERIQUE,
     MESSAGE_REFRESH_REFUSE,
@@ -40,7 +42,7 @@ from app.modules.security.autorisation import (
     exige_authentification,
 )
 from app.modules.security.jwt import DUREE_ACCES, DUREE_RAFRAICHISSEMENT
-from app.modules.security.models import User
+from app.modules.security.models import Role, User, UserRole
 from app.modules.security.mots_de_passe import (
     MESSAGE_MOT_DE_PASSE_ACTUEL_INVALIDE,
     PROFONDEUR_HISTORIQUE,
@@ -49,7 +51,14 @@ from app.modules.security.mots_de_passe import (
     MotDePasseInvalideError,
     changer_son_mot_de_passe,
 )
-from app.modules.security.schemas import ChangePasswordRequest, LoginRequest, TokenResponse
+from app.modules.security.schemas import (
+    AgenceBreve,
+    ChangePasswordRequest,
+    LoginRequest,
+    MonProfilResponse,
+    RoleBref,
+    TokenResponse,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -283,3 +292,58 @@ def change_password(
             },
         ) from None
     db.commit()
+
+
+@router.get("/me", response_model=MonProfilResponse)
+def mon_profil(
+    courant: Annotated[UtilisateurCourant, Depends(exige_authentification())],
+    db: Annotated[Session, Depends(get_db)],
+) -> MonProfilResponse:
+    """Identité de l'utilisateur connecté. Authentifié suffit, aucune permission requise.
+
+    Deux besoins du frontend : un nom qui SURVIT au rechargement (le jeton, en mémoire, se
+    perd au F5), et la liste des permissions pour n'afficher que les entrées de menu
+    permises. Le serveur reste seul juge — ce profil informe l'interface, il n'autorise rien.
+
+    exige_authentification et NON exige(...) : tout utilisateur doit pouvoir savoir qui il
+    est. Et PAS le blocage must_change_password ici — un compte à renouveler doit pouvoir
+    charger son profil pour que le front sache justement le rediriger.
+
+    L'agence courante et les libellés de rôles viennent de la base (le jeton ne porte que
+    des identifiants et des codes). RÔLES relus ici, pas déduits du jeton : une réattribution
+    récente doit apparaître.
+    """
+    user = db.get(User, courant.user_id)
+    if user is None:  # jeton valide dont le compte a disparu entre-temps
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=MESSAGE_NON_AUTHENTIFIE
+        )
+
+    roles = [
+        RoleBref(code=code, name=name)
+        for code, name in db.execute(
+            select(Role.code, Role.name)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .where(UserRole.user_id == user.id)
+            .order_by(Role.code)
+        )
+    ]
+
+    agence: AgenceBreve | None = None
+    if courant.agency_id is not None:
+        ligne = db.execute(
+            select(Agency.id, Agency.code, Agency.name).where(Agency.id == courant.agency_id)
+        ).first()
+        if ligne is not None:
+            agence = AgenceBreve(id=ligne.id, code=ligne.code, name=ligne.name)
+
+    return MonProfilResponse(
+        id=user.id,
+        username=user.username,
+        last_name=user.last_name,
+        first_name=user.first_name,
+        roles=roles,
+        permissions=sorted(courant.permissions),
+        agence_courante=agence,
+        must_change_password=user.must_change_password,
+    )
