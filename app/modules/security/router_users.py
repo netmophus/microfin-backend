@@ -18,6 +18,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -51,12 +52,17 @@ from app.modules.security.utilisateurs_ecriture import (
     IdentifiantDejaUtiliseError,
     NouvelUtilisateur,
     PorteeReseauRequiseError,
+    RoleDejaAttribueError,
+    RoleIntrouvableError,
+    RoleNonAttribueError,
     activer,
+    attribuer_role,
     creer,
     desactiver,
     deverrouiller,
     modifier,
     reinitialiser_mot_de_passe,
+    retirer_role,
     supprimer,
 )
 
@@ -205,6 +211,16 @@ def _traduire(erreur: Exception) -> HTTPException:
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Identifiant déjà utilisé : {erreur.champ}.",
         )
+    if isinstance(erreur, RoleIntrouvableError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ce rôle n'existe pas.")
+    if isinstance(erreur, RoleDejaAttribueError):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Cette personne détient déjà ce rôle."
+        )
+    if isinstance(erreur, RoleNonAttribueError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Cette personne n'a pas ce rôle."
+        )
     raise erreur
 
 
@@ -351,3 +367,41 @@ def reinitialiser_mot_de_passe_utilisateur(
         utilisateur=_vers_fiche(resultat.utilisateur),
         mot_de_passe_provisoire=resultat.mot_de_passe_provisoire,
     )
+
+
+class AttribuerRoleRequest(BaseModel):
+    """Entrée de POST /users/{id}/roles : le code du rôle à attribuer."""
+
+    role_code: str = Field(min_length=1, max_length=50)
+
+
+@router.post("/{user_id}/roles", response_model=UtilisateurFiche)
+def attribuer_role_utilisateur(
+    user_id: uuid.UUID,
+    corps: AttribuerRoleRequest,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("roles.assign"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> UtilisateurFiche:
+    """Attribue un rôle. roles.assign. Interdit sur soi-même (séparation des pouvoirs §6)."""
+    try:
+        cible = attribuer_role(db, courant, user_id, corps.role_code, _contexte(request))
+    except Exception as erreur:
+        raise _traduire(erreur) from None
+    return _vers_fiche(cible)
+
+
+@router.delete("/{user_id}/roles/{role_code}", response_model=UtilisateurFiche)
+def retirer_role_utilisateur(
+    user_id: uuid.UUID,
+    role_code: str,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("roles.assign"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> UtilisateurFiche:
+    """Retire un rôle. roles.assign. Interdit sur soi-même."""
+    try:
+        cible = retirer_role(db, courant, user_id, role_code, _contexte(request))
+    except Exception as erreur:
+        raise _traduire(erreur) from None
+    return _vers_fiche(cible)

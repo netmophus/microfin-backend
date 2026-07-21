@@ -28,8 +28,10 @@ LES CINQ RÈGLES DE CE FICHIER
 5. AUDITER EN DERNIER. L'audit part juste avant le commit (verrou consultatif du chaînage),
    avec l'ACTEUR en user_id et la CIBLE en resource_id, et sans le moindre secret.
 
-CE QUI N'EST PAS ICI : rôles et agences habilitées (roles.assign, users.manage_agencies) et
-réinitialisation 2FA — bloc 4d.
+ROLES (bloc 4d) ajoutés en fin de fichier : attribuer / retirer un rôle. Mêmes règles —
+périmètre, pas sur soi-même (séparation des pouvoirs §6), audit. Une NUANCE : pas de
+révocation de session (voir attribuer_role). CE QUI N'EST TOUJOURS PAS ICI : agences
+habilitées (users.manage_agencies) et réinitialisation 2FA.
 """
 
 import uuid
@@ -43,7 +45,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.service import ContexteRequete, ecrire_audit
 from app.modules.security.auth import revoquer_les_sessions
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.security.models import User
+from app.modules.security.models import Role, User, UserRole
 from app.modules.security.mots_de_passe import (
     ResultatGeneration,
     ecrire_mot_de_passe,
@@ -64,6 +66,8 @@ class ActionUtilisateur:
     DELETED = "user.deleted"
     UNLOCKED = "user.unlocked"
     PASSWORD_RESET = "user.password_reset"
+    ROLE_ASSIGNED = "user.role_assigned"
+    ROLE_REMOVED = "user.role_removed"
 
 
 # --- erreurs ---------------------------------------------------------------------------
@@ -97,6 +101,18 @@ class IdentifiantDejaUtiliseError(Exception):
     def __init__(self, champ: str) -> None:
         super().__init__(f"Identifiant déjà utilisé : {champ}.")
         self.champ = champ
+
+
+class RoleIntrouvableError(Exception):
+    """Le code de rôle demandé ne correspond à aucun rôle."""
+
+
+class RoleDejaAttribueError(Exception):
+    """L'utilisateur détient déjà ce rôle : rien à faire (409)."""
+
+
+class RoleNonAttribueError(Exception):
+    """L'utilisateur ne détient pas ce rôle : rien à retirer (404 côté action)."""
 
 
 # --- helpers ----------------------------------------------------------------------------
@@ -510,3 +526,104 @@ def reinitialiser_mot_de_passe(
     )
     db.commit()
     return ResultatCreation(utilisateur=cible, mot_de_passe_provisoire=genere.clair)
+
+
+# --- rôles (bloc 4d) --------------------------------------------------------------------
+
+
+def _role_par_code(db: Session, code: str) -> Role:
+    role = db.execute(select(Role).where(Role.code == code)).scalar_one_or_none()
+    if role is None:
+        raise RoleIntrouvableError(code)
+    return role
+
+
+def attribuer_role(
+    db: Session,
+    courant: UtilisateurCourant,
+    user_id: uuid.UUID,
+    role_code: str,
+    contexte: ContexteRequete,
+) -> User:
+    """Attribue un rôle à un utilisateur. Audité, dans la même transaction.
+
+    SÉPARATION DES POUVOIRS (§6) : interdit sur SON PROPRE compte. Sans cette règle, qui
+    détient roles.assign pourrait s'auto-promouvoir en s'octroyant n'importe quel rôle —
+    exactement l'escalade que la séparation « définir vs attribuer » vise à empêcher.
+
+    PÉRIMÈTRE : la cible est chargée par _charger_cible, sous la même condition de visibilité
+    que la lecture (4c). On ne peut pas attribuer un rôle à quelqu'un qu'on ne voit pas —
+    hors périmètre, la cible « n'existe pas » (404), on ne révèle pas son existence.
+
+    PAS DE RÉVOCATION DE SESSION, à dessein. Les permissions sont résolues à chaque requête
+    depuis les rôles PORTÉS PAR LE JETON ; le refresh (≤ 15 min) relit les rôles en base et
+    les propage. Un changement de rôle prend donc effet de lui-même sous 15 minutes, sans
+    fenêtre permanente. Révoquer déconnecterait la personne en plein travail pour un simple
+    ajustement administratif. Le besoin d'effet IMMÉDIAT (compte compromis) est couvert par
+    la désactivation, qui, elle, révoque.
+    """
+    cible = _charger_cible(db, courant, user_id)
+    _interdire_sur_soi_meme(courant, cible)
+    role = _role_par_code(db, role_code)
+
+    if any(r.code == role_code for r in cible.roles):
+        raise RoleDejaAttribueError(role_code)
+
+    db.add(UserRole(user_id=cible.id, role_id=role.id, assigned_by=courant.user_id))
+    cible.updated_by = courant.user_id
+    db.flush()
+    db.refresh(cible)
+
+    ecrire_audit(
+        db,
+        action=ActionUtilisateur.ROLE_ASSIGNED,
+        contexte=contexte,
+        acteur_id=courant.user_id,
+        resource_type=RESSOURCE,
+        resource_id=cible.id,
+        agency_id=courant.agency_id,
+        new_values={"role": role_code},
+    )
+    db.commit()
+    return cible
+
+
+def retirer_role(
+    db: Session,
+    courant: UtilisateurCourant,
+    user_id: uuid.UUID,
+    role_code: str,
+    contexte: ContexteRequete,
+) -> User:
+    """Retire un rôle. Mêmes règles que l'attribution : pas sur soi-même, périmètre, audit.
+
+    Retirer ses propres rôles est interdit pour la même raison symétrique : on ne se retire
+    pas non plus un garde-fou. La règle « pas sur soi-même » couvre les deux sens.
+    """
+    cible = _charger_cible(db, courant, user_id)
+    _interdire_sur_soi_meme(courant, cible)
+    role = _role_par_code(db, role_code)
+
+    lien = db.execute(
+        select(UserRole).where(UserRole.user_id == cible.id, UserRole.role_id == role.id)
+    ).scalar_one_or_none()
+    if lien is None:
+        raise RoleNonAttribueError(role_code)
+
+    db.delete(lien)
+    cible.updated_by = courant.user_id
+    db.flush()
+    db.refresh(cible)
+
+    ecrire_audit(
+        db,
+        action=ActionUtilisateur.ROLE_REMOVED,
+        contexte=contexte,
+        acteur_id=courant.user_id,
+        resource_type=RESSOURCE,
+        resource_id=cible.id,
+        agency_id=courant.agency_id,
+        old_values={"role": role_code},
+    )
+    db.commit()
+    return cible
