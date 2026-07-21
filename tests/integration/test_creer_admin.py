@@ -13,12 +13,12 @@ from collections.abc import Generator
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from app.cli.creer_admin import (
+    CODE_AGENCE_SIEGE,
     ROLE_ADMIN,
-    AgenceIntrouvableError,
     ComptesDejaPresentsError,
     creer_admin,
 )
@@ -127,31 +127,47 @@ def test_force_autorise_le_depannage(db: Session, base_vierge: None) -> None:
     assert db.get(User, resultat.user_id) is not None
 
 
-def test_sans_agence_le_compte_reste_creable(db: Session, base_vierge: None) -> None:
-    """À l'installation, aucune agence n'existe encore. Rester sans agence est légitime :
-    ADMIN_FONCTIONNEL détient perimetre.reseau, il n'est cloisonné par personne."""
+def test_l_admin_est_toujours_rattache_a_une_agence(db: Session, base_vierge: None) -> None:
+    """Une IMF a toujours au moins une agence : l'admin d'amorçage y est rattaché, jamais
+    orphelin. Sans ce rattachement, tout compte créé ensuite sans portée réseau serait
+    invisible de quiconque n'a pas cette portée."""
     resultat = creer_admin(db, **_identite())
 
     admin = db.get(User, resultat.user_id)
     assert admin is not None
-    assert admin.primary_agency_id is None
+    assert admin.primary_agency_id is not None
+    agence = db.get(Agency, admin.primary_agency_id)
+    assert agence is not None
+    assert resultat.agence_code == agence.code
 
 
-def test_une_agence_inconnue_est_refusee(db: Session, base_vierge: None) -> None:
-    with pytest.raises(AgenceIntrouvableError):
-        creer_admin(db, **_identite(), agence_code="AG-INEXISTANTE")
+def test_deux_amorcages_partagent_la_meme_agence(db: Session, base_vierge: None) -> None:
+    """Idempotence : le second amorçage (dépannage --force) réutilise l'agence du premier,
+    au lieu d'en empiler une seconde. Invariant robuste à l'état de la base : quelle que
+    soit l'agence retenue, les deux admins pointent la même."""
+    premier = creer_admin(db, **_identite())
+    second = creer_admin(db, **_identite(), force=True)
+
+    assert premier.agence_code == second.agence_code
 
 
-def test_une_agence_connue_est_rattachee(db: Session, base_vierge: None) -> None:
-    agence = Agency(code=f"AG-{uuid.uuid4().hex[:6]}", name="Siège")
-    db.add(agence)
+def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
+    db: Session, base_vierge: None
+) -> None:
+    """Quand AUCUNE agence n'existe, le siège est créé avec le nom demandé et le code fixe.
+
+    On vide les agences DANS la transaction (annulée au rollback). Le DELETE échouerait si
+    une agence était référencée par le journal d'audit immuable ; ce n'est pas le cas d'une
+    base d'installation, précisément le scénario que cette commande sert."""
+    db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
+    db.execute(text("DELETE FROM security.user_agencies"))
+    db.execute(text("DELETE FROM parameters.agencies"))
     db.flush()
 
-    resultat = creer_admin(db, **_identite(), agence_code=agence.code)
+    resultat = creer_admin(db, **_identite(), agence_nom="Agence de Niamey")
 
-    admin = db.get(User, resultat.user_id)
-    assert admin is not None
-    assert admin.primary_agency_id == agence.id
+    assert resultat.agence_code == CODE_AGENCE_SIEGE
+    assert resultat.agence_nom == "Agence de Niamey"
 
 
 def test_le_role_administrateur_existe_bien_dans_le_seed(db: Session) -> None:

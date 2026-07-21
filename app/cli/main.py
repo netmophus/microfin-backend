@@ -6,7 +6,6 @@ import typer
 from sqlalchemy.exc import IntegrityError
 
 from app.cli.creer_admin import (
-    AgenceIntrouvableError,
     ComptesDejaPresentsError,
     RoleIntrouvableError,
     creer_admin,
@@ -57,17 +56,19 @@ def commande_creer_admin(
     nom: Annotated[str, typer.Option(help="Nom de famille.")] = "Administrateur",
     prenom: Annotated[str, typer.Option(help="Prénom.")] = "Compte",
     agence: Annotated[
-        str | None, typer.Option(help="Code d'une agence existante. Facultatif.")
-    ] = None,
+        str, typer.Option(help="Nom de l'agence siège créée à l'amorçage.")
+    ] = "Siège",
     force: Annotated[
         bool,
         typer.Option("--force", help="Créer même si des comptes existent (dépannage)."),
     ] = False,
 ) -> None:
-    """Crée le compte administrateur d'installation et affiche son mot de passe UNE FOIS.
+    """Amorce une installation : agence siège + administrateur, et affiche le mot de passe UNE FOIS.
 
-    À jouer après `seed-security`, sur une base neuve. Sans elle, aucun compte n'existe et
-    personne ne peut se connecter : le logiciel est impossible à démarrer.
+    À jouer après `seed-security`, sur une base neuve. Sans elle, aucune agence ni aucun
+    compte n'existe et personne ne peut se connecter : le logiciel est impossible à démarrer.
+    Une IMF a toujours au moins une agence — la commande crée donc le siège et y rattache
+    l'administrateur.
 
     Le mot de passe est généré, affiché une seule fois, et devra être changé à la première
     connexion (`must_change_password`). Il n'est ni stocké en clair, ni journalisé : s'il
@@ -82,7 +83,7 @@ def commande_creer_admin(
                 matricule=matricule,
                 last_name=nom,
                 first_name=prenom,
-                agence_code=agence,
+                agence_nom=agence,
                 force=force,
             )
         except ComptesDejaPresentsError as erreur:
@@ -106,14 +107,6 @@ def commande_creer_admin(
             )
             typer.echo("Jouez d'abord : python -m app.cli seed-security", err=True)
             raise typer.Exit(code=1) from None
-        except AgenceIntrouvableError as erreur:
-            db.rollback()
-            typer.secho(
-                f"Refus : aucune agence de code « {erreur.args[0]} ».",
-                fg=typer.colors.RED,
-                err=True,
-            )
-            raise typer.Exit(code=1) from None
         except IntegrityError:
             db.rollback()
             typer.secho(
@@ -126,8 +119,9 @@ def commande_creer_admin(
         db.commit()
 
     typer.echo("")
-    typer.secho("  Compte administrateur créé.", fg=typer.colors.GREEN, bold=True)
+    typer.secho("  Installation amorcée.", fg=typer.colors.GREEN, bold=True)
     typer.echo("")
+    typer.echo(f"  Agence        : {resultat.agence_nom} ({resultat.agence_code})")
     typer.echo(f"  Identifiant   : {resultat.username}")
     typer.echo(f"  Adresse       : {resultat.email}")
     typer.secho(f"  Mot de passe  : {resultat.mot_de_passe}", bold=True)

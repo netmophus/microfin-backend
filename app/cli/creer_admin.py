@@ -39,6 +39,10 @@ from app.modules.security.mots_de_passe import generer_mot_de_passe
 
 ROLE_ADMIN = "ADMIN_FONCTIONNEL"
 
+# Code de l'agence créée à l'amorçage. Généré, pas saisi : à l'installation, personne n'est
+# là pour le décider, et il n'existe pas encore de codification d'agences propre à l'IMF.
+CODE_AGENCE_SIEGE = "AG-001"
+
 
 class ComptesDejaPresentsError(Exception):
     """La base porte déjà des comptes : l'amorçage n'a plus lieu d'être."""
@@ -48,18 +52,41 @@ class RoleIntrouvableError(Exception):
     """Le rôle d'administration n'existe pas — le seed n'a pas été joué."""
 
 
-class AgenceIntrouvableError(Exception):
-    """Le code d'agence demandé ne correspond à rien."""
-
-
 @dataclass(frozen=True)
 class ResultatCreationAdmin:
-    """Le compte créé et son mot de passe EN CLAIR — à afficher une fois, puis à oublier."""
+    """Le compte créé, son mot de passe EN CLAIR, et l'agence de rattachement.
+
+    Une IMF a TOUJOURS au moins une agence — même la plus petite mutuelle a un guichet. Une
+    base sans agence ne correspond à aucune réalité ; l'amorçage en crée donc une (le siège)
+    et y rattache l'administrateur. Sans ce rattachement, tout compte créé ensuite sans
+    portée réseau serait invisible de quiconque n'a pas cette portée — un piège à corriger
+    plus tard sur chaque compte.
+    """
 
     user_id: uuid.UUID
     username: str
     email: str
     mot_de_passe: str
+    agence_code: str
+    agence_nom: str
+
+
+def _agence_siege(db: Session, nom: str) -> Agency:
+    """Rend l'agence de rattachement : la première existante, ou le siège créé à l'instant.
+
+    Idempotent : à un amorçage normal (base neuve) le siège est créé ; au dépannage
+    (--force sur une base déjà installée) on réutilise l'agence existante plutôt que d'en
+    empiler une seconde. « Première existante » suffit — au dépannage, l'important est que
+    l'admin soit rattaché quelque part, pas à quelle agence précise.
+    """
+    existante = db.execute(select(Agency).order_by(Agency.created_at).limit(1)).scalar_one_or_none()
+    if existante is not None:
+        return existante
+
+    siege = Agency(code=CODE_AGENCE_SIEGE, name=nom)
+    db.add(siege)
+    db.flush()
+    return siege
 
 
 def creer_admin(
@@ -70,10 +97,10 @@ def creer_admin(
     matricule: str,
     last_name: str,
     first_name: str,
-    agence_code: str | None = None,
+    agence_nom: str = "Siège",
     force: bool = False,
 ) -> ResultatCreationAdmin:
-    """Crée l'administrateur d'installation. Ne committe pas : l'appelant décide.
+    """Amorce une installation : agence siège + administrateur rattaché. Ne committe pas.
 
     `force` autorise la création alors que des comptes existent déjà. Réservé au dépannage
     — un réseau dont tous les administrateurs sont verrouillés, par exemple. Ce n'est pas
@@ -91,12 +118,7 @@ def creer_admin(
     if role is None:
         raise RoleIntrouvableError(ROLE_ADMIN)
 
-    agence_id: uuid.UUID | None = None
-    if agence_code is not None:
-        agence = db.execute(select(Agency).where(Agency.code == agence_code)).scalar_one_or_none()
-        if agence is None:
-            raise AgenceIntrouvableError(agence_code)
-        agence_id = agence.id
+    agence = _agence_siege(db, agence_nom)
 
     genere = generer_mot_de_passe()
     admin = User(
@@ -106,7 +128,7 @@ def creer_admin(
         password_hash=genere.hash,
         last_name=last_name,
         first_name=first_name,
-        primary_agency_id=agence_id,
+        primary_agency_id=agence.id,
         # Le mot de passe transite par un écran de terminal : il doit être périssable.
         must_change_password=True,
     )
@@ -127,4 +149,6 @@ def creer_admin(
         username=admin.username,
         email=admin.email,
         mot_de_passe=genere.clair,
+        agence_code=agence.code,
+        agence_nom=agence.name,
     )
