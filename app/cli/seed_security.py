@@ -1,6 +1,11 @@
-"""Seed du socle Sécurité : 11 rôles système et 18 permissions (§4 et §5 du document).
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 22 permissions.
 
-18 et non 17 : le §5 en fige 17, plus « perimetre.reseau » ajoutée au bloc 4a — le
+Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers (T1c) y ajoute ses
+4 permissions métier. Ce fichier est de fait la matrice RBAC INTER-MODULES : la convergence
+(_REVOQUER_HORS_MATRICE) étant globale aux rôles système, la matrice doit rester unique et
+complète. Chaque futur module y contribuera ses permissions et leurs affectations.
+
+18 = le §5 en fige 17, plus « perimetre.reseau » ajoutée au bloc 4a — le
 marqueur de PORTÉE RÉSEAU. Un rôle qui la détient voit toutes les agences ; sinon il est
 cloisonné à son agence courante (claim agency_id du JWT, C6). Modéliser la portée comme
 une permission la rend attribuable à un rôle personnalisé sans toucher au code, et
@@ -161,12 +166,24 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("sessions.revoke", "sessions", "Fermer une ou toutes les sessions"),
     Permission("audit.read", "audit", "Consulter le journal d'audit (lecture seule)"),
     Permission("audit.export", "audit", "Exporter le journal signé"),
+    # --- Module Tiers (T1c) : premier module métier à peupler la matrice.
+    Permission("tiers.read", "tiers", "Consulter une fiche tiers, la liste et sa frise"),
+    Permission(
+        "tiers.read.basic",
+        "tiers",
+        "Vue limitée d'un tiers (identification, sans données KYC/socio-éco)",
+    ),
+    Permission("tiers.create", "tiers", "Créer une fiche tiers (physique, morale, groupement)"),
+    Permission("tiers.update", "tiers", "Modifier une fiche tiers"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
-# Moindre privilège : les 5 rôles purement opérationnels n'ont AUCUNE permission du
-# périmètre Sécurité. Les leurs viendront avec leurs modules (cash, tiers, credit,
-# accounting).
+# Moindre privilège : les rôles opérationnels n'ont AUCUNE permission du périmètre Sécurité.
+# Leurs droits MÉTIER arrivent avec leurs modules. Le module Tiers (T1c) est le premier à en
+# accorder : le chargé de clientèle enrôle (create/read/update), le caissier identifie au
+# guichet (read.basic — SANS les données KYC), le chargé de prêt consulte la fiche complète
+# (read) pour instruire un crédit. Comptable et comité crédit restent vides : leur besoin
+# tiers naît dans la Compta et le Crédit, non construits — on accorde quand un module consomme.
 #
 # Séparation des pouvoirs sur les deux leviers dangereux :
 #   - ADMIN_FONCTIONNEL affecte les rôles (roles.assign) mais ne peut pas en définir le
@@ -184,18 +201,31 @@ PERMISSIONS: tuple[Permission, ...] = (
 # une agence). PAS au Responsable d'agence : il est cloisonné à SON agence, c'est tout
 # l'intérêt du cloisonnement.
 MATRICE: dict[str, frozenset[str]] = {
-    "CAISSIER": frozenset(),
-    "CHARGE_CLIENTELE": frozenset(),
-    "CHARGE_PRET": frozenset(),
+    "CAISSIER": frozenset({"tiers.read.basic"}),
+    "CHARGE_CLIENTELE": frozenset(
+        {"tiers.create", "tiers.read", "tiers.read.basic", "tiers.update"}
+    ),
+    "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
     "MEMBRE_COMITE_CREDIT": frozenset(),
     "COMPTABLE": frozenset(),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
     # cela permettrait d'entrer dans le compte d'un caissier et d'agir sous son nom.
-    # PAS de perimetre.reseau : cloisonné à son agence.
+    # PAS de perimetre.reseau : cloisonné à son agence. Il supervise l'enrôlement dans son
+    # agence, donc create/read/update sur les tiers, comme le chargé de clientèle.
     "RESPONSABLE_AGENCE": frozenset(
-        {"users.read", "users.unlock", "sessions.read", "sessions.revoke"}
+        {
+            "users.read",
+            "users.unlock",
+            "sessions.read",
+            "sessions.revoke",
+            "tiers.create",
+            "tiers.read",
+            "tiers.read.basic",
+            "tiers.update",
+        }
     ),
-    # Lecture seule intégrale : voir qui existe, qui détient quoi, et lire le journal.
+    # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
+    # fiches tiers (contrôle sur tout le réseau).
     "AUDITEUR_INTERNE": frozenset(
         {
             "users.read",
@@ -203,10 +233,15 @@ MATRICE: dict[str, frozenset[str]] = {
             "sessions.read",
             "audit.read",
             "audit.export",
+            "tiers.read",
+            "tiers.read.basic",
             "perimetre.reseau",
         }
     ),
-    "RESPONSABLE_LBC_FT": frozenset({"users.read", "audit.read", "perimetre.reseau"}),
+    # LBC/FT surveille les fiches (KYC, PPE) sur tout le réseau -> tiers.read.
+    "RESPONSABLE_LBC_FT": frozenset(
+        {"users.read", "audit.read", "tiers.read", "tiers.read.basic", "perimetre.reseau"}
+    ),
     "DIRECTION_GENERALE": frozenset(
         {
             "users.read",
@@ -217,6 +252,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "sessions.read",
             "audit.read",
             "audit.export",
+            "tiers.read",
+            "tiers.read.basic",
             "perimetre.reseau",
         }
     ),

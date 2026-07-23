@@ -43,7 +43,7 @@ def test_les_donnees_declarees_sont_coherentes() -> None:
     codes_permissions = {permission.code for permission in PERMISSIONS}
 
     assert len(ROLES) == 11
-    assert len(PERMISSIONS) == 18  # 17 du §5 + perimetre.reseau (portée réseau, 4a)
+    assert len(PERMISSIONS) == 22  # 18 Sécurité + 4 du module Tiers (T1c)
     assert set(MATRICE) == codes_roles
     for role_code, accordees in MATRICE.items():
         assert accordees <= codes_permissions, f"{role_code} cite une permission inconnue"
@@ -79,7 +79,7 @@ def test_le_seed_installe_les_roles_et_permissions(session: Session) -> None:
     nb_permissions = session.execute(text("SELECT count(*) FROM security.permissions")).scalar_one()
 
     assert nb_roles == 11
-    assert nb_permissions == 18
+    assert nb_permissions == 22
 
 
 def test_le_seed_est_idempotent(session: Session) -> None:
@@ -105,9 +105,16 @@ def test_la_base_reflete_exactement_la_matrice(session: Session) -> None:
 
 
 def test_les_roles_operationnels_nont_aucun_droit_securite(session: Session) -> None:
-    # Moindre privilège : un caissier n'a rien à faire dans users.* ni roles.*.
+    # Moindre privilège : un caissier n'a rien à faire dans users.*, roles.*, sessions.*,
+    # audit.* ni la portée réseau. Il PEUT en revanche détenir des droits métier (tiers.*
+    # depuis T1c) — le test cible donc les modules du périmètre Sécurité, pas l'ensemble vide.
     executer_seed(session)
 
+    securite = {
+        permission.code
+        for permission in PERMISSIONS
+        if permission.module in {"perimetre", "users", "roles", "sessions", "audit"}
+    }
     for role_code in (
         "CAISSIER",
         "CHARGE_CLIENTELE",
@@ -115,7 +122,7 @@ def test_les_roles_operationnels_nont_aucun_droit_securite(session: Session) -> 
         "MEMBRE_COMITE_CREDIT",
         "COMPTABLE",
     ):
-        assert _codes_accordes(session, role_code) == set(), role_code
+        assert _codes_accordes(session, role_code) & securite == set(), role_code
 
 
 def test_lauditeur_interne_est_en_lecture_seule(session: Session) -> None:
@@ -170,7 +177,8 @@ def test_une_permission_hors_matrice_est_revoquee(session: Session) -> None:
     rapport = executer_seed(session)
 
     assert rapport.revocations == 1
-    assert _codes_accordes(session, "CAISSIER") == set()
+    # Le droit hors matrice disparaît ; le caissier reconverge vers sa matrice (tiers.read.basic).
+    assert _codes_accordes(session, "CAISSIER") == {"tiers.read.basic"}
 
 
 def test_les_habilitations_dun_role_personnalise_sont_preservees(session: Session) -> None:
