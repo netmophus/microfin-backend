@@ -38,7 +38,9 @@ from app.modules.security.models import (
     UserSession,
 )
 from app.modules.tiers.models import (
+    Contact,
     GroupProfile,
+    IdentityDocument,
     IndividualProfile,
     LegalEntityProfile,
     LifecycleEvent,
@@ -74,6 +76,9 @@ TABLES_ATTENDUES = frozenset(
         "tiers.group_profiles",
         "tiers.numbering_sequences",
         "tiers.lifecycle_events",
+        # Identité & contacts (migration 0009).
+        "tiers.identity_documents",
+        "tiers.contacts",
     }
 )
 
@@ -100,6 +105,8 @@ MODELES = [
     GroupProfile,
     NumberingSequence,
     LifecycleEvent,
+    IdentityDocument,
+    Contact,
 ]
 
 

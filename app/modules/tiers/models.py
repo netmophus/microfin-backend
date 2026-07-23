@@ -240,3 +240,138 @@ class LifecycleEvent(Base):
     performed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     performed_by: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_USER), nullable=False)
     event_metadata: Mapped[dict[str, Any] | None] = mapped_column(postgresql.JSONB())
+
+
+class IdentityDocument(Base):
+    """Pièce d'identité d'un tiers (T2). Plusieurs par tiers ; au plus une principale vivante.
+
+    Numéro NON unique en base (une attestation de quartier peut légitimement répéter un numéro
+    d'ordre) : l'unicité, quand le type l'exige, est portée par le service (T2c).
+    """
+
+    __tablename__ = "identity_documents"
+    __table_args__ = (
+        sa.Index(
+            "uq_identity_documents_primary",
+            "tier_id",
+            unique=True,
+            postgresql_where=sa.text("is_primary AND deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_identity_documents_tier_id",
+            "tier_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index("ix_identity_documents_document_number", "document_number"),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    document_type_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.identity_document_types.id"), nullable=False
+    )
+    document_number: Mapped[str] = mapped_column(sa.String(50), nullable=False)
+    issuing_country_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("parameters.countries.id")
+    )
+    issuing_authority: Mapped[str | None] = mapped_column(sa.String(200))
+    date_of_issue: Mapped[date | None] = mapped_column(sa.Date())
+    expiry_date: Mapped[date | None] = mapped_column(sa.Date())
+    is_primary: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    is_verified: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(TS)
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    verification_notes: Mapped[str | None] = mapped_column(sa.Text())
+    scanned_document_id: Mapped[uuid.UUID | None] = mapped_column(UUID)  # placeholder T5
+    notes: Mapped[str | None] = mapped_column(sa.Text())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    deletion_reason: Mapped[str | None] = mapped_column(sa.Text())
+
+
+class Contact(Base):
+    """Coordonnée d'un tiers (T2) — téléphone / email / adresse, discriminé par contact_type.
+
+    Une seule table : l'adresse porte formel ET repère libre dans la même ligne. Le champ
+    email_address est en citext (insensible à la casse, comme users.email). Une principale par
+    type (un tél principal, une adresse principale) : uq_contacts_primary_par_type.
+    """
+
+    __tablename__ = "contacts"
+    __table_args__ = (
+        sa.Index(
+            "uq_contacts_primary_par_type",
+            "tier_id",
+            "contact_type",
+            unique=True,
+            postgresql_where=sa.text("is_primary AND deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_contacts_tier_type",
+            "tier_id",
+            "contact_type",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_contacts_phone",
+            "phone_number",
+            postgresql_where=sa.text("phone_number IS NOT NULL AND deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_contacts_email",
+            "email_address",
+            postgresql_where=sa.text("email_address IS NOT NULL AND deleted_at IS NULL"),
+        ),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    contact_type: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    contact_subtype: Mapped[str | None] = mapped_column(sa.String(30))
+    phone_number: Mapped[str | None] = mapped_column(sa.String(20))  # E.164
+    phone_raw: Mapped[str | None] = mapped_column(sa.String(50))  # saisie originale
+    phone_country_code: Mapped[str | None] = mapped_column(sa.String(5))
+    email_address: Mapped[str | None] = mapped_column(postgresql.CITEXT())
+    address_line1: Mapped[str | None] = mapped_column(sa.String(300))
+    address_line2: Mapped[str | None] = mapped_column(sa.String(300))
+    quarter: Mapped[str | None] = mapped_column(sa.String(200))
+    landmark: Mapped[str | None] = mapped_column(sa.String(300))  # point de repère
+    city_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("parameters.cities.id"))
+    region_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("parameters.regions.id")
+    )
+    country_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("parameters.countries.id")
+    )
+    postal_code: Mapped[str | None] = mapped_column(sa.String(20))
+    latitude: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 7))
+    longitude: Mapped[Decimal | None] = mapped_column(sa.Numeric(10, 7))
+    is_primary: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    is_verified: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(TS)
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    verification_method: Mapped[str | None] = mapped_column(sa.String(50))
+    valid_from: Mapped[date | None] = mapped_column(sa.Date())
+    valid_to: Mapped[date | None] = mapped_column(sa.Date())
+    notes: Mapped[str | None] = mapped_column(sa.Text())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    deletion_reason: Mapped[str | None] = mapped_column(sa.Text())

@@ -163,6 +163,8 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
     db.execute(text("DELETE FROM security.user_agencies"))
     # Tiers d'abord (enfants avant parent), sinon la FK vers agencies bloque leur suppression.
+    db.execute(text("DELETE FROM tiers.contacts"))
+    db.execute(text("DELETE FROM tiers.identity_documents"))
     db.execute(text("DELETE FROM tiers.lifecycle_events"))
     db.execute(text("DELETE FROM tiers.individual_profiles"))
     db.execute(text("DELETE FROM tiers.legal_entity_profiles"))
