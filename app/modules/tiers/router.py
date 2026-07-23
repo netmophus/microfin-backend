@@ -57,9 +57,22 @@ from app.modules.tiers.cycle_de_vie import (
 from app.modules.tiers.models import (
     Contact,
     GroupProfile,
+    IdentityDocument,
     IndividualProfile,
     LegalEntityProfile,
     Tier,
+)
+from app.modules.tiers.pieces import (
+    DonneesPiece,
+    DoublonPieceError,
+    PieceIntrouvableError,
+    SuppressionPrincipaleError,
+    ajouter_piece,
+    definir_principale,
+    etat_validite,
+    lister_pieces,
+    supprimer_piece,
+    verifier_piece,
 )
 from app.modules.tiers.schemas import (
     ContactItem,
@@ -69,6 +82,7 @@ from app.modules.tiers.schemas import (
     CreationGroupement,
     CreationIndividu,
     CreationPersonneMorale,
+    CreationPiece,
     CreationTelephone,
     EvenementTimeline,
     FicheTier,
@@ -76,8 +90,11 @@ from app.modules.tiers.schemas import (
     IndividuDetail,
     PageTiers,
     PersonneMoraleDetail,
+    PieceItem,
     SuppressionContact,
+    SuppressionPiece,
     TierResume,
+    VerificationPiece,
 )
 from app.modules.tiers.service import (
     AgenceHorsPerimetreError,
@@ -594,3 +611,154 @@ def supprimer_contact_endpoint(
         )
     except Exception as erreur:
         raise _traduire_contact(erreur) from None
+
+
+# --- pièces d'identité (T2c) -----------------------------------------------------------
+#
+#   voir / saisir / désigner principale / supprimer -> tiers.update (saisie) ou tiers.read (voir)
+#   VÉRIFIER (acte de contrôle) -> tiers.identity.verify (responsable d'agence + LBC/FT)
+#   doublon d'un numéro unique  -> 422 : fiche nommée SI dans le périmètre, générique sinon
+#   supprimer la principale s'il en reste d'autres -> 409
+
+
+def _vers_piece(piece: IdentityDocument) -> PieceItem:
+    return PieceItem(
+        id=piece.id,
+        document_type_id=piece.document_type_id,
+        document_number=piece.document_number,
+        issuing_country_id=piece.issuing_country_id,
+        issuing_authority=piece.issuing_authority,
+        date_of_issue=piece.date_of_issue,
+        expiry_date=piece.expiry_date,
+        validite=etat_validite(piece.expiry_date),  # calculée à la lecture, jamais stockée
+        is_primary=piece.is_primary,
+        is_verified=piece.is_verified,
+        verified_at=piece.verified_at,
+        verification_notes=piece.verification_notes,
+        notes=piece.notes,
+    )
+
+
+def _traduire_piece(erreur: Exception) -> HTTPException:
+    if isinstance(erreur, TierIntrouvableError | PieceIntrouvableError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    if isinstance(erreur, DoublonPieceError):
+        if erreur.dans_perimetre:
+            # L'agent a déjà le droit de voir cette fiche : la nommer l'aide à résoudre au guichet.
+            detail = (
+                f"Cette pièce est déjà enregistrée sur la fiche "
+                f"{erreur.tier_number} ({erreur.nom})."
+            )
+        else:
+            # Hors périmètre : refus strictement générique (comme le 404), aucune divulgation.
+            detail = "Ce numéro de pièce est déjà utilisé."
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+    if isinstance(erreur, SuppressionPrincipaleError):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Désignez d'abord une autre pièce principale avant de supprimer celle-ci.",
+        )
+    raise erreur
+
+
+@router.post(
+    "/{tier_id}/identity-documents",
+    response_model=PieceItem,
+    status_code=status.HTTP_201_CREATED,
+)
+def ajouter_piece_endpoint(
+    tier_id: uuid.UUID,
+    corps: CreationPiece,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PieceItem:
+    """Saisit une pièce. Une pièce périmée passe (l'agent constate) ; un numéro unique déjà pris
+    est refusé (422)."""
+    try:
+        piece = ajouter_piece(
+            db,
+            courant,
+            tier_id,
+            donnees=DonneesPiece(
+                document_type_id=corps.document_type_id,
+                document_number=corps.document_number,
+                issuing_country_id=corps.issuing_country_id,
+                issuing_authority=corps.issuing_authority,
+                date_of_issue=corps.date_of_issue,
+                expiry_date=corps.expiry_date,
+                notes=corps.notes,
+            ),
+            is_primary=corps.is_primary,
+            contexte=_contexte(request),
+        )
+    except Exception as erreur:
+        raise _traduire_piece(erreur) from None
+    return _vers_piece(piece)
+
+
+@router.get("/{tier_id}/identity-documents", response_model=list[PieceItem])
+def lister_pieces_endpoint(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PieceItem]:
+    """Pièces d'un tiers, chacune avec son état de validité calculé. Hors périmètre -> 404."""
+    pieces = lister_pieces(db, courant, tier_id)
+    if pieces is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    return [_vers_piece(p) for p in pieces]
+
+
+@router.post("/{tier_id}/identity-documents/{piece_id}/set-primary", response_model=PieceItem)
+def definir_piece_principale_endpoint(
+    tier_id: uuid.UUID,
+    piece_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PieceItem:
+    try:
+        piece = definir_principale(db, courant, tier_id, piece_id, _contexte(request))
+    except Exception as erreur:
+        raise _traduire_piece(erreur) from None
+    return _vers_piece(piece)
+
+
+@router.post("/{tier_id}/identity-documents/{piece_id}/verify", response_model=PieceItem)
+def verifier_piece_endpoint(
+    tier_id: uuid.UUID,
+    piece_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.identity.verify"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[VerificationPiece | None, Body()] = None,
+) -> PieceItem:
+    """Atteste qu'une pièce a été vue et validée — acte de contrôle réservé (pas la saisie)."""
+    try:
+        piece = verifier_piece(
+            db, courant, tier_id, piece_id, corps.notes if corps else None, _contexte(request)
+        )
+    except Exception as erreur:
+        raise _traduire_piece(erreur) from None
+    return _vers_piece(piece)
+
+
+@router.delete(
+    "/{tier_id}/identity-documents/{piece_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def supprimer_piece_endpoint(
+    tier_id: uuid.UUID,
+    piece_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[SuppressionPiece | None, Body()] = None,
+) -> None:
+    """Suppression LOGIQUE avec motif. Refuse de retirer la principale s'il en reste d'autres."""
+    try:
+        supprimer_piece(
+            db, courant, tier_id, piece_id, corps.motif if corps else None, _contexte(request)
+        )
+    except Exception as erreur:
+        raise _traduire_piece(erreur) from None

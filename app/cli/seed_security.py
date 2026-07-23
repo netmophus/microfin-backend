@@ -182,6 +182,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("tiers.suspend", "tiers", "Suspendre/réactiver, enregistrer décès ou dissolution"),
     Permission("tiers.deactivate", "tiers", "Désactiver une fiche (soft delete)"),
     Permission("tiers.validate", "tiers", "Valider l'activation d'une fiche (KYC)"),
+    # Vérifier une pièce (T2c) = acte de CONTRÔLE distinct de la saisie : le chargé de clientèle
+    # saisit la pièce, mais l'ATTESTER (elle a été vue et validée) est réservé au responsable
+    # d'agence et au LBC/FT. Une pièce attestée puis modifiée (supprimée + re-saisie) perd son
+    # tampon — la vérification suit la pièce, pas le numéro.
+    Permission("tiers.identity.verify", "tiers", "Vérifier une pièce d'identité (contrôle)"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -233,6 +238,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.suspend",
             "tiers.deactivate",
             "tiers.validate",
+            "tiers.identity.verify",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
@@ -258,6 +264,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read",
             "tiers.read.basic",
             "tiers.validate",
+            "tiers.identity.verify",
             "perimetre.reseau",
         }
     ),

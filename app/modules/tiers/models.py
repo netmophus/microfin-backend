@@ -263,6 +263,14 @@ class IdentityDocument(Base):
             postgresql_where=sa.text("deleted_at IS NULL"),
         ),
         sa.Index("ix_identity_documents_document_number", "document_number"),
+        # Recherche de doublon (unicité conditionnelle portée par le service) : type + numéro
+        # normalisé, sur les pièces vivantes. Non-unique — la base ne connaît pas enforce_unique.
+        sa.Index(
+            "ix_identity_documents_type_numero",
+            "document_type_id",
+            "document_number_normalized",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
         {"schema": "tiers"},
     )
 
@@ -272,6 +280,9 @@ class IdentityDocument(Base):
         UUID, sa.ForeignKey("parameters.identity_document_types.id"), nullable=False
     )
     document_number: Mapped[str] = mapped_column(sa.String(50), nullable=False)
+    # Numéro sans espaces, en majuscules (maintenu par le service) : socle du contrôle d'unicité
+    # conditionnel. « ab 12 34 » et « AB1234 » deviennent le même « AB1234 ».
+    document_number_normalized: Mapped[str] = mapped_column(sa.String(50), nullable=False)
     issuing_country_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("parameters.countries.id")
     )

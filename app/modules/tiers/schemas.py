@@ -199,6 +199,53 @@ class ContactItem(BaseModel):
     postal_code: str | None
 
 
+# --- pièces d'identité (T2c) -----------------------------------------------------------
+
+Validite = Literal["sans_objet", "valide", "expire_bientot", "perimee"]
+
+
+class CreationPiece(BaseModel):
+    """Saisie d'une pièce. Une pièce périmée n'est JAMAIS refusée à ce niveau : l'agent constate
+    ce qu'il a. L'unicité conditionnelle (numéro déjà pris) est un contrôle du service."""
+
+    document_type_id: uuid.UUID
+    document_number: str = Field(min_length=1, max_length=50)
+    issuing_country_id: uuid.UUID | None = None
+    issuing_authority: str | None = Field(default=None, max_length=200)
+    date_of_issue: date | None = None
+    expiry_date: date | None = None
+    notes: str | None = None
+    is_primary: bool = False
+
+
+class VerificationPiece(BaseModel):
+    """Acte de contrôle (tiers.identity.verify). Une note libre facultative l'accompagne."""
+
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class SuppressionPiece(BaseModel):
+    motif: str | None = Field(default=None, max_length=500)
+
+
+class PieceItem(BaseModel):
+    """Une pièce telle que la fiche l'affiche. `validite` est CALCULÉE à la lecture."""
+
+    id: uuid.UUID
+    document_type_id: uuid.UUID
+    document_number: str
+    issuing_country_id: uuid.UUID | None
+    issuing_authority: str | None
+    date_of_issue: date | None
+    expiry_date: date | None
+    validite: Validite
+    is_primary: bool
+    is_verified: bool
+    verified_at: datetime | None
+    verification_notes: str | None
+    notes: str | None
+
+
 class FicheTier(BaseModel):
     """Fiche COMPLÈTE. Un seul des trois détails est peuplé, selon le type.
 

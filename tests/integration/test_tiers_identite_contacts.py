@@ -108,14 +108,22 @@ def test_un_tiers_ne_peut_avoir_deux_pieces_principales(db: Session) -> None:
 
     db.add(
         IdentityDocument(
-            tier_id=tier.id, document_type_id=type_cni, document_number="A-1", is_primary=True
+            tier_id=tier.id,
+            document_type_id=type_cni,
+            document_number="A-1",
+            document_number_normalized="A-1",
+            is_primary=True,
         )
     )
     db.flush()
 
     db.add(
         IdentityDocument(
-            tier_id=tier.id, document_type_id=type_cni, document_number="A-2", is_primary=True
+            tier_id=tier.id,
+            document_type_id=type_cni,
+            document_number="A-2",
+            document_number_normalized="A-2",
+            is_primary=True,
         )
     )
     with pytest.raises(IntegrityError):
