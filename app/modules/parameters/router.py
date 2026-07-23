@@ -1,9 +1,13 @@
-"""Module Paramétrage — premier morceau : lecture des agences.
+"""Module Paramétrage — lecture des référentiels : agences, pays, devises.
 
-C'est la plus petite pièce utile du futur module Paramétrage. Elle existe parce que le
-formulaire de création d'utilisateurs a besoin d'un sélecteur d'agences, et qu'un sélecteur
-a besoin d'une source. Le reste (CRUD des agences, produits, seuils comptables) viendra avec
-le module complet ; on ne le devine pas d'avance.
+C'est la plus petite pièce utile du futur module Paramétrage. Elle existe parce que les
+formulaires (utilisateurs, tiers) ont besoin de sélecteurs, et qu'un sélecteur a besoin d'une
+source. Le reste (CRUD, produits, seuils comptables) viendra avec le module complet ; on ne le
+devine pas d'avance.
+
+Tous ces référentiels sont en lecture, AUTHENTIFIÉ suffit : leur structure n'est pas
+confidentielle (tout employé sait dans quels pays opère son IMF, quelles devises elle tient).
+La vraie protection reste sur les écritures (POST /tiers revalide le périmètre du créateur).
 """
 
 import uuid
@@ -15,10 +19,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.parameters.models import Agency
+from app.modules.parameters.models import Agency, Country, Currency
 from app.modules.security.autorisation import UtilisateurCourant, exige_authentification
 
 router = APIRouter(prefix="/agencies", tags=["agences"])
+router_countries = APIRouter(prefix="/countries", tags=["pays"])
+router_currencies = APIRouter(prefix="/currencies", tags=["devises"])
 
 
 class AgenceItem(BaseModel):
@@ -52,3 +58,56 @@ def lister_agences(
         .order_by(Agency.name)
     )
     return [AgenceItem(id=ligne.id, code=ligne.code, name=ligne.name) for ligne in lignes]
+
+
+class CountryItem(BaseModel):
+    """Pays réduit à ce qu'un sélecteur de nationalité affiche."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+
+
+@router_countries.get("", response_model=list[CountryItem])
+def lister_pays(
+    _: Annotated[UtilisateurCourant, Depends(exige_authentification())],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[CountryItem]:
+    """Liste les pays ACTIFS, UEMOA en tête (display_order), puis alphabétique.
+
+    Source du sélecteur de nationalité / pays de naissance / siège des formulaires tiers.
+    """
+    lignes = db.execute(
+        select(Country.id, Country.code, Country.name)
+        .where(Country.is_active.is_(True))
+        .order_by(Country.display_order, Country.name)
+    )
+    return [CountryItem(id=ligne.id, code=ligne.code, name=ligne.name) for ligne in lignes]
+
+
+class CurrencyItem(BaseModel):
+    """Devise réduite à ce qu'un sélecteur affiche. decimal_places sert au formatage (XOF = 0)."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+    decimal_places: int
+
+
+@router_currencies.get("", response_model=list[CurrencyItem])
+def lister_devises(
+    _: Annotated[UtilisateurCourant, Depends(exige_authentification())],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[CurrencyItem]:
+    """Liste les devises ACTIVES. Source du sélecteur de capital des personnes morales."""
+    lignes = db.execute(
+        select(Currency.id, Currency.code, Currency.name, Currency.decimal_places)
+        .where(Currency.is_active.is_(True))
+        .order_by(Currency.display_order, Currency.code)
+    )
+    return [
+        CurrencyItem(
+            id=ligne.id, code=ligne.code, name=ligne.name, decimal_places=ligne.decimal_places
+        )
+        for ligne in lignes
+    ]
