@@ -14,24 +14,37 @@ TABLE DES ERREURS (un seul endroit) :
   - référence FK invalide     -> 422 : agence, pays ou devise inexistant
 """
 
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
+from app.modules.tiers.consultation import (
+    TAILLE_PAGE_DEFAUT,
+    TAILLE_PAGE_MAX,
+    FiltresTiers,
+    lire_complet,
+    lire_resume,
+    lister,
+    timeline,
+)
 from app.modules.tiers.models import GroupProfile, IndividualProfile, LegalEntityProfile, Tier
 from app.modules.tiers.schemas import (
     CreationGroupement,
     CreationIndividu,
     CreationPersonneMorale,
+    EvenementTimeline,
     FicheTier,
     GroupementDetail,
     IndividuDetail,
+    PageTiers,
     PersonneMoraleDetail,
+    TierResume,
 )
 from app.modules.tiers.service import (
     AgenceHorsPerimetreError,
@@ -42,6 +55,11 @@ from app.modules.tiers.service import (
 )
 
 router = APIRouter(prefix="/tiers", tags=["tiers"])
+
+MESSAGE_INTROUVABLE = "Fiche tiers introuvable."
+# La permission qui débloque la fiche COMPLÈTE. Sa présence, et RIEN d'autre (aucun paramètre
+# de requête), détermine le niveau de détail servi.
+PERMISSION_FICHE_COMPLETE = "tiers.read"
 
 
 def _vers_fiche(tier: Tier) -> FicheTier:
@@ -172,3 +190,68 @@ def creer_groupement_endpoint(
     except Exception as erreur:
         raise _traduire(erreur) from None
     return _vers_fiche(tier)
+
+
+# --- lecture (T1d) ---------------------------------------------------------------------
+
+
+@router.get("", response_model=PageTiers)
+def lister_tiers(
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read.basic"))],
+    db: Annotated[Session, Depends(get_db)],
+    q: Annotated[str | None, Query(description="Recherche — numéro ou nom.")] = None,
+    tier_type: Annotated[
+        str | None, Query(description="individual | legal_entity | group.")
+    ] = None,
+    statut: Annotated[str | None, Query(description="Filtre sur le statut.")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    taille: Annotated[int, Query(ge=1, le=TAILLE_PAGE_MAX)] = TAILLE_PAGE_DEFAUT,
+) -> PageTiers:
+    """Liste de RÉSUMÉS, cloisonnée par agence. Accessible dès tiers.read.basic."""
+    return lister(
+        db,
+        courant,
+        FiltresTiers(q=q, tier_type=tier_type, status=statut),
+        page=page,
+        taille=taille,
+    )
+
+
+@router.get("/{tier_id}", response_model=None)
+def lire_tier(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read.basic"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> FicheTier | TierResume:
+    """Fiche d'un tiers — UNE route, un seul point de décision.
+
+    Le niveau de détail est déterminé UNIQUEMENT par la permission de l'appelant, JAMAIS par
+    ce qu'il demande : aucun paramètre de requête ne l'influence. Un porteur de tiers.read
+    reçoit la fiche complète ; sinon (read.basic seul, ex. le caissier) il reçoit le résumé,
+    dont les champs sensibles ne sont même pas chargés en base.
+
+    Hors périmètre -> 404 (n'existe pas de mon point de vue), jamais 403.
+    """
+    if PERMISSION_FICHE_COMPLETE in courant.permissions:
+        tier = lire_complet(db, courant, tier_id)
+        if tier is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+        return _vers_fiche(tier)
+
+    resume = lire_resume(db, courant, tier_id)
+    if resume is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    return resume
+
+
+@router.get("/{tier_id}/timeline", response_model=list[EvenementTimeline])
+def timeline_tier(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[EvenementTimeline]:
+    """Frise chronologique d'une fiche (détail -> tiers.read). Hors périmètre -> 404."""
+    evenements = timeline(db, courant, tier_id)
+    if evenements is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    return evenements
