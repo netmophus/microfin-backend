@@ -31,7 +31,19 @@ from app.modules.tiers.consultation import (
     lire_complet,
     lire_resume,
     lister,
+    telephone_principal,
     timeline,
+)
+from app.modules.tiers.contacts import (
+    ContactIntrouvableError,
+    DonneesAdresse,
+    TierIntrouvableError,
+    ajouter_adresse,
+    ajouter_email,
+    ajouter_telephone,
+    definir_principal,
+    lister_contacts,
+    supprimer_contact,
 )
 from app.modules.tiers.cycle_de_vie import (
     ActivationImpossibleError,
@@ -42,18 +54,29 @@ from app.modules.tiers.cycle_de_vie import (
     executer_transition,
     message_transition_illegale,
 )
-from app.modules.tiers.models import GroupProfile, IndividualProfile, LegalEntityProfile, Tier
+from app.modules.tiers.models import (
+    Contact,
+    GroupProfile,
+    IndividualProfile,
+    LegalEntityProfile,
+    Tier,
+)
 from app.modules.tiers.schemas import (
+    ContactItem,
     CorpsTransition,
+    CreationAdresse,
+    CreationEmail,
     CreationGroupement,
     CreationIndividu,
     CreationPersonneMorale,
+    CreationTelephone,
     EvenementTimeline,
     FicheTier,
     GroupementDetail,
     IndividuDetail,
     PageTiers,
     PersonneMoraleDetail,
+    SuppressionContact,
     TierResume,
 )
 from app.modules.tiers.service import (
@@ -63,6 +86,7 @@ from app.modules.tiers.service import (
     creer_individu,
     creer_personne_morale,
 )
+from app.modules.tiers.telephone import TelephoneInvalideError
 
 router = APIRouter(prefix="/tiers", tags=["tiers"])
 
@@ -72,14 +96,17 @@ MESSAGE_INTROUVABLE = "Fiche tiers introuvable."
 PERMISSION_FICHE_COMPLETE = "tiers.read"
 
 
-def _vers_fiche(tier: Tier) -> FicheTier:
+def _vers_fiche(tier: Tier, primary_phone: str | None = None) -> FicheTier:
+    # primary_phone est fourni par l'appelant (LU DEPUIS LES CONTACTS, T2b) sur la lecture de fiche.
+    # Sur les réponses de création/transition, il n'est pas recalculé : la colonne legacy sert de
+    # repli (nul pour une fiche neuve — le numéro vit dans les contacts, lu via GET /contacts).
     fiche = FicheTier(
         id=tier.id,
         tier_number=tier.tier_number,
         tier_type=tier.tier_type,
         status=tier.status,
         primary_agency_id=tier.primary_agency_id,
-        primary_phone=tier.primary_phone,
+        primary_phone=primary_phone if primary_phone is not None else tier.primary_phone,
         language_preference=tier.language_preference,
         created_at=tier.created_at,
         updated_at=tier.updated_at,
@@ -246,7 +273,7 @@ def lire_tier(
         tier = lire_complet(db, courant, tier_id)
         if tier is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
-        return _vers_fiche(tier)
+        return _vers_fiche(tier, telephone_principal(db, tier_id))
 
     resume = lire_resume(db, courant, tier_id)
     if resume is None:
@@ -390,3 +417,180 @@ def activer_endpoint(
     except Exception as erreur:
         raise _traduire_cycle(erreur) from None
     return _vers_fiche(tier)
+
+
+# --- coordonnées (T2b) -----------------------------------------------------------------
+#
+#   voir les coordonnées   -> tiers.read
+#   les gérer (ajout/suppr/principal, y compris FORCER un numéro) -> tiers.update
+#   hors périmètre / inconnu -> 404 (jamais 403)
+#   téléphone refusé        -> 422 { message, forcable } ; forcable guide l'écran
+
+
+def _vers_contact(contact: Contact) -> ContactItem:
+    return ContactItem(
+        id=contact.id,
+        contact_type=contact.contact_type,
+        contact_subtype=contact.contact_subtype,
+        is_primary=contact.is_primary,
+        is_verified=contact.is_verified,
+        phone_number=contact.phone_number,
+        phone_raw=contact.phone_raw,
+        phone_country_code=contact.phone_country_code,
+        phone_normalized=contact.phone_normalized,
+        email_address=contact.email_address,
+        address_line1=contact.address_line1,
+        address_line2=contact.address_line2,
+        quarter=contact.quarter,
+        landmark=contact.landmark,
+        city_id=contact.city_id,
+        region_id=contact.region_id,
+        country_id=contact.country_id,
+        postal_code=contact.postal_code,
+    )
+
+
+def _traduire_contact(erreur: Exception) -> HTTPException:
+    if isinstance(erreur, TierIntrouvableError | ContactIntrouvableError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    if isinstance(erreur, TelephoneInvalideError):
+        # forcable dit à l'écran s'il faut proposer « enregistrer quand même » (numéro de bonne
+        # longueur, juste non reconnu) ou seulement « corriger » (charabia).
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": "Ce numéro ne semble pas valide. Vérifiez la saisie.",
+                "forcable": erreur.forcable,
+            },
+        )
+    raise erreur
+
+
+@router.post("/{tier_id}/phones", response_model=ContactItem, status_code=status.HTTP_201_CREATED)
+def ajouter_telephone_endpoint(
+    tier_id: uuid.UUID,
+    corps: CreationTelephone,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ContactItem:
+    """Ajoute un téléphone normalisé. `forcer=true` enregistre au mieux un numéro refusé (tracé)."""
+    try:
+        contact = ajouter_telephone(
+            db,
+            courant,
+            tier_id,
+            phone=corps.phone,
+            contact_subtype=corps.contact_subtype,
+            is_primary=corps.is_primary,
+            forcer=corps.forcer,
+            contexte=_contexte(request),
+        )
+    except Exception as erreur:
+        raise _traduire_contact(erreur) from None
+    return _vers_contact(contact)
+
+
+@router.post("/{tier_id}/emails", response_model=ContactItem, status_code=status.HTTP_201_CREATED)
+def ajouter_email_endpoint(
+    tier_id: uuid.UUID,
+    corps: CreationEmail,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ContactItem:
+    try:
+        contact = ajouter_email(
+            db,
+            courant,
+            tier_id,
+            email=corps.email,
+            contact_subtype=corps.contact_subtype,
+            is_primary=corps.is_primary,
+            contexte=_contexte(request),
+        )
+    except Exception as erreur:
+        raise _traduire_contact(erreur) from None
+    return _vers_contact(contact)
+
+
+@router.post(
+    "/{tier_id}/addresses", response_model=ContactItem, status_code=status.HTTP_201_CREATED
+)
+def ajouter_adresse_endpoint(
+    tier_id: uuid.UUID,
+    corps: CreationAdresse,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ContactItem:
+    """Ajoute une adresse. Une rue OU un point de repère suffit (validé par le schéma)."""
+    try:
+        contact = ajouter_adresse(
+            db,
+            courant,
+            tier_id,
+            donnees=DonneesAdresse(
+                address_line1=corps.address_line1,
+                address_line2=corps.address_line2,
+                quarter=corps.quarter,
+                landmark=corps.landmark,
+                city_id=corps.city_id,
+                region_id=corps.region_id,
+                country_id=corps.country_id,
+                postal_code=corps.postal_code,
+            ),
+            contact_subtype=corps.contact_subtype,
+            is_primary=corps.is_primary,
+            contexte=_contexte(request),
+        )
+    except Exception as erreur:
+        raise _traduire_contact(erreur) from None
+    return _vers_contact(contact)
+
+
+@router.get("/{tier_id}/contacts", response_model=list[ContactItem])
+def lister_contacts_endpoint(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ContactItem]:
+    """Coordonnées d'un tiers. Hors périmètre -> 404."""
+    contacts = lister_contacts(db, courant, tier_id)
+    if contacts is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    return [_vers_contact(c) for c in contacts]
+
+
+@router.post("/{tier_id}/contacts/{contact_id}/set-primary", response_model=ContactItem)
+def definir_principal_endpoint(
+    tier_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ContactItem:
+    """Désigne une coordonnée comme principale ; l'ancienne du même type est débasculée."""
+    try:
+        contact = definir_principal(db, courant, tier_id, contact_id, _contexte(request))
+    except Exception as erreur:
+        raise _traduire_contact(erreur) from None
+    return _vers_contact(contact)
+
+
+@router.delete("/{tier_id}/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
+def supprimer_contact_endpoint(
+    tier_id: uuid.UUID,
+    contact_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[SuppressionContact | None, Body()] = None,
+) -> None:
+    """Suppression LOGIQUE avec motif : la coordonnée sort des listes, jamais effacée."""
+    try:
+        supprimer_contact(
+            db, courant, tier_id, contact_id, corps.motif if corps else None, _contexte(request)
+        )
+    except Exception as erreur:
+        raise _traduire_contact(erreur) from None

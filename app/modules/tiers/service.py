@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.service import ContexteRequete, ecrire_audit
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.models import (
+    Contact,
     GroupProfile,
     IndividualProfile,
     LegalEntityProfile,
@@ -44,6 +45,7 @@ from app.modules.tiers.schemas import (
     CreationIndividu,
     CreationPersonneMorale,
 )
+from app.modules.tiers.telephone import TelephoneInvalideError, normaliser
 
 RESSOURCE = "tier"
 EVENEMENT_CREATED = "created"
@@ -100,12 +102,49 @@ def _etat_auditable(tier: Tier, nom_affichage: str) -> dict[str, Any]:
     }
 
 
+def _telephone_initial(
+    db: Session, courant: UtilisateurCourant, tier: Tier, brut: str | None
+) -> None:
+    """Le téléphone saisi à la création devient un CONTACT téléphone principal (T2b) — plus jamais
+    tier.primary_phone. Normalisation best-effort par forçage : à la création, un numéro imparfait
+    ne doit pas bloquer l'ouverture de la fiche (l'agent le corrigera dans l'onglet coordonnées).
+    Un numéro inexploitable (charabia) est simplement ignoré, sans échec."""
+    if brut is None or not brut.strip():
+        return
+    try:
+        resultat = normaliser(brut, forcer=True)
+    except TelephoneInvalideError:
+        return
+    db.add(
+        Contact(
+            tier_id=tier.id,
+            contact_type="phone",
+            contact_subtype="mobile",
+            phone_raw=brut.strip(),
+            phone_number=resultat.e164,
+            phone_country_code=resultat.country_code,
+            phone_normalized=resultat.normalise,
+            is_primary=True,
+            created_by=courant.user_id,
+            updated_by=courant.user_id,
+        )
+    )
+    db.flush()
+
+
 def _finaliser(
-    db: Session, courant: UtilisateurCourant, tier: Tier, nom: str, contexte: ContexteRequete
+    db: Session,
+    courant: UtilisateurCourant,
+    tier: Tier,
+    nom: str,
+    contexte: ContexteRequete,
+    telephone: str | None = None,
 ) -> Tier:
     """Insère la fiche, écrit l'événement de cycle de vie DANS la transaction, audite en dernier."""
     db.add(tier)
     db.flush()  # obtient tier.id et pose tier_type via le discriminateur polymorphe
+
+    _telephone_initial(db, courant, tier, telephone)
 
     db.add(
         LifecycleEvent(
@@ -140,13 +179,15 @@ def creer_individu(
 ) -> Tier:
     agence = _resoudre_agence(courant, corps.primary_agency_id)
     tier = IndividualProfile(
-        **corps.model_dump(exclude={"primary_agency_id"}),
+        **corps.model_dump(exclude={"primary_agency_id", "primary_phone"}),
         tier_number=prochain_numero(db, prefixe_pour_type("individual")),
         primary_agency_id=agence,
         created_by=courant.user_id,
         updated_by=courant.user_id,
     )
-    return _finaliser(db, courant, tier, f"{corps.last_name} {corps.first_name}", contexte)
+    return _finaliser(
+        db, courant, tier, f"{corps.last_name} {corps.first_name}", contexte, corps.primary_phone
+    )
 
 
 def creer_personne_morale(
@@ -157,13 +198,13 @@ def creer_personne_morale(
 ) -> Tier:
     agence = _resoudre_agence(courant, corps.primary_agency_id)
     tier = LegalEntityProfile(
-        **corps.model_dump(exclude={"primary_agency_id"}),
+        **corps.model_dump(exclude={"primary_agency_id", "primary_phone"}),
         tier_number=prochain_numero(db, prefixe_pour_type("legal_entity")),
         primary_agency_id=agence,
         created_by=courant.user_id,
         updated_by=courant.user_id,
     )
-    return _finaliser(db, courant, tier, corps.legal_name, contexte)
+    return _finaliser(db, courant, tier, corps.legal_name, contexte, corps.primary_phone)
 
 
 def creer_groupement(
@@ -171,10 +212,10 @@ def creer_groupement(
 ) -> Tier:
     agence = _resoudre_agence(courant, corps.primary_agency_id)
     tier = GroupProfile(
-        **corps.model_dump(exclude={"primary_agency_id"}),
+        **corps.model_dump(exclude={"primary_agency_id", "primary_phone"}),
         tier_number=prochain_numero(db, prefixe_pour_type("group")),
         primary_agency_id=agence,
         created_by=courant.user_id,
         updated_by=courant.user_id,
     )
-    return _finaliser(db, courant, tier, corps.group_name, contexte)
+    return _finaliser(db, courant, tier, corps.group_name, contexte, corps.primary_phone)

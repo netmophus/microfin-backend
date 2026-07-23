@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.models import User
 from app.modules.tiers.models import (
+    Contact,
     GroupProfile,
     IndividualProfile,
     LegalEntityProfile,
@@ -44,6 +45,7 @@ _LE = LegalEntityProfile.__table__
 _GP = GroupProfile.__table__
 _LC = LifecycleEvent.__table__
 _U = User.__table__
+_C = Contact.__table__
 
 
 @dataclass(frozen=True)
@@ -149,6 +151,26 @@ def lire_complet(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -
             Tier.deleted_at.is_(None),
         )
     ).scalar_one_or_none()
+
+
+def telephone_principal(db: Session, tier_id: uuid.UUID) -> str | None:
+    """Téléphone principal de la fiche, LU DEPUIS LES CONTACTS (T2b). Repli sur la colonne legacy
+    tiers.primary_phone tant qu'elle existe : une fiche ancienne dont le backfill a échoué (numéro
+    inexploitable) garde son numéro affiché. Le périmètre est déjà vérifié par l'appelant."""
+    e164: str | None = db.execute(
+        select(_C.c.phone_number).where(
+            _C.c.tier_id == tier_id,
+            _C.c.contact_type == "phone",
+            _C.c.is_primary.is_(True),
+            _C.c.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
+    if e164 is not None:
+        return e164
+    legacy: str | None = db.execute(
+        select(_T.c.primary_phone).where(_T.c.id == tier_id)
+    ).scalar_one_or_none()
+    return legacy
 
 
 def _est_visible(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> bool:

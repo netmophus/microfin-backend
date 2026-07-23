@@ -14,7 +14,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Genre = Literal["M", "F"]
 EtatCivil = Literal["celibataire", "marie", "divorce", "veuf", "union_libre", "autre"]
@@ -124,6 +124,79 @@ class CorpsTransition(BaseModel):
     désactivation, décès…), tracé dans le lifecycle_event."""
 
     motif: str | None = Field(default=None, max_length=500)
+
+
+# --- coordonnées (T2b) -----------------------------------------------------------------
+
+TypeTelephone = Literal["mobile", "landline", "professional", "emergency", "spouse", "other"]
+TypeAdresse = Literal["home", "work", "postal", "permanent", "temporary", "other"]
+TypeEmail = Literal["personal", "professional", "other"]
+
+
+class CreationTelephone(BaseModel):
+    """`forcer` = enregistrer un numéro que la bibliothèque refuse (échappatoire tracée)."""
+
+    phone: str = Field(min_length=1, max_length=50)
+    contact_subtype: TypeTelephone | None = None
+    is_primary: bool = False
+    forcer: bool = False
+
+
+class CreationEmail(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    contact_subtype: TypeEmail | None = None
+    is_primary: bool = False
+
+
+class CreationAdresse(BaseModel):
+    address_line1: str | None = Field(default=None, max_length=300)
+    address_line2: str | None = Field(default=None, max_length=300)
+    quarter: str | None = Field(default=None, max_length=200)
+    landmark: str | None = Field(default=None, max_length=300)
+    city_id: uuid.UUID | None = None
+    region_id: uuid.UUID | None = None
+    country_id: uuid.UUID | None = None
+    postal_code: str | None = Field(default=None, max_length=20)
+    contact_subtype: TypeAdresse | None = None
+    is_primary: bool = False
+
+    @model_validator(mode="after")
+    def _rue_ou_repere(self) -> "CreationAdresse":
+        # Miroir du CHECK : une adresse est valide dès qu'elle a une rue OU un repère. Message
+        # clair à la validation plutôt qu'un IntegrityError opaque. Jamais rejetée faute de rue.
+        if not (self.address_line1 or self.landmark):
+            raise ValueError("Renseignez au moins une rue ou un point de repère.")
+        return self
+
+
+class SuppressionContact(BaseModel):
+    motif: str | None = Field(default=None, max_length=500)
+
+
+class ContactItem(BaseModel):
+    """Une coordonnée, telle que la fiche l'affiche. Construite champ par champ (règle projet)."""
+
+    id: uuid.UUID
+    contact_type: str
+    contact_subtype: str | None
+    is_primary: bool
+    is_verified: bool
+    # téléphone
+    phone_number: str | None
+    phone_raw: str | None
+    phone_country_code: str | None
+    phone_normalized: bool
+    # email
+    email_address: str | None
+    # adresse
+    address_line1: str | None
+    address_line2: str | None
+    quarter: str | None
+    landmark: str | None
+    city_id: uuid.UUID | None
+    region_id: uuid.UUID | None
+    country_id: uuid.UUID | None
+    postal_code: str | None
 
 
 class FicheTier(BaseModel):

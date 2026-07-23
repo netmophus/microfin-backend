@@ -341,6 +341,10 @@ class Contact(Base):
     phone_number: Mapped[str | None] = mapped_column(sa.String(20))  # E.164
     phone_raw: Mapped[str | None] = mapped_column(sa.String(50))  # saisie originale
     phone_country_code: Mapped[str | None] = mapped_column(sa.String(5))
+    # False = enregistré par forçage (à re-normaliser un jour). Rend le forçage mesurable.
+    phone_normalized: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.true()
+    )
     email_address: Mapped[str | None] = mapped_column(postgresql.CITEXT())
     address_line1: Mapped[str | None] = mapped_column(sa.String(300))
     address_line2: Mapped[str | None] = mapped_column(sa.String(300))

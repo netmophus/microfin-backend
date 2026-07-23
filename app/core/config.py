@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     # l'algorithme est déjà lu d'ici et les deux coutures de clé existent déjà.
     JWT_ALGORITHM: Literal["HS256"] = "HS256"
 
+    # Pays d'EXPLOITATION de l'institution (code ISO 3166-1 alpha-2), repère pour normaliser
+    # les téléphones saisis SANS indicatif : « 90123456 » -> « +227… » si PAYS_PAR_DEFAUT=NE.
+    #
+    # DÉPLOIEMENT (checklist) : une IMF sénégalaise doit régler SN, une nigérienne NE. On ne
+    # peut PAS le déduire de la nationalité du membre (un Malien à Niamey a un numéro nigérien).
+    # Réglage anodin qui casse une fonction majeure EN SILENCE : mal réglé, tous les numéros
+    # locaux sont mal normalisés, la recherche par téléphone ne trouve rien et la déduplication
+    # (T4) ne voit jamais que deux fiches sont la même personne. Défaut "NE" pour le dev.
+    PAYS_PAR_DEFAUT: str = "NE"
+
 
 @lru_cache
 def get_settings() -> Settings:
