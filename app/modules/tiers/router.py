@@ -17,7 +17,7 @@ TABLE DES ERREURS (un seul endroit) :
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,8 +33,18 @@ from app.modules.tiers.consultation import (
     lister,
     timeline,
 )
+from app.modules.tiers.cycle_de_vie import (
+    ActivationImpossibleError,
+    CibleIntrouvableError,
+    TransitionIllegaleError,
+    TypeIncompatibleError,
+    activer,
+    executer_transition,
+    message_transition_illegale,
+)
 from app.modules.tiers.models import GroupProfile, IndividualProfile, LegalEntityProfile, Tier
 from app.modules.tiers.schemas import (
+    CorpsTransition,
     CreationGroupement,
     CreationIndividu,
     CreationPersonneMorale,
@@ -255,3 +265,128 @@ def timeline_tier(
     if evenements is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
     return evenements
+
+
+# --- cycle de vie (T1e) ----------------------------------------------------------------
+#
+# TABLE DES ERREURS, un seul endroit :
+#   hors périmètre / inexistant  -> 404 (jamais 403 : « n'existe pas de mon point de vue »)
+#   transition illégale (statut)  -> 409, en nommant le statut courant
+#   type incompatible (D4)        -> 409, message dédié (décès sur une PM, etc.)
+#   activation impossible (stub)  -> 412, avec TOUTES les conditions manquantes
+
+
+def _traduire_cycle(erreur: Exception) -> HTTPException:
+    if isinstance(erreur, CibleIntrouvableError):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    if isinstance(erreur, TransitionIllegaleError):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=message_transition_illegale(erreur.statut),
+        )
+    if isinstance(erreur, TypeIncompatibleError):
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=erreur.message)
+    if isinstance(erreur, ActivationImpossibleError):
+        return HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "message": "L'activation de la fiche requiert des conditions non remplies.",
+                "conditions_manquantes": [
+                    {"code": c.code, "libelle": c.libelle} for c in erreur.conditions
+                ],
+            },
+        )
+    raise erreur
+
+
+def _transition(
+    nom: str,
+    tier_id: uuid.UUID,
+    corps: CorpsTransition | None,
+    request: Request,
+    courant: UtilisateurCourant,
+    db: Session,
+) -> FicheTier:
+    try:
+        tier = executer_transition(
+            db, courant, tier_id, nom, _contexte(request), motif=corps.motif if corps else None
+        )
+    except Exception as erreur:
+        raise _traduire_cycle(erreur) from None
+    return _vers_fiche(tier)
+
+
+@router.post("/{tier_id}/suspend", response_model=FicheTier)
+def suspendre(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.suspend"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[CorpsTransition | None, Body()] = None,
+) -> FicheTier:
+    """Suspend une fiche active (pièce à régulariser, absence…). Réversible."""
+    return _transition("suspend", tier_id, corps, request, courant, db)
+
+
+@router.post("/{tier_id}/reactivate", response_model=FicheTier)
+def reactiver(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.suspend"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[CorpsTransition | None, Body()] = None,
+) -> FicheTier:
+    """Lève une suspension temporaire : la fiche redevient active."""
+    return _transition("reactivate", tier_id, corps, request, courant, db)
+
+
+@router.post("/{tier_id}/mark-deceased", response_model=FicheTier)
+def marquer_decede(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.suspend"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[CorpsTransition | None, Body()] = None,
+) -> FicheTier:
+    """Enregistre le décès (personne physique uniquement). La fiche RESTE visible (succession)."""
+    return _transition("mark_deceased", tier_id, corps, request, courant, db)
+
+
+@router.post("/{tier_id}/mark-dissolved", response_model=FicheTier)
+def marquer_dissous(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.suspend"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[CorpsTransition | None, Body()] = None,
+) -> FicheTier:
+    """Enregistre la dissolution (personne morale ou groupement). La fiche RESTE visible."""
+    return _transition("mark_dissolved", tier_id, corps, request, courant, db)
+
+
+@router.post("/{tier_id}/deactivate", response_model=FicheTier)
+def desactiver(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.deactivate"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[CorpsTransition | None, Body()] = None,
+) -> FicheTier:
+    """Désactive une fiche (SOFT DELETE) : elle sort de l'annuaire. Réservé au responsable."""
+    return _transition("deactivate", tier_id, corps, request, courant, db)
+
+
+@router.post("/{tier_id}/activate", response_model=FicheTier)
+def activer_endpoint(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.validate"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> FicheTier:
+    """Active une fiche prospect après validation KYC. STUB : renvoie 412 avec les conditions
+    manquantes tant que le module KYC (T3) n'est pas là."""
+    try:
+        tier = activer(db, courant, tier_id, _contexte(request))
+    except Exception as erreur:
+        raise _traduire_cycle(erreur) from None
+    return _vers_fiche(tier)

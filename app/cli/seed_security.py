@@ -1,7 +1,8 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 22 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 25 permissions.
 
-Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers (T1c) y ajoute ses
-4 permissions métier. Ce fichier est de fait la matrice RBAC INTER-MODULES : la convergence
+Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
+permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
+validate). Ce fichier est de fait la matrice RBAC INTER-MODULES : la convergence
 (_REVOQUER_HORS_MATRICE) étant globale aux rôles système, la matrice doit rester unique et
 complète. Chaque futur module y contribuera ses permissions et leurs affectations.
 
@@ -175,6 +176,12 @@ PERMISSIONS: tuple[Permission, ...] = (
     ),
     Permission("tiers.create", "tiers", "Créer une fiche tiers (physique, morale, groupement)"),
     Permission("tiers.update", "tiers", "Modifier une fiche tiers"),
+    # --- Cycle de vie (T1e). Séparation VOLONTAIRE : suspendre est réversible et quotidien,
+    # désactiver fait SORTIR la fiche de l'annuaire (un membre avec épargne/crédit en cours qui
+    # disparaît = incident relevé par un contrôleur BCEAO) -> réservé au responsable.
+    Permission("tiers.suspend", "tiers", "Suspendre/réactiver, enregistrer décès ou dissolution"),
+    Permission("tiers.deactivate", "tiers", "Désactiver une fiche (soft delete)"),
+    Permission("tiers.validate", "tiers", "Valider l'activation d'une fiche (KYC)"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -203,15 +210,16 @@ PERMISSIONS: tuple[Permission, ...] = (
 MATRICE: dict[str, frozenset[str]] = {
     "CAISSIER": frozenset({"tiers.read.basic"}),
     "CHARGE_CLIENTELE": frozenset(
-        {"tiers.create", "tiers.read", "tiers.read.basic", "tiers.update"}
+        {"tiers.create", "tiers.read", "tiers.read.basic", "tiers.update", "tiers.suspend"}
     ),
     "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
     "MEMBRE_COMITE_CREDIT": frozenset(),
     "COMPTABLE": frozenset(),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
     # cela permettrait d'entrer dans le compte d'un caissier et d'agir sous son nom.
-    # PAS de perimetre.reseau : cloisonné à son agence. Il supervise l'enrôlement dans son
-    # agence, donc create/read/update sur les tiers, comme le chargé de clientèle.
+    # PAS de perimetre.reseau : cloisonné à son agence. Il supervise l'enrôlement, donc
+    # create/read/update/suspend comme le chargé, PLUS deactivate (soft delete, réservé) et
+    # validate (validation KYC de l'activation).
     "RESPONSABLE_AGENCE": frozenset(
         {
             "users.read",
@@ -222,6 +230,9 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read",
             "tiers.read.basic",
             "tiers.update",
+            "tiers.suspend",
+            "tiers.deactivate",
+            "tiers.validate",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
@@ -238,9 +249,17 @@ MATRICE: dict[str, frozenset[str]] = {
             "perimetre.reseau",
         }
     ),
-    # LBC/FT surveille les fiches (KYC, PPE) sur tout le réseau -> tiers.read.
+    # LBC/FT surveille les fiches (KYC, PPE) sur tout le réseau -> tiers.read. Et valide
+    # l'activation des profils à risque (maker-checker) -> tiers.validate.
     "RESPONSABLE_LBC_FT": frozenset(
-        {"users.read", "audit.read", "tiers.read", "tiers.read.basic", "perimetre.reseau"}
+        {
+            "users.read",
+            "audit.read",
+            "tiers.read",
+            "tiers.read.basic",
+            "tiers.validate",
+            "perimetre.reseau",
+        }
     ),
     "DIRECTION_GENERALE": frozenset(
         {

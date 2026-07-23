@@ -156,11 +156,18 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
 ) -> None:
     """Quand AUCUNE agence n'existe, le siège est créé avec le nom demandé et le code fixe.
 
-    On vide les agences DANS la transaction (annulée au rollback). Le DELETE échouerait si
-    une agence était référencée par le journal d'audit immuable ; ce n'est pas le cas d'une
-    base d'installation, précisément le scénario que cette commande sert."""
+    On vide les agences DANS la transaction (annulée au rollback). Une installation neuve n'a
+    ni utilisateur rattaché, ni tiers : on retire donc aussi ce que le module Tiers pourrait
+    référencer (une base ayant servi au navigateur porte de vrais tiers committés), sinon le
+    DELETE des agences bute sur fk_tiers_primary_agency_id_agencies. Le rollback rend tout."""
     db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
     db.execute(text("DELETE FROM security.user_agencies"))
+    # Tiers d'abord (enfants avant parent), sinon la FK vers agencies bloque leur suppression.
+    db.execute(text("DELETE FROM tiers.lifecycle_events"))
+    db.execute(text("DELETE FROM tiers.individual_profiles"))
+    db.execute(text("DELETE FROM tiers.legal_entity_profiles"))
+    db.execute(text("DELETE FROM tiers.group_profiles"))
+    db.execute(text("DELETE FROM tiers.tiers"))
     db.execute(text("DELETE FROM parameters.agencies"))
     db.flush()
 

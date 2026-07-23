@@ -119,6 +119,13 @@ class GroupementDetail(BaseModel):
     expected_member_count: int | None
 
 
+class CorpsTransition(BaseModel):
+    """Corps OPTIONNEL d'une transition de cycle de vie : un motif libre (suspension,
+    désactivation, décès…), tracé dans le lifecycle_event."""
+
+    motif: str | None = Field(default=None, max_length=500)
+
+
 class FicheTier(BaseModel):
     """Fiche COMPLÈTE. Un seul des trois détails est peuplé, selon le type.
 
