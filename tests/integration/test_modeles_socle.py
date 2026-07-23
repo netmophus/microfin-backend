@@ -18,7 +18,14 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
-from app.modules.parameters.models import Agency
+from app.modules.parameters.models import (
+    Agency,
+    City,
+    Country,
+    Currency,
+    IdentityDocumentType,
+    Region,
+)
 from app.modules.security.models import (
     Permission,
     Role,
@@ -30,9 +37,17 @@ from app.modules.security.models import (
     UserRole,
     UserSession,
 )
+from app.modules.tiers.models import (
+    GroupProfile,
+    IndividualProfile,
+    LegalEntityProfile,
+    LifecycleEvent,
+    NumberingSequence,
+    Tier,
+)
 
-# Le périmètre exact du socle. Toute entrée ajoutée ou retirée ici doit être un choix
-# conscient : ce set est ce qui empêche un modèle d'apparaître par inadvertance.
+# Le périmètre exact des tables mappées. Toute entrée ajoutée ou retirée ici doit être un
+# choix conscient : ce set est ce qui empêche un modèle d'apparaître par inadvertance.
 TABLES_ATTENDUES = frozenset(
     {
         "security.users",
@@ -46,6 +61,19 @@ TABLES_ATTENDUES = frozenset(
         "security.user_passwords_history",
         "audit.audit_logs",
         "parameters.agencies",
+        # Référentiels du module Tiers (migration 0007) — modèles de lecture.
+        "parameters.countries",
+        "parameters.currencies",
+        "parameters.regions",
+        "parameters.cities",
+        "parameters.identity_document_types",
+        # Cœur du module Tiers (migration 0008) — Class Table Inheritance.
+        "tiers.tiers",
+        "tiers.individual_profiles",
+        "tiers.legal_entity_profiles",
+        "tiers.group_profiles",
+        "tiers.numbering_sequences",
+        "tiers.lifecycle_events",
     }
 )
 
@@ -61,6 +89,17 @@ MODELES = [
     UserPasswordHistory,
     AuditLog,
     Agency,
+    Country,
+    Currency,
+    Region,
+    City,
+    IdentityDocumentType,
+    Tier,
+    IndividualProfile,
+    LegalEntityProfile,
+    GroupProfile,
+    NumberingSequence,
+    LifecycleEvent,
 ]
 
 

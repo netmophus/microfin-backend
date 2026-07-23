@@ -16,6 +16,7 @@ from app.core.database import Base
 from app.modules.audit import models as audit_models
 from app.modules.parameters import models as parameters_models
 from app.modules.security import models as security_models
+from app.modules.tiers import models as tiers_models
 
 config = context.config
 
