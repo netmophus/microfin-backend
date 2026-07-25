@@ -187,6 +187,12 @@ PERMISSIONS: tuple[Permission, ...] = (
     # d'agence et au LBC/FT. Une pièce attestée puis modifiée (supprimée + re-saisie) perd son
     # tampon — la vérification suit la pièce, pas le numéro.
     Permission("tiers.identity.verify", "tiers", "Vérifier une pièce d'identité (contrôle)"),
+    # Voir les fiches DÉSACTIVÉES (sorties de l'annuaire par soft delete). Acte de SUPERVISION,
+    # pas de saisie : réservé au contrôle (responsable d'agence, auditeur, LBC/FT, direction).
+    # Le chargé de clientèle et le caissier ne les voient pas — une fiche désactivée n'existe
+    # plus pour eux (les doublons de pièce sont attrapés à la saisie par le contrôle T2c, ils
+    # n'ont donc pas besoin de parcourir les désactivés).
+    Permission("tiers.read.deleted", "tiers", "Consulter les fiches désactivées (supervision)"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -239,6 +245,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.deactivate",
             "tiers.validate",
             "tiers.identity.verify",
+            "tiers.read.deleted",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
@@ -252,6 +259,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "audit.export",
             "tiers.read",
             "tiers.read.basic",
+            "tiers.read.deleted",
             "perimetre.reseau",
         }
     ),
@@ -265,6 +273,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read.basic",
             "tiers.validate",
             "tiers.identity.verify",
+            "tiers.read.deleted",
             "perimetre.reseau",
         }
     ),
@@ -280,6 +289,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "audit.export",
             "tiers.read",
             "tiers.read.basic",
+            "tiers.read.deleted",
             "perimetre.reseau",
         }
     ),

@@ -111,6 +111,9 @@ MESSAGE_INTROUVABLE = "Fiche tiers introuvable."
 # La permission qui débloque la fiche COMPLÈTE. Sa présence, et RIEN d'autre (aucun paramètre
 # de requête), détermine le niveau de détail servi.
 PERMISSION_FICHE_COMPLETE = "tiers.read"
+# Voir les fiches DÉSACTIVÉES. La présence de cette permission — et RIEN d'autre — autorise
+# le déverrouillage du filtre `deleted_at IS NULL`. Un paramètre de requête ne suffit jamais.
+PERMISSION_VOIR_DESACTIVES = "tiers.read.deleted"
 
 
 def _vers_fiche(tier: Tier, primary_phone: str | None = None) -> FicheTier:
@@ -258,16 +261,25 @@ def lister_tiers(
         str | None, Query(description="individual | legal_entity | group.")
     ] = None,
     statut: Annotated[str | None, Query(description="Filtre sur le statut.")] = None,
+    inclure_desactives: Annotated[
+        bool, Query(description="Inclure les fiches désactivées (exige tiers.read.deleted).")
+    ] = False,
     page: Annotated[int, Query(ge=1)] = 1,
     taille: Annotated[int, Query(ge=1, le=TAILLE_PAGE_MAX)] = TAILLE_PAGE_DEFAUT,
 ) -> PageTiers:
-    """Liste de RÉSUMÉS, cloisonnée par agence. Accessible dès tiers.read.basic."""
+    """Liste de RÉSUMÉS, cloisonnée par agence. Accessible dès tiers.read.basic.
+
+    inclure_desactives n'est honoré que pour un porteur de tiers.read.deleted : sinon forcé à
+    faux, jamais d'escalade par le seul paramètre (la permission décide, pas la requête).
+    """
+    voir_desactives = inclure_desactives and PERMISSION_VOIR_DESACTIVES in courant.permissions
     return lister(
         db,
         courant,
         FiltresTiers(q=q, tier_type=tier_type, status=statut),
         page=page,
         taille=taille,
+        inclure_desactives=voir_desactives,
     )
 
 
@@ -284,15 +296,17 @@ def lire_tier(
     reçoit la fiche complète ; sinon (read.basic seul, ex. le caissier) il reçoit le résumé,
     dont les champs sensibles ne sont même pas chargés en base.
 
-    Hors périmètre -> 404 (n'existe pas de mon point de vue), jamais 403.
+    Hors périmètre -> 404 (n'existe pas de mon point de vue), jamais 403. Une fiche désactivée
+    reste 404 SAUF pour un porteur de tiers.read.deleted (supervision).
     """
+    voir_desactives = PERMISSION_VOIR_DESACTIVES in courant.permissions
     if PERMISSION_FICHE_COMPLETE in courant.permissions:
-        tier = lire_complet(db, courant, tier_id)
+        tier = lire_complet(db, courant, tier_id, voir_desactives)
         if tier is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
         return _vers_fiche(tier, telephone_principal(db, tier_id))
 
-    resume = lire_resume(db, courant, tier_id)
+    resume = lire_resume(db, courant, tier_id, voir_desactives)
     if resume is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
     return resume
@@ -304,8 +318,11 @@ def timeline_tier(
     courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[EvenementTimeline]:
-    """Frise chronologique d'une fiche (détail -> tiers.read). Hors périmètre -> 404."""
-    evenements = timeline(db, courant, tier_id)
+    """Frise chronologique d'une fiche (détail -> tiers.read). Hors périmètre -> 404.
+
+    Une fiche désactivée reste 404 sauf pour un porteur de tiers.read.deleted."""
+    voir_desactives = PERMISSION_VOIR_DESACTIVES in courant.permissions
+    evenements = timeline(db, courant, tier_id, voir_desactives)
     if evenements is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
     return evenements
@@ -418,6 +435,28 @@ def desactiver(
 ) -> FicheTier:
     """Désactive une fiche (SOFT DELETE) : elle sort de l'annuaire. Réservé au responsable."""
     return _transition("deactivate", tier_id, corps, request, courant, db)
+
+
+@router.post("/{tier_id}/restore", response_model=FicheTier)
+def restaurer(
+    tier_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.deactivate"))],
+    db: Annotated[Session, Depends(get_db)],
+    corps: Annotated[CorpsTransition | None, Body()] = None,
+) -> FicheTier:
+    """Réactive une fiche DÉSACTIVÉE : elle revient dans l'annuaire en PROSPECT (à re-valider).
+    Réservé au responsable (symétrie avec la désactivation). Si une pièce à numéro unique de la
+    fiche a été reprise ailleurs pendant l'absence -> 422 (fiche nommée si dans le périmètre)."""
+    motif = corps.motif if corps else None
+    try:
+        tier = executer_transition(db, courant, tier_id, "restore", _contexte(request), motif=motif)
+    except DoublonPieceError as erreur:
+        # Collision de pièce à la restauration : même exposition cloisonnée que T2c.
+        raise _traduire_piece(erreur) from None
+    except Exception as erreur:
+        raise _traduire_cycle(erreur) from None
+    return _vers_fiche(tier)
 
 
 @router.post("/{tier_id}/activate", response_model=FicheTier)
@@ -643,16 +682,22 @@ def _traduire_piece(erreur: Exception) -> HTTPException:
     if isinstance(erreur, TierIntrouvableError | PieceIntrouvableError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
     if isinstance(erreur, DoublonPieceError):
+        # Détail STRUCTURÉ pour que l'écran puisse rendre le message actionnable (lien vers la
+        # fiche) SANS parser une phrase. tier_id/tier_number/nom ne sont peuplés que dans le
+        # périmètre — hors périmètre, ils restent nuls : rien à divulguer (comme le 404 vs 403).
         if erreur.dans_perimetre:
-            # L'agent a déjà le droit de voir cette fiche : la nommer l'aide à résoudre au guichet.
-            detail = (
-                f"Cette pièce est déjà enregistrée sur la fiche "
-                f"{erreur.tier_number} ({erreur.nom})."
-            )
+            message = f"Cette pièce est déjà enregistrée sur la fiche {erreur.tier_number}."
         else:
-            # Hors périmètre : refus strictement générique (comme le 404), aucune divulgation.
-            detail = "Ce numéro de pièce est déjà utilisé."
-        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+            message = "Ce numéro de pièce est déjà utilisé."
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": message,
+                "tier_id": str(erreur.tier_id) if erreur.tier_id else None,
+                "tier_number": erreur.tier_number,
+                "nom": erreur.nom,
+            },
+        )
     if isinstance(erreur, SuppressionPrincipaleError):
         return HTTPException(
             status_code=status.HTTP_409_CONFLICT,

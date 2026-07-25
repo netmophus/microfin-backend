@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.service import ContexteRequete, ecrire_audit
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.models import LifecycleEvent, Tier
+from app.modules.tiers.pieces import controler_unicite_fiche
 
 RESSOURCE = "tier"
 _AGENCE = Tier.__table__.c.primary_agency_id  # colonne Core (le périmètre attend un optionnel)
@@ -119,6 +120,7 @@ class Transition:
     types: frozenset[str] | None  # contrainte de tier_type (miroir du CHECK D4), ou None
     message_type: str | None  # message si le type ne convient pas
     soft_delete: bool = False
+    restore: bool = False  # lève le soft delete (charge un désactivé, remet deleted_at à NULL)
 
 
 TRANSITIONS: dict[str, Transition] = {
@@ -133,6 +135,12 @@ TRANSITIONS: dict[str, Transition] = {
         None,
         None,
         soft_delete=True,
+    ),
+    # Retour d'une fiche désactivée : vers PROSPECT, jamais actif — un ancien membre qui revient
+    # repasse la validation KYC (identité re-vérifiée, relation ré-instruite). La moitié manquante
+    # du soft delete : la donnée était là, ce chemin lui rend un retour.
+    "restore": Transition(
+        "restored", frozenset({"desactive"}), "prospect", None, None, restore=True
     ),
     "mark_deceased": Transition(
         "marked_deceased",
@@ -151,17 +159,24 @@ TRANSITIONS: dict[str, Transition] = {
 }
 
 
-def _charger_pour_ecriture(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> Tier:
-    """Charge la fiche SOUS VERROU, dans le périmètre de l'acteur. Sinon CibleIntrouvable (404)."""
-    tier = db.execute(
-        select(Tier)
-        .where(
-            Tier.id == tier_id,
-            courant.condition_perimetre(_AGENCE),
-            Tier.deleted_at.is_(None),
-        )
-        .with_for_update()
-    ).scalar_one_or_none()
+def _charger_pour_ecriture(
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    inclure_desactive: bool = False,
+) -> Tier:
+    """Charge la fiche SOUS VERROU, dans le périmètre de l'acteur. Sinon CibleIntrouvable (404).
+
+    inclure_desactive n'est vrai QUE pour la restauration : c'est le seul cas où l'on doit charger
+    une fiche `deleted_at IS NOT NULL`. Toute autre transition reste bloquée sur les désactivés.
+    """
+    stmt = select(Tier).where(
+        Tier.id == tier_id,
+        courant.condition_perimetre(_AGENCE),
+    )
+    if not inclure_desactive:
+        stmt = stmt.where(Tier.deleted_at.is_(None))
+    tier = db.execute(stmt.with_for_update()).scalar_one_or_none()
     if tier is None:
         raise CibleIntrouvableError()
     return tier
@@ -217,7 +232,7 @@ def executer_transition(
 ) -> Tier:
     """Applique une transition de la table TRANSITIONS. 409 si statut/type incompatible."""
     transition = TRANSITIONS[nom]
-    tier = _charger_pour_ecriture(db, courant, tier_id)
+    tier = _charger_pour_ecriture(db, courant, tier_id, inclure_desactive=transition.restore)
 
     if tier.status not in transition.sources:
         raise TransitionIllegaleError(tier.status)
@@ -225,6 +240,13 @@ def executer_transition(
     if transition.types is not None and tier.tier_type not in transition.types:
         assert transition.message_type is not None
         raise TypeIncompatibleError(transition.message_type)
+
+    # Garde d'unicité À LA RESTAURATION, AVANT toute mutation : pendant l'absence de la fiche,
+    # un numéro de pièce unique a pu être repris ailleurs (une pièce de désactivé est exclue du
+    # contrôle T2c). On refait le contrôle ; en cas de collision -> DoublonPieceError (422),
+    # nommée si dans le périmètre. La fiche reste désactivée, le responsable résout d'abord.
+    if transition.restore:
+        controler_unicite_fiche(db, courant, tier.id, contexte)
 
     ancien = tier.status
     maintenant = datetime.now(UTC)
@@ -238,6 +260,11 @@ def executer_transition(
         tier.suspended_at = None
         tier.suspended_by = None
         tier.suspension_reason = None
+    elif transition.restore:
+        # La fiche revient dans l'annuaire, en PROSPECT non validé : on efface l'activation.
+        tier.deleted_at = None
+        tier.activated_at = None
+        tier.activated_by = None
     elif transition.soft_delete:
         tier.deleted_at = maintenant  # soft delete : jamais de suppression physique
 

@@ -82,6 +82,18 @@ def test_liste_les_devises(client: TestClient, db: Session) -> None:
     assert set(corps[0]) == {"id", "code", "name", "decimal_places"}
 
 
+def test_liste_les_types_de_pieces(client: TestClient, db: Session) -> None:
+    corps = client.get("/identity-document-types", headers=_entete(db)).json()
+
+    types = {item["code"]: item for item in corps}
+    assert "CNI" in types
+    assert types["CNI"]["requires_expiry_date"] is True  # une CNI a une échéance
+    assert types["ATTESTATION_NAISSANCE"]["requires_expiry_date"] is False
+    # enforce_unique n'est PAS exposé : le contrôle d'unicité reste au service.
+    assert set(corps[0]) == {"id", "code", "name", "requires_expiry_date"}
+
+
 def test_les_referentiels_exigent_une_authentification(client: TestClient) -> None:
     assert client.get("/countries").status_code == 401
     assert client.get("/currencies").status_code == 401
+    assert client.get("/identity-document-types").status_code == 401

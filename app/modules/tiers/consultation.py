@@ -65,8 +65,15 @@ def _nom_affichage() -> ColumnElement[str]:
     )
 
 
-def _requete_resume(courant: UtilisateurCourant, filtres: FiltresTiers) -> Select[tuple[Any, ...]]:
-    """SELECT des SEULES colonnes sûres, joint aux enfants pour le nom, filtré par périmètre."""
+def _requete_resume(
+    courant: UtilisateurCourant, filtres: FiltresTiers, inclure_desactives: bool = False
+) -> Select[tuple[Any, ...]]:
+    """SELECT des SEULES colonnes sûres, joint aux enfants pour le nom, filtré par périmètre.
+
+    inclure_desactives lève le `deleted_at IS NULL` (voir les fiches sorties de l'annuaire). Le
+    router ne le passe à vrai QUE pour un appelant porteur de tiers.read.deleted — jamais sur la
+    seule foi d'un paramètre de requête. Le cloisonnement, lui, reste TOUJOURS appliqué.
+    """
     nom = _nom_affichage()
     stmt = (
         select(
@@ -81,11 +88,10 @@ def _requete_resume(courant: UtilisateurCourant, filtres: FiltresTiers) -> Selec
         .outerjoin(_IND, _IND.c.tier_id == _T.c.id)
         .outerjoin(_LE, _LE.c.tier_id == _T.c.id)
         .outerjoin(_GP, _GP.c.tier_id == _T.c.id)
-        .where(
-            courant.condition_perimetre(_T.c.primary_agency_id),
-            _T.c.deleted_at.is_(None),
-        )
+        .where(courant.condition_perimetre(_T.c.primary_agency_id))
     )
+    if not inclure_desactives:
+        stmt = stmt.where(_T.c.deleted_at.is_(None))
     if filtres.tier_type:
         stmt = stmt.where(_T.c.tier_type == filtres.tier_type)
     if filtres.status:
@@ -114,9 +120,10 @@ def lister(
     *,
     page: int = 1,
     taille: int = TAILLE_PAGE_DEFAUT,
+    inclure_desactives: bool = False,
 ) -> PageTiers:
     """Liste paginée de RÉSUMÉS, cloisonnée. Le total suit le même filtre que les lignes."""
-    base = _requete_resume(courant, filtres)
+    base = _requete_resume(courant, filtres, inclure_desactives)
     total = db.execute(select(func.count()).select_from(base.subquery())).scalar_one()
     lignes = db.execute(
         base.order_by(_T.c.created_at.desc(), _T.c.id.desc())
@@ -131,26 +138,39 @@ def lister(
     )
 
 
-def lire_resume(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> TierResume | None:
+def lire_resume(
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    inclure_desactives: bool = False,
+) -> TierResume | None:
     """Vue résumée d'UNE fiche (read.basic) — colonnes sûres seulement, None si hors périmètre."""
-    ligne = db.execute(_requete_resume(courant, FiltresTiers()).where(_T.c.id == tier_id)).first()
+    ligne = db.execute(
+        _requete_resume(courant, FiltresTiers(), inclure_desactives).where(_T.c.id == tier_id)
+    ).first()
     return _en_resume(ligne) if ligne is not None else None
 
 
-def lire_complet(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> Tier | None:
+def lire_complet(
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    inclure_desactives: bool = False,
+) -> Tier | None:
     """Fiche COMPLÈTE (read) — chargement polymorphe, ou None si hors périmètre.
 
     select(Tier) rend le sous-type concret (Individual/LegalEntity/Group) via la jointure
-    d'héritage ; le router le convertit avec le bloc de champs adéquat.
+    d'héritage ; le router le convertit avec le bloc de champs adéquat. inclure_desactives (réservé
+    à tiers.read.deleted) autorise l'ouverture d'une fiche désactivée.
     """
-    return db.execute(
-        select(Tier).where(
-            Tier.id == tier_id,
-            # Colonne Core (non nullable côté ORM) : le périmètre attend une colonne optionnelle.
-            courant.condition_perimetre(_T.c.primary_agency_id),
-            Tier.deleted_at.is_(None),
-        )
-    ).scalar_one_or_none()
+    stmt = select(Tier).where(
+        Tier.id == tier_id,
+        # Colonne Core (non nullable côté ORM) : le périmètre attend une colonne optionnelle.
+        courant.condition_perimetre(_T.c.primary_agency_id),
+    )
+    if not inclure_desactives:
+        stmt = stmt.where(Tier.deleted_at.is_(None))
+    return db.execute(stmt).scalar_one_or_none()
 
 
 def telephone_principal(db: Session, tier_id: uuid.UUID) -> str | None:
@@ -173,29 +193,34 @@ def telephone_principal(db: Session, tier_id: uuid.UUID) -> str | None:
     return legacy
 
 
-def _est_visible(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> bool:
+def _est_visible(
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    inclure_desactives: bool = False,
+) -> bool:
     """La fiche est-elle dans le périmètre de l'appelant ? (sans charger ses données)."""
-    return (
-        db.execute(
-            select(_T.c.id).where(
-                _T.c.id == tier_id,
-                courant.condition_perimetre(_T.c.primary_agency_id),
-                _T.c.deleted_at.is_(None),
-            )
-        ).first()
-        is not None
+    stmt = select(_T.c.id).where(
+        _T.c.id == tier_id,
+        courant.condition_perimetre(_T.c.primary_agency_id),
     )
+    if not inclure_desactives:
+        stmt = stmt.where(_T.c.deleted_at.is_(None))
+    return db.execute(stmt).first() is not None
 
 
 def timeline(
-    db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    inclure_desactives: bool = False,
 ) -> list[EvenementTimeline] | None:
     """Frise chronologique d'une fiche, ou None si elle est hors périmètre (-> 404).
 
     On vérifie d'abord la visibilité de la fiche : sans elle, on divulguerait l'existence d'un
     tiers d'une autre agence en révélant ses événements.
     """
-    if not _est_visible(db, courant, tier_id):
+    if not _est_visible(db, courant, tier_id, inclure_desactives):
         return None
     lignes = db.execute(
         select(

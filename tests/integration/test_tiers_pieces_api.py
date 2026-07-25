@@ -187,7 +187,11 @@ def test_un_doublon_de_cni_dans_mon_agence_nomme_la_fiche(db: Session, client: T
 
     assert reponse.status_code == 422, reponse.text
     detail = reponse.json()["detail"]
-    assert deja.tier_number in detail and "Traore" in detail  # nommée : l'agent peut résoudre
+    # Détail structuré : la fiche est identifiée (id + numéro + nom) pour un lien cliquable.
+    assert deja.tier_number in detail["message"]
+    assert detail["tier_id"] == str(deja.id)
+    assert detail["tier_number"] == deja.tier_number
+    assert detail["nom"] == "Traore Amadou"
 
 
 def test_un_doublon_hors_perimetre_reste_generique_et_est_audite(
@@ -208,9 +212,11 @@ def test_un_doublon_hors_perimetre_reste_generique_et_est_audite(
 
     assert reponse.status_code == 422, reponse.text
     detail = reponse.json()["detail"]
-    # Rien ne fuite : ni le numéro de la fiche voisine, ni le nom, ni l'agence.
-    assert fiche_voisine.tier_number not in detail
-    assert "Kone" not in detail
+    # Rien ne fuite : ni le numéro de la fiche voisine, ni son id, ni le nom.
+    assert fiche_voisine.tier_number not in detail["message"]
+    assert detail["tier_id"] is None
+    assert detail["tier_number"] is None
+    assert detail["nom"] is None
 
     # Mais la collision est tracée pour la conformité (piste privilégiée, réseau).
     audit = db.execute(

@@ -74,9 +74,15 @@ class DoublonPieceError(Exception):
     """
 
     def __init__(
-        self, *, dans_perimetre: bool, tier_number: str | None = None, nom: str | None = None
+        self,
+        *,
+        dans_perimetre: bool,
+        tier_id: uuid.UUID | None = None,
+        tier_number: str | None = None,
+        nom: str | None = None,
     ) -> None:
         self.dans_perimetre = dans_perimetre
+        self.tier_id = tier_id
         self.tier_number = tier_number
         self.nom = nom
 
@@ -216,9 +222,29 @@ def _controler_unicite(
     db.commit()  # l'audit du refus persiste, indépendamment de l'insertion refusée
     raise DoublonPieceError(
         dans_perimetre=dans_perimetre,
+        tier_id=conflit.tier_id if dans_perimetre else None,
         tier_number=conflit.tier_number if dans_perimetre else None,
         nom=conflit.nom if dans_perimetre else None,
     )
+
+
+def controler_unicite_fiche(
+    db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID, contexte: ContexteRequete
+) -> None:
+    """Re-contrôle l'unicité de TOUTES les pièces vivantes d'une fiche — appelé à la RESTAURATION.
+
+    Pendant qu'une fiche est désactivée, ses pièces sortent du contrôle T2c (jointe à un tiers
+    `deleted_at IS NOT NULL`), donc un numéro unique a pu être repris ailleurs. On refait le
+    contrôle avant de la ramener dans l'annuaire : première collision -> DoublonPieceError (le
+    cycle de vie la laisse alors désactivée, à charge de résoudre le doublon d'abord).
+    """
+    pieces = db.execute(
+        select(
+            IdentityDocument.document_type_id, IdentityDocument.document_number_normalized
+        ).where(IdentityDocument.tier_id == tier_id, IdentityDocument.deleted_at.is_(None))
+    ).all()
+    for type_id, numero_norm in pieces:
+        _controler_unicite(db, courant, tier_id, type_id, numero_norm, contexte)
 
 
 def _tracer_et_auditer(

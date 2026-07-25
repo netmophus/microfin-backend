@@ -19,12 +19,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.parameters.models import Agency, Country, Currency
+from app.modules.parameters.models import Agency, Country, Currency, IdentityDocumentType
 from app.modules.security.autorisation import UtilisateurCourant, exige_authentification
 
 router = APIRouter(prefix="/agencies", tags=["agences"])
 router_countries = APIRouter(prefix="/countries", tags=["pays"])
 router_currencies = APIRouter(prefix="/currencies", tags=["devises"])
+router_doctypes = APIRouter(prefix="/identity-document-types", tags=["types de pièces"])
 
 
 class AgenceItem(BaseModel):
@@ -108,6 +109,44 @@ def lister_devises(
     return [
         CurrencyItem(
             id=ligne.id, code=ligne.code, name=ligne.name, decimal_places=ligne.decimal_places
+        )
+        for ligne in lignes
+    ]
+
+
+class TypePieceItem(BaseModel):
+    """Type de pièce pour le sélecteur de saisie (T2c). `requires_expiry_date` dit au formulaire
+    s'il doit réclamer une échéance ; `enforce_unique` n'est PAS exposé (le contrôle d'unicité
+    reste au service — le front n'a pas à connaître la règle pour l'appliquer)."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+    requires_expiry_date: bool
+
+
+@router_doctypes.get("", response_model=list[TypePieceItem])
+def lister_types_pieces(
+    _: Annotated[UtilisateurCourant, Depends(exige_authentification())],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[TypePieceItem]:
+    """Liste les types de pièces ACTIFS (display_order), pour le sélecteur de saisie des pièces."""
+    lignes = db.execute(
+        select(
+            IdentityDocumentType.id,
+            IdentityDocumentType.code,
+            IdentityDocumentType.name,
+            IdentityDocumentType.requires_expiry_date,
+        )
+        .where(IdentityDocumentType.is_active.is_(True))
+        .order_by(IdentityDocumentType.display_order, IdentityDocumentType.name)
+    )
+    return [
+        TypePieceItem(
+            id=ligne.id,
+            code=ligne.code,
+            name=ligne.name,
+            requires_expiry_date=ligne.requires_expiry_date,
         )
         for ligne in lignes
     ]
