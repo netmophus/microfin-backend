@@ -40,6 +40,7 @@ from app.modules.tiers.models import (
     Tier,
 )
 from app.modules.tiers.numbering import prefixe_pour_type, prochain_numero
+from app.modules.tiers.risque import evaluer_et_enregistrer
 from app.modules.tiers.schemas import (
     CreationGroupement,
     CreationIndividu,
@@ -139,12 +140,19 @@ def _finaliser(
     nom: str,
     contexte: ContexteRequete,
     telephone: str | None = None,
+    *,
+    scorer: bool = False,
 ) -> Tier:
-    """Insère la fiche, écrit l'événement de cycle de vie DANS la transaction, audite en dernier."""
+    """Insère la fiche, écrit l'événement de cycle de vie DANS la transaction, audite en dernier.
+
+    scorer=True : calcule et archive une première évaluation de risque KYC (T3b) DANS la même
+    transaction (une fiche naît avec un profil de risque, fût-il minimal et incomplet)."""
     db.add(tier)
     db.flush()  # obtient tier.id et pose tier_type via le discriminateur polymorphe
 
     _telephone_initial(db, courant, tier, telephone)
+    if scorer:
+        evaluer_et_enregistrer(db, courant, tier, "creation")
 
     db.add(
         LifecycleEvent(
@@ -186,7 +194,13 @@ def creer_individu(
         updated_by=courant.user_id,
     )
     return _finaliser(
-        db, courant, tier, f"{corps.last_name} {corps.first_name}", contexte, corps.primary_phone
+        db,
+        courant,
+        tier,
+        f"{corps.last_name} {corps.first_name}",
+        contexte,
+        corps.primary_phone,
+        scorer=True,  # personne physique : évaluation de risque dès la création (T3b)
     )
 
 
