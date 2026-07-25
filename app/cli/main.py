@@ -10,7 +10,14 @@ from app.cli.creer_admin import (
     RoleIntrouvableError,
     creer_admin,
 )
+from app.cli.seed_dev import (
+    MOT_DE_PASSE_DEV,
+    AgenceManquanteError,
+    RoleManquantError,
+    executer_seed_dev,
+)
 from app.cli.seed_security import executer_seed
+from app.core.config import settings
 from app.core.database import SessionLocal
 
 app = typer.Typer(help="Outils d'administration du SIG microfinance.", no_args_is_help=True)
@@ -46,6 +53,55 @@ def seed_security(
     typer.echo(f"Habilitations     : {rapport.accords}")
     typer.echo(f"Révocations       : {rapport.revocations}")
     typer.echo("Simulation — rien n'a été écrit." if dry_run else "Seed appliqué.")
+
+
+@app.command("seed-dev")
+def seed_dev(
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Autoriser malgré ENV=production (à éviter)."),
+    ] = False,
+) -> None:
+    """Crée un jeu de comptes de DÉVELOPPEMENT (un par rôle métier), mot de passe fixe et connu.
+
+    Distincte du seed de production. Refuse ENV=production sauf --force : des comptes à mot de
+    passe public n'ont rien à faire en prod. Idempotente. À jouer après seed-security + creer-admin.
+    """
+    if settings.ENV.lower().startswith("prod") and not force:
+        typer.secho(
+            f"Refus : ENV={settings.ENV}. Les comptes de dev ne s'installent pas en production "
+            "(--force pour outrepasser, à vos risques).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    with SessionLocal() as db:
+        try:
+            rapport = executer_seed_dev(db)
+        except AgenceManquanteError:
+            db.rollback()
+            typer.secho("Refus : aucune agence.", fg=typer.colors.RED, err=True)
+            typer.echo("Jouez d'abord : python -m app.cli creer-admin", err=True)
+            raise typer.Exit(code=1) from None
+        except RoleManquantError as erreur:
+            db.rollback()
+            typer.secho(
+                f"Refus : rôle(s) absent(s) : {erreur.args[0]}.", fg=typer.colors.RED, err=True
+            )
+            typer.echo("Jouez d'abord : python -m app.cli seed-security", err=True)
+            raise typer.Exit(code=1) from None
+        db.commit()
+
+    typer.echo("")
+    typer.secho("  Comptes de développement en place.", fg=typer.colors.GREEN, bold=True)
+    if rapport.crees:
+        typer.echo(f"  Créés   : {', '.join(rapport.crees)}")
+    if rapport.ignores:
+        typer.echo(f"  Déjà là : {', '.join(rapport.ignores)}")
+    typer.echo(f"  Mot de passe (tous) : {MOT_DE_PASSE_DEV}")
+    typer.secho("  Voir docs/comptes-dev.md pour la liste rôle par rôle.", fg=typer.colors.YELLOW)
+    typer.echo("")
 
 
 @app.command("creer-admin")
