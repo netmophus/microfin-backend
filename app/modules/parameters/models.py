@@ -219,3 +219,96 @@ class IdentityDocumentType(Base):
 
     def __repr__(self) -> str:
         return f"<IdentityDocumentType {self.code}>"
+
+
+class SecteurActivite(Base):
+    """Secteur d'activité économique (T3a) — référentiel + flag is_a_risque pour le scoring KYC.
+
+    QUELS secteurs sont à risque relève de l'expert LBC/FT : le flag est une valeur PROVISOIRE
+    (voir docs/conformite-lbcft.md), pas une classification définitive.
+    """
+
+    __tablename__ = "secteurs_activite"
+    __table_args__ = (sa.UniqueConstraint("code"), {"schema": "parameters"})
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    code: Mapped[str] = mapped_column(sa.String(30), nullable=False)
+    libelle: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    is_a_risque: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=FALSE)
+    is_active: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=TRUE)
+    display_order: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=INT_100)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+
+
+class KycRiskGrid(Base):
+    """Grille de scoring de risque LBC/FT (T3a) — conteneur versionné et PARAMÉTRABLE.
+
+    is_provisional : toute la grille est provisoire tant que le LBC/FT ne l'a pas validée.
+    Une modification de pondération crée une NOUVELLE version (immuable) — jamais une réécriture,
+    pour que les évaluations archivées restent reproductibles.
+    """
+
+    __tablename__ = "kyc_risk_grid"
+    __table_args__ = (sa.UniqueConstraint("version"), {"schema": "parameters"})
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    version: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    libelle: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    is_active: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=TRUE)
+    is_provisional: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=TRUE)
+    notes: Mapped[str | None] = mapped_column(sa.Text())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+
+
+class KycRiskRule(Base):
+    """Règle de la grille de risque (T3a) — les TROIS types : contributive / plancher / couperet."""
+
+    __tablename__ = "kyc_risk_rules"
+    __table_args__ = (
+        sa.UniqueConstraint("grid_id", "code"),
+        {"schema": "parameters"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    grid_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.kyc_risk_grid.id"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(sa.String(40), nullable=False)
+    libelle: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    rule_type: Mapped[str] = mapped_column(sa.String(15), nullable=False)
+    critere: Mapped[str] = mapped_column(sa.String(40), nullable=False)
+    points: Mapped[int] = mapped_column(sa.Integer(), nullable=False, server_default=sa.text("0"))
+    niveau_impose: Mapped[str | None] = mapped_column(sa.String(10))
+    bloquant: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=FALSE)
+    actif: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=TRUE)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+
+
+class KycRiskThreshold(Base):
+    """Barème score → niveau (T3a) : une borne basse par niveau, rattaché à une grille."""
+
+    __tablename__ = "kyc_risk_thresholds"
+    __table_args__ = (
+        sa.UniqueConstraint("grid_id", "niveau"),
+        {"schema": "parameters"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    grid_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.kyc_risk_grid.id"), nullable=False
+    )
+    niveau: Mapped[str] = mapped_column(sa.String(10), nullable=False)
+    score_min: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey("security.users.id"))

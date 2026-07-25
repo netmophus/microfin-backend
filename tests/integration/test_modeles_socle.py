@@ -24,7 +24,11 @@ from app.modules.parameters.models import (
     Country,
     Currency,
     IdentityDocumentType,
+    KycRiskGrid,
+    KycRiskRule,
+    KycRiskThreshold,
     Region,
+    SecteurActivite,
 )
 from app.modules.security.models import (
     Permission,
@@ -45,6 +49,7 @@ from app.modules.tiers.models import (
     LegalEntityProfile,
     LifecycleEvent,
     NumberingSequence,
+    RiskAssessment,
     Tier,
 )
 
@@ -79,6 +84,13 @@ TABLES_ATTENDUES = frozenset(
         # Identité & contacts (migration 0009).
         "tiers.identity_documents",
         "tiers.contacts",
+        # KYC : référentiel secteurs + grille de risque paramétrable (migration 0013).
+        "parameters.secteurs_activite",
+        "parameters.kyc_risk_grid",
+        "parameters.kyc_risk_rules",
+        "parameters.kyc_risk_thresholds",
+        # Historique des évaluations de risque, append-only (migration 0013).
+        "tiers.risk_assessments",
     }
 )
 
@@ -107,6 +119,11 @@ MODELES = [
     LifecycleEvent,
     IdentityDocument,
     Contact,
+    SecteurActivite,
+    KycRiskGrid,
+    KycRiskRule,
+    KycRiskThreshold,
+    RiskAssessment,
 ]
 
 

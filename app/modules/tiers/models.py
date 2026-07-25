@@ -88,6 +88,11 @@ class Tier(Base):
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     deleted_at: Mapped[datetime | None] = mapped_column(TS)  # soft delete uniquement
+    # Reflet (cache) du dernier calcul de risque archivé dans risk_assessments — PAS la vérité.
+    risk_level: Mapped[str | None] = mapped_column(sa.String(10))
+    risk_score: Mapped[int | None] = mapped_column(sa.Integer())
+    risk_computed_at: Mapped[datetime | None] = mapped_column(TS)
+    risk_grid_version: Mapped[int | None] = mapped_column(sa.Integer())
 
     # RUF012 est ignoré ci-dessous : __mapper_args__ est le contrat SQLAlchemy (un dict est
     # attendu). L'annoter ClassVar déclencherait une erreur mypy (override d'une variable
@@ -133,8 +138,19 @@ class IndividualProfile(Tier):
     is_literate: Mapped[bool] = mapped_column(
         sa.Boolean(), nullable=False, server_default=sa.true()
     )
-    # TODO(T2/Paramétrage) : activity_sector_id, education_level_id — référentiels non créés.
-    # name_phonetic_key appartient à la recherche/déduplication (T4), pas à ce stade.
+    # Données KYC (T3a). origine_fonds : obligatoire au gate d'activation. secteur_activite_id
+    # alimente la règle de risque « secteur à risque ». PPE + mode d'entrée = critères de score.
+    origine_fonds: Mapped[str | None] = mapped_column(sa.Text())
+    secteur_activite_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("parameters.secteurs_activite.id")
+    )
+    ppe_status: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    ppe_relation: Mapped[str | None] = mapped_column(sa.String(10))  # direct | entourage
+    ppe_fonction: Mapped[str | None] = mapped_column(sa.String(200))
+    mode_entree_relation: Mapped[str | None] = mapped_column(sa.String(20))
+    # TODO(T4) : name_phonetic_key (recherche/déduplication), pas à ce stade.
 
     __mapper_args__ = {"polymorphic_identity": "individual"}  # noqa: RUF012
 
@@ -390,3 +406,37 @@ class Contact(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(TS)
     deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     deletion_reason: Mapped[str | None] = mapped_column(sa.Text())
+
+
+class RiskAssessment(Base):
+    """Historique des évaluations de risque LBC/FT (T3a) — APPEND-ONLY.
+
+    Le film, pas la photo : chaque calcul est archivé avec son détail COMPLET (`detail` JSONB :
+    contributions, planchers, couperets, barème, version de grille), reproductible sans la grille
+    vivante. Le service n'y fait que des INSERT — jamais d'UPDATE/DELETE. La fiche ne garde qu'un
+    reflet (Tier.risk_*) ; la vérité est ici.
+    """
+
+    __tablename__ = "risk_assessments"
+    __table_args__ = (
+        sa.Index("ix_risk_assessments_tier_id_assessed_at", "tier_id", "assessed_at"),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    assessed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    assessed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    trigger_event: Mapped[str] = mapped_column(sa.String(30), nullable=False)
+    score: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    niveau_bareme: Mapped[str] = mapped_column(sa.String(10), nullable=False)
+    niveau_effectif: Mapped[str] = mapped_column(sa.String(10), nullable=False)
+    grid_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.kyc_risk_grid.id"), nullable=False
+    )
+    grid_version: Mapped[int] = mapped_column(sa.Integer(), nullable=False)
+    is_provisional: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False)
+    couperet_declenche: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    detail: Mapped[dict[str, Any]] = mapped_column(postgresql.JSONB(), nullable=False)
