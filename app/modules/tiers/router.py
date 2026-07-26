@@ -28,6 +28,7 @@ from app.modules.tiers.consultation import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
     FiltresTiers,
+    dernier_risque,
     lire_complet,
     lire_resume,
     lister,
@@ -51,8 +52,17 @@ from app.modules.tiers.cycle_de_vie import (
     TransitionIllegaleError,
     TypeIncompatibleError,
     activer,
+    conditions_dossier,
     executer_transition,
     message_transition_illegale,
+)
+from app.modules.tiers.kyc import (
+    DonneesKyc,
+    TypeNonSupporteError,
+    mettre_a_jour_kyc,
+)
+from app.modules.tiers.kyc import (
+    TierIntrouvableError as KycTierIntrouvableError,
 )
 from app.modules.tiers.models import (
     Contact,
@@ -75,6 +85,8 @@ from app.modules.tiers.pieces import (
     verifier_piece,
 )
 from app.modules.tiers.schemas import (
+    ConditionActivationItem,
+    ConditionsActivation,
     ContactItem,
     CorpsTransition,
     CreationAdresse,
@@ -88,6 +100,7 @@ from app.modules.tiers.schemas import (
     FicheTier,
     GroupementDetail,
     IndividuDetail,
+    MajKyc,
     PageTiers,
     PersonneMoraleDetail,
     PieceItem,
@@ -116,10 +129,15 @@ PERMISSION_FICHE_COMPLETE = "tiers.read"
 PERMISSION_VOIR_DESACTIVES = "tiers.read.deleted"
 
 
-def _vers_fiche(tier: Tier, primary_phone: str | None = None) -> FicheTier:
+def _vers_fiche(
+    tier: Tier,
+    primary_phone: str | None = None,
+    risque: tuple[str | None, bool] = (None, False),
+) -> FicheTier:
     # primary_phone est fourni par l'appelant (LU DEPUIS LES CONTACTS, T2b) sur la lecture de fiche.
     # Sur les réponses de création/transition, il n'est pas recalculé : la colonne legacy sert de
     # repli (nul pour une fiche neuve — le numéro vit dans les contacts, lu via GET /contacts).
+    # risque = (niveau, provisoire) de la dernière évaluation, pour le badge de la fiche.
     fiche = FicheTier(
         id=tier.id,
         tier_number=tier.tier_number,
@@ -130,6 +148,8 @@ def _vers_fiche(tier: Tier, primary_phone: str | None = None) -> FicheTier:
         language_preference=tier.language_preference,
         created_at=tier.created_at,
         updated_at=tier.updated_at,
+        risk_level=risque[0],
+        risk_provisional=risque[1],
     )
     if isinstance(tier, IndividualProfile):
         fiche.individu = IndividuDetail(
@@ -148,6 +168,12 @@ def _vers_fiche(tier: Tier, primary_phone: str | None = None) -> FicheTier:
             profession=tier.profession,
             monthly_income_estimate=tier.monthly_income_estimate,
             is_literate=tier.is_literate,
+            origine_fonds=tier.origine_fonds,
+            secteur_activite_id=tier.secteur_activite_id,
+            ppe_status=tier.ppe_status,
+            ppe_relation=tier.ppe_relation,
+            ppe_fonction=tier.ppe_fonction,
+            mode_entree_relation=tier.mode_entree_relation,
         )
     elif isinstance(tier, LegalEntityProfile):
         fiche.personne_morale = PersonneMoraleDetail(
@@ -304,12 +330,31 @@ def lire_tier(
         tier = lire_complet(db, courant, tier_id, voir_desactives)
         if tier is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
-        return _vers_fiche(tier, telephone_principal(db, tier_id))
+        return _vers_fiche(tier, telephone_principal(db, tier_id), dernier_risque(db, tier_id))
 
     resume = lire_resume(db, courant, tier_id, voir_desactives)
     if resume is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
     return resume
+
+
+@router.get("/{tier_id}/activation-conditions", response_model=ConditionsActivation)
+def conditions_activation_endpoint(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ConditionsActivation:
+    """Ce qu'il reste à COMPLÉTER pour qu'une fiche prospect soit activable — affiché dans le
+    bandeau de la fiche AVANT le clic « Activer ». Conditions de dossier (indépendantes du
+    spectateur) ; le valideur (niveau, quatre-yeux) apparaît à l'activation."""
+    tier = lire_complet(db, courant, tier_id)
+    if tier is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    manquantes, _resultat, _grille = conditions_dossier(db, tier)
+    return ConditionsActivation(
+        activable=not manquantes,
+        conditions=[ConditionActivationItem(code=c.code, libelle=c.libelle) for c in manquantes],
+    )
 
 
 @router.get("/{tier_id}/timeline", response_model=list[EvenementTimeline])
@@ -466,13 +511,50 @@ def activer_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("tiers.validate"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> FicheTier:
-    """Active une fiche prospect après validation KYC. STUB : renvoie 412 avec les conditions
-    manquantes tant que le module KYC (T3) n'est pas là."""
+    """Active une fiche prospect POUR DE VRAI (T3c) : passe à 'actif' quand tout est réuni, sinon
+    412 avec TOUTES les conditions manquantes. Réservé aux valideurs ; risque élevé -> LBC/FT."""
     try:
         tier = activer(db, courant, tier_id, _contexte(request))
     except Exception as erreur:
         raise _traduire_cycle(erreur) from None
-    return _vers_fiche(tier)
+    return _vers_fiche(tier, telephone_principal(db, tier_id), dernier_risque(db, tier_id))
+
+
+@router.patch("/{tier_id}/kyc", response_model=FicheTier)
+def maj_kyc_endpoint(
+    tier_id: uuid.UUID,
+    corps: MajKyc,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.update"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> FicheTier:
+    """Renseigne les données KYC d'une personne physique et RECALCULE le risque (T3c). Hors
+    périmètre -> 404 ; type non pris en charge (T3 = personne physique) -> 422."""
+    try:
+        tier = mettre_a_jour_kyc(
+            db,
+            courant,
+            tier_id,
+            DonneesKyc(
+                origine_fonds=corps.origine_fonds,
+                secteur_activite_id=corps.secteur_activite_id,
+                ppe_status=corps.ppe_status,
+                ppe_relation=corps.ppe_relation,
+                ppe_fonction=corps.ppe_fonction,
+                mode_entree_relation=corps.mode_entree_relation,
+            ),
+            _contexte(request),
+        )
+    except KycTierIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    except TypeNonSupporteError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Les données KYC détaillées ne concernent que les personnes physiques.",
+        ) from None
+    return _vers_fiche(tier, telephone_principal(db, tier_id), dernier_risque(db, tier_id))
 
 
 # --- coordonnées (T2b) -----------------------------------------------------------------

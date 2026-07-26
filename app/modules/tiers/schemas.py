@@ -95,6 +95,13 @@ class IndividuDetail(BaseModel):
     profession: str | None
     monthly_income_estimate: Decimal | None
     is_literate: bool
+    # Données KYC (T3c) — pour pré-remplir le formulaire de l'onglet KYC.
+    origine_fonds: str | None
+    secteur_activite_id: uuid.UUID | None
+    ppe_status: bool
+    ppe_relation: str | None
+    ppe_fonction: str | None
+    mode_entree_relation: str | None
 
 
 class PersonneMoraleDetail(BaseModel):
@@ -117,6 +124,22 @@ class GroupementDetail(BaseModel):
     intervention_zone: str | None
     group_purpose: str | None
     expected_member_count: int | None
+
+
+ModeEntree = Literal["presentiel", "tiers_confiance", "distance"]
+PpeRelation = Literal["direct", "entourage"]
+
+
+class MajKyc(BaseModel):
+    """Saisie des données KYC d'une personne physique (T3c). Renseigner ces champs (et vérifier
+    une pièce valide, un téléphone, une adresse) rend une fiche activable."""
+
+    origine_fonds: str | None = Field(default=None, max_length=500)
+    secteur_activite_id: uuid.UUID | None = None
+    ppe_status: bool = False
+    ppe_relation: PpeRelation | None = None
+    ppe_fonction: str | None = Field(default=None, max_length=200)
+    mode_entree_relation: ModeEntree | None = None
 
 
 class CorpsTransition(BaseModel):
@@ -262,9 +285,25 @@ class FicheTier(BaseModel):
     language_preference: str | None
     created_at: datetime
     updated_at: datetime
+    # Reflet du risque (T3b/c) : niveau courant + drapeau PROVISOIRE (barème non validé).
+    risk_level: str | None = None
+    risk_provisional: bool = False
     individu: IndividuDetail | None = None
     personne_morale: PersonneMoraleDetail | None = None
     groupement: GroupementDetail | None = None
+
+
+class ConditionActivationItem(BaseModel):
+    code: str
+    libelle: str
+
+
+class ConditionsActivation(BaseModel):
+    """État d'activation d'une fiche : est-elle activable, et sinon que reste-t-il à COMPLÉTER
+    (conditions de dossier, avant même de cliquer « Activer »)."""
+
+    activable: bool
+    conditions: list[ConditionActivationItem]
 
 
 class TierResume(BaseModel):

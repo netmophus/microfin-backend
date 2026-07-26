@@ -19,13 +19,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.parameters.models import Agency, Country, Currency, IdentityDocumentType
+from app.modules.parameters.models import (
+    Agency,
+    Country,
+    Currency,
+    IdentityDocumentType,
+    SecteurActivite,
+)
 from app.modules.security.autorisation import UtilisateurCourant, exige_authentification
 
 router = APIRouter(prefix="/agencies", tags=["agences"])
 router_countries = APIRouter(prefix="/countries", tags=["pays"])
 router_currencies = APIRouter(prefix="/currencies", tags=["devises"])
 router_doctypes = APIRouter(prefix="/identity-document-types", tags=["types de pièces"])
+router_secteurs = APIRouter(prefix="/secteurs-activite", tags=["secteurs d'activité"])
 
 
 class AgenceItem(BaseModel):
@@ -150,3 +157,26 @@ def lister_types_pieces(
         )
         for ligne in lignes
     ]
+
+
+class SecteurItem(BaseModel):
+    """Secteur d'activité pour le sélecteur KYC (T3c). `is_a_risque` n'est PAS exposé : la
+    conséquence sur le risque relève du moteur, pas de l'écran de saisie."""
+
+    id: uuid.UUID
+    code: str
+    libelle: str
+
+
+@router_secteurs.get("", response_model=list[SecteurItem])
+def lister_secteurs(
+    _: Annotated[UtilisateurCourant, Depends(exige_authentification())],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[SecteurItem]:
+    """Liste les secteurs d'activité ACTIFS (display_order), pour le sélecteur KYC."""
+    lignes = db.execute(
+        select(SecteurActivite.id, SecteurActivite.code, SecteurActivite.libelle)
+        .where(SecteurActivite.is_active.is_(True))
+        .order_by(SecteurActivite.display_order, SecteurActivite.libelle)
+    )
+    return [SecteurItem(id=ligne.id, code=ligne.code, libelle=ligne.libelle) for ligne in lignes]

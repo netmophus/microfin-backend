@@ -45,6 +45,11 @@ class Agency(Base):
     code: Mapped[str] = mapped_column(sa.String(30), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(sa.String(150), nullable=False)
     is_active: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=sa.true())
+    # Quatre-yeux KYC (T3c) : l'activateur ≠ le vérificateur, EXIGÉ par défaut, assouplissable
+    # par agence (petite agence à agent unique). L'auto-validation tolérée est tracée dans l'audit.
+    double_validation_kyc: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.true()
+    )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("security.users.id", use_alter=True), nullable=True

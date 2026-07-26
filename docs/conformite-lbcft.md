@@ -45,6 +45,8 @@ réglementaires — à remplacer par les valeurs de l'expert.
 | 9 | Seuil de « risque élevé » routant la validation vers le LBC/FT | routage | niveau effectif = élevé → LBC/FT (T3d) | ⚠️ À VALIDER |
 | 10 | Seuil « volume élevé » (montant déclenchant 1c) | contributive | à définir (T3b) | ⚠️ À VALIDER |
 | 11 | Correspondance liste de sanctions | couperet | **blocage de l'activation** (données en T6) | ⚠️ À VALIDER |
+| 12 | Double validation KYC (quatre-yeux : activateur ≠ vérificateur) | politique | **exigée par défaut**, assouplissable **par agence** (`agencies.double_validation_kyc`) ; auto-validation tracée | ⚠️ À VALIDER (expert + déploiement) |
+| 13 | Activation sous barème PROVISOIRE | politique | **autorisée + avertissement + traçable** (registre dérivable) ; blocage éventuel à la mise en production, pas par fiche | ⚠️ À VALIDER (expert + déploiement) |
 
 Structure paramétrable : `parameters.kyc_risk_grid` (conteneur versionné, `is_provisional`),
 `parameters.kyc_risk_rules` (les trois types), `parameters.kyc_risk_thresholds` (barème),

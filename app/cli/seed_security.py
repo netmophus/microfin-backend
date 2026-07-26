@@ -182,6 +182,9 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("tiers.suspend", "tiers", "Suspendre/réactiver, enregistrer décès ou dissolution"),
     Permission("tiers.deactivate", "tiers", "Désactiver une fiche (soft delete)"),
     Permission("tiers.validate", "tiers", "Valider l'activation d'une fiche (KYC)"),
+    # Valider un profil à RISQUE ÉLEVÉ : réservé au LBC/FT (le blanchiment est son métier).
+    # Le responsable d'agence valide faible/moyen ; l'élevé remonte au LBC/FT (T3c).
+    Permission("tiers.validate.high_risk", "tiers", "Valider l'activation d'un profil à risque"),
     # Vérifier une pièce (T2c) = acte de CONTRÔLE distinct de la saisie : le chargé de clientèle
     # saisit la pièce, mais l'ATTESTER (elle a été vue et validée) est réservé au responsable
     # d'agence et au LBC/FT. Une pièce attestée puis modifiée (supprimée + re-saisie) perd son
@@ -272,6 +275,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read",
             "tiers.read.basic",
             "tiers.validate",
+            "tiers.validate.high_risk",
             "tiers.identity.verify",
             "tiers.read.deleted",
             "perimetre.reseau",

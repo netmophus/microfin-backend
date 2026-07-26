@@ -30,6 +30,7 @@ from app.modules.tiers.models import (
     IndividualProfile,
     LegalEntityProfile,
     LifecycleEvent,
+    RiskAssessment,
     Tier,
 )
 from app.modules.tiers.schemas import EvenementTimeline, PageTiers, TierResume
@@ -46,6 +47,7 @@ _GP = GroupProfile.__table__
 _LC = LifecycleEvent.__table__
 _U = User.__table__
 _C = Contact.__table__
+_RA = RiskAssessment.__table__
 
 
 @dataclass(frozen=True)
@@ -191,6 +193,20 @@ def telephone_principal(db: Session, tier_id: uuid.UUID) -> str | None:
         select(_T.c.primary_phone).where(_T.c.id == tier_id)
     ).scalar_one_or_none()
     return legacy
+
+
+def dernier_risque(db: Session, tier_id: uuid.UUID) -> tuple[str | None, bool]:
+    """Niveau de risque courant + drapeau provisoire, DEPUIS la dernière évaluation archivée.
+    (None, False) si jamais évaluée. Le provisoire est celui GELÉ à l'évaluation."""
+    ligne = db.execute(
+        select(_RA.c.niveau_effectif, _RA.c.is_provisional)
+        .where(_RA.c.tier_id == tier_id)
+        .order_by(_RA.c.assessed_at.desc(), _RA.c.id.desc())
+        .limit(1)
+    ).first()
+    if ligne is None:
+        return None, False
+    return ligne.niveau_effectif, ligne.is_provisional
 
 
 def _est_visible(

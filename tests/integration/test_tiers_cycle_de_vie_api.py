@@ -243,7 +243,9 @@ def test_activation_renvoie_412_avec_les_conditions_manquantes(
 
     assert r.status_code == 412, r.text
     codes = [c["code"] for c in r.json()["detail"]["conditions_manquantes"]]
-    assert "KYC_NON_VALIDE" in codes  # T3 en ajoutera d'autres, toutes renvoyées d'un coup
+    # Un prospect nu -> TOUTES les conditions réelles remontées d'un bloc (gate T3c).
+    assert "PIECE_PRINCIPALE_MANQUANTE" in codes
+    assert len(codes) > 1
 
 
 # --- périmètre à l'écriture ------------------------------------------------------------

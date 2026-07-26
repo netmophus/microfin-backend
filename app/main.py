@@ -2,7 +2,12 @@ from fastapi import FastAPI
 
 from app.modules.audit.router import router as audit_router
 from app.modules.parameters.router import router as agences_router
-from app.modules.parameters.router import router_countries, router_currencies, router_doctypes
+from app.modules.parameters.router import (
+    router_countries,
+    router_currencies,
+    router_doctypes,
+    router_secteurs,
+)
 from app.modules.security.router import router as auth_router
 from app.modules.security.router_roles import router as roles_router
 from app.modules.security.router_users import router as users_router
@@ -16,6 +21,7 @@ app.include_router(agences_router)
 app.include_router(router_countries)
 app.include_router(router_currencies)
 app.include_router(router_doctypes)
+app.include_router(router_secteurs)
 app.include_router(roles_router)
 app.include_router(audit_router)
 app.include_router(tiers_router)

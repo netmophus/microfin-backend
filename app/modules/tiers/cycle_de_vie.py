@@ -31,9 +31,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import ContexteRequete, ecrire_audit
+from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.tiers.models import LifecycleEvent, Tier
-from app.modules.tiers.pieces import controler_unicite_fiche
+from app.modules.tiers.models import (
+    Contact,
+    IdentityDocument,
+    IndividualProfile,
+    LifecycleEvent,
+    Tier,
+)
+from app.modules.tiers.pieces import controler_unicite_fiche, etat_validite
+from app.modules.tiers.risque import (
+    GrilleSnapshot,
+    ResultatRisque,
+    charger_grille_active,
+    enregistrer,
+    evaluer,
+    extraire_entrees,
+)
+
+# Capacité de valider un profil à RISQUE ÉLEVÉ — réservée au LBC/FT (le contrôle du blanchiment
+# est son métier). Marqueur d'autorisation naturel : une permission, pas une heuristique de rôle.
+PERMISSION_RISQUE_ELEVE = "tiers.validate.high_risk"
 
 RESSOURCE = "tier"
 _AGENCE = Tier.__table__.c.primary_agency_id  # colonne Core (le périmètre attend un optionnel)
@@ -92,21 +111,126 @@ class ConditionActivation:
     libelle: str
 
 
-KYC_NON_VALIDE = ConditionActivation("KYC_NON_VALIDE", "Validation KYC requise — module à venir.")
+_C_PIECE_MANQUANTE = ConditionActivation(
+    "PIECE_PRINCIPALE_MANQUANTE", "Enregistrez une pièce d'identité principale."
+)
+_C_PIECE_NON_VERIFIEE = ConditionActivation(
+    "PIECE_NON_VERIFIEE", "La pièce principale doit être vérifiée par un responsable."
+)
+_C_PIECE_PERIMEE = ConditionActivation(
+    "PIECE_PERIMEE", "La pièce principale est périmée : enregistrez une pièce valide."
+)
+_C_TELEPHONE = ConditionActivation("TELEPHONE_MANQUANT", "Renseignez au moins un téléphone.")
+_C_ADRESSE = ConditionActivation("ADRESSE_MANQUANTE", "Renseignez au moins une adresse.")
+_C_ORIGINE_FONDS = ConditionActivation("ORIGINE_FONDS_MANQUANTE", "Renseignez l'origine des fonds.")
+_C_COUPERET = ConditionActivation(
+    "COUPERET_ACTIF", "Activation bloquée : correspondance liste de sanctions à lever."
+)
+_C_VALIDEUR = ConditionActivation(
+    "VALIDEUR_INSUFFISANT", "Profil à risque élevé : seul le responsable LBC/FT peut activer."
+)
+_C_AUTO_VALIDATION = ConditionActivation(
+    "AUTO_VALIDATION_INTERDITE",
+    "Double regard requis : un autre agent que celui qui a vérifié la pièce doit activer.",
+)
+# Données de risque manquantes -> condition dédiée par champ (le moteur T3b désigne le champ).
+_C_DONNEE_RISQUE = {
+    "secteur_activite": ConditionActivation(
+        "SECTEUR_MANQUANT", "Renseignez le secteur d'activité."
+    ),
+    "mode_entree_relation": ConditionActivation(
+        "MODE_ENTREE_MANQUANT", "Renseignez le mode d'entrée en relation."
+    ),
+    "nationalite": ConditionActivation("NATIONALITE_MANQUANTE", "Renseignez la nationalité."),
+}
 
 
-def conditions_activation_manquantes(db: Session, tier: Tier) -> list[ConditionActivation]:
-    """Conditions NON remplies pour activer une fiche. On COLLECTE TOUT, on ne s'arrête pas à
-    la première : un chargé de clientèle doit pouvoir tout corriger en une fois.
+def _piece_principale(db: Session, tier_id: uuid.UUID) -> IdentityDocument | None:
+    return db.execute(
+        select(IdentityDocument).where(
+            IdentityDocument.tier_id == tier_id,
+            IdentityDocument.is_primary.is_(True),
+            IdentityDocument.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
 
-    En T1e le KYC n'existe pas -> condition systématiquement manquante. T3 ajoutera SES
-    vérifications ICI (pièce vérifiée, téléphone, filtrage sanctions…), sans toucher à
-    l'endpoint ni à la forme de réponse.
-    """
+
+def _auto_validation(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> bool:
+    """L'activateur est-il celui qui a vérifié la pièce principale ? (le quatre-yeux à trancher)."""
+    piece = _piece_principale(db, tier_id)
+    return piece is not None and piece.is_verified and piece.verified_by == courant.user_id
+
+
+def _agence_exige_double(db: Session, tier: Tier) -> bool:
+    agence = db.get(Agency, tier.primary_agency_id)
+    return agence.double_validation_kyc if agence is not None else True
+
+
+def conditions_dossier(
+    db: Session, tier: Tier
+) -> tuple[list[ConditionActivation], ResultatRisque, GrilleSnapshot]:
+    """Conditions de COMPLÉTUDE du dossier — indépendantes de QUI regarde (pièce, contacts, KYC,
+    couperet). Recalcule un score FRAIS en mémoire (non archivé). Le bandeau de la fiche s'en sert :
+    elles disent quoi COMPLÉTER, avant même de cliquer « Activer ». « KYC complet » est DÉLÉGUÉ au
+    moteur T3b (donnees_manquantes) — une seule définition partagée."""
+    grille = charger_grille_active(db)
+    resultat = evaluer(extraire_entrees(db, tier), grille, "activation")
+
     manquantes: list[ConditionActivation] = []
-    manquantes.append(KYC_NON_VALIDE)
-    # TODO(T3) : if not piece_verifiee -> manquantes.append(PIECE_NON_VERIFIEE) ; etc.
-    return manquantes
+
+    piece = _piece_principale(db, tier.id)
+    if piece is None:
+        manquantes.append(_C_PIECE_MANQUANTE)
+    else:
+        if not piece.is_verified:
+            manquantes.append(_C_PIECE_NON_VERIFIEE)
+        if etat_validite(piece.expiry_date) == "perimee":
+            manquantes.append(_C_PIECE_PERIMEE)
+
+    types_contacts = set(
+        db.execute(
+            select(Contact.contact_type).where(
+                Contact.tier_id == tier.id, Contact.deleted_at.is_(None)
+            )
+        ).scalars()
+    )
+    if "phone" not in types_contacts:
+        manquantes.append(_C_TELEPHONE)
+    if "address" not in types_contacts:
+        manquantes.append(_C_ADRESSE)
+
+    if isinstance(tier, IndividualProfile) and not (tier.origine_fonds or "").strip():
+        manquantes.append(_C_ORIGINE_FONDS)
+
+    for champ in resultat.donnees_manquantes:
+        manquantes.append(
+            _C_DONNEE_RISQUE.get(champ, ConditionActivation(f"DONNEE_{champ.upper()}", champ))
+        )
+
+    if resultat.couperet_declenche:
+        manquantes.append(_C_COUPERET)
+
+    return manquantes, resultat, grille
+
+
+def evaluer_activation(
+    db: Session, courant: UtilisateurCourant, tier: Tier
+) -> tuple[list[ConditionActivation], ResultatRisque, GrilleSnapshot]:
+    """TOUTES les conditions non remplies = dossier + conditions propres à L'ACTIVATEUR (niveau de
+    risque exigeant le LBC/FT, quatre-yeux)."""
+    manquantes, resultat, grille = conditions_dossier(db, tier)
+    if resultat.niveau_effectif == "eleve" and PERMISSION_RISQUE_ELEVE not in courant.permissions:
+        manquantes.append(_C_VALIDEUR)
+    if _agence_exige_double(db, tier) and _auto_validation(db, courant, tier.id):
+        manquantes.append(_C_AUTO_VALIDATION)
+    return manquantes, resultat, grille
+
+
+def conditions_activation_manquantes(
+    db: Session, courant: UtilisateurCourant, tier: Tier
+) -> list[ConditionActivation]:
+    """Toutes les conditions NON remplies, d'un bloc (le valideur voit tout ce qui manque)."""
+    return evaluer_activation(db, courant, tier)[0]
 
 
 # --- machine à états -------------------------------------------------------------------
@@ -191,8 +315,12 @@ def _tracer_et_auditer(
     nouveau: str,
     motif: str | None,
     contexte: ContexteRequete,
+    extra: dict[str, Any] | None = None,
 ) -> None:
-    """lifecycle_event DANS la transaction, puis audit EN DERNIER, puis commit."""
+    """lifecycle_event DANS la transaction, puis audit EN DERNIER, puis commit.
+
+    extra : faits supplémentaires portés à l'audit (ex. à l'activation : l'évaluation KYC de
+    référence, le niveau de risque, l'auto-validation tolérée)."""
     db.add(
         LifecycleEvent(
             tier_id=tier.id,
@@ -208,6 +336,8 @@ def _tracer_et_auditer(
     valeurs: dict[str, Any] = {"status": nouveau, "tier_number": tier.tier_number}
     if motif:
         valeurs["motif"] = motif
+    if extra:
+        valeurs.update(extra)
     ecrire_audit(
         db,
         action=f"tier.{event_type}",
@@ -277,25 +407,47 @@ def executer_transition(
 def activer(
     db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID, contexte: ContexteRequete
 ) -> Tier:
-    """Active une fiche prospect — STUB en T1e : renvoie systématiquement les conditions
-    manquantes (412), car le KYC n'existe pas encore. La logique d'activation effective est en
-    place ; seules les CONDITIONS sont vides de contenu réel jusqu'à T3."""
+    """Active une fiche prospect POUR DE VRAI (T3c) : passe à 'actif' quand TOUTES les conditions
+    sont réunies ; sinon 412 avec la liste complète de ce qui manque.
+
+    Sur succès : archive l'évaluation KYC de référence (declencheur='activation'), y lie la fiche
+    (activation_assessment_id) — un inspecteur remonte de l'activation à l'évaluation exacte. Une
+    auto-validation tolérée (agence assouplie, même personne) est TRACÉE (auto_validation=true)."""
     tier = _charger_pour_ecriture(db, courant, tier_id)
     if tier.status != "prospect":
         raise TransitionIllegaleError(tier.status)
 
-    manquantes = conditions_activation_manquantes(db, tier)
+    manquantes, resultat, grille = evaluer_activation(db, courant, tier)
     if manquantes:
         raise ActivationImpossibleError(manquantes)
 
-    # Jamais atteint en T1e (il reste toujours au moins KYC_NON_VALIDE) — mais la transition
-    # est écrite, prête pour T3.
+    # Archive l'évaluation exacte sur laquelle s'appuie l'activation (met aussi à jour le reflet).
+    evaluation = enregistrer(db, tier, resultat, grille, "activation", courant.user_id)
+    # Vrai seulement si l'agence a assoupli le quatre-yeux (sinon la condition aurait bloqué).
+    auto = _auto_validation(db, courant, tier.id)
+
     ancien = tier.status
     tier.status = "actif"
     tier.activated_at = datetime.now(UTC)
     tier.activated_by = courant.user_id
+    tier.activation_assessment_id = evaluation.id
     tier.updated_by = courant.user_id
-    _tracer_et_auditer(db, courant, tier, "activated", ancien, "actif", None, contexte)
+    _tracer_et_auditer(
+        db,
+        courant,
+        tier,
+        "activated",
+        ancien,
+        "actif",
+        "Auto-validation (double regard assoupli)" if auto else None,
+        contexte,
+        extra={
+            "activation_assessment_id": str(evaluation.id),
+            "niveau_risque": resultat.niveau_effectif,
+            "grille_provisoire": grille.is_provisional,
+            "auto_validation": auto,
+        },
+    )
     return tier
 
 

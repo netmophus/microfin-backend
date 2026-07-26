@@ -93,7 +93,17 @@ def test_liste_les_types_de_pieces(client: TestClient, db: Session) -> None:
     assert set(corps[0]) == {"id", "code", "name", "requires_expiry_date"}
 
 
+def test_liste_les_secteurs_activite(client: TestClient, db: Session) -> None:
+    corps = client.get("/secteurs-activite", headers=_entete(db)).json()
+
+    codes = {item["code"] for item in corps}
+    assert "AGRICULTURE" in codes
+    # is_a_risque n'est PAS exposé : la conséquence sur le risque reste au moteur.
+    assert set(corps[0]) == {"id", "code", "libelle"}
+
+
 def test_les_referentiels_exigent_une_authentification(client: TestClient) -> None:
     assert client.get("/countries").status_code == 401
     assert client.get("/currencies").status_code == 401
     assert client.get("/identity-document-types").status_code == 401
+    assert client.get("/secteurs-activite").status_code == 401

@@ -93,6 +93,11 @@ class Tier(Base):
     risk_score: Mapped[int | None] = mapped_column(sa.Integer())
     risk_computed_at: Mapped[datetime | None] = mapped_column(TS)
     risk_grid_version: Mapped[int | None] = mapped_column(sa.Integer())
+    # L'évaluation KYC EXACTE sur laquelle l'activation s'est appuyée (T3c) — traçabilité :
+    # « activé le 12 mars » -> ce snapshot de risque précis. NULL tant que non activée.
+    activation_assessment_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("tiers.risk_assessments.id")
+    )
 
     # RUF012 est ignoré ci-dessous : __mapper_args__ est le contrat SQLAlchemy (un dict est
     # attendu). L'annoter ClassVar déclencherait une erreur mypy (override d'une variable
