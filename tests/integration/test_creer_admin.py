@@ -162,6 +162,9 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     DELETE des agences bute sur fk_tiers_primary_agency_id_agencies. Le rollback rend tout."""
     db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
     db.execute(text("DELETE FROM security.user_agencies"))
+    # Casser d'abord la FK CIRCULAIRE tiers.activation_assessment_id -> risk_assessments
+    # (0014) : sinon la purge de risk_assessments bute tant qu'un tiers activé la référence.
+    db.execute(text("UPDATE tiers.tiers SET activation_assessment_id = NULL"))
     # Tiers d'abord (enfants avant parent), sinon la FK vers agencies bloque leur suppression.
     db.execute(text("DELETE FROM tiers.risk_assessments"))
     db.execute(text("DELETE FROM tiers.contacts"))

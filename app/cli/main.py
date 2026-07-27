@@ -19,6 +19,11 @@ from app.cli.seed_dev import (
 from app.cli.seed_security import executer_seed
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.modules.comptabilite.plan import (
+    FichierInvalideError,
+    ImportRefuseError,
+    importer,
+)
 
 app = typer.Typer(help="Outils d'administration du SIG microfinance.", no_args_is_help=True)
 
@@ -101,6 +106,60 @@ def seed_dev(
         typer.echo(f"  Déjà là : {', '.join(rapport.ignores)}")
     typer.echo(f"  Mot de passe (tous) : {MOT_DE_PASSE_DEV}")
     typer.secho("  Voir docs/comptes-dev.md pour la liste rôle par rôle.", fg=typer.colors.YELLOW)
+    typer.echo("")
+
+
+@app.command("import-plan-comptable")
+def import_plan_comptable(
+    chemin: Annotated[str, typer.Argument(help="Chemin du CSV du plan de comptes RCSFD.")],
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Valide et simule : la transaction est annulée."),
+    ] = False,
+) -> None:
+    """Importe le plan de comptes depuis un CSV — TOUT OU RIEN.
+
+    Le fichier est d'abord VALIDÉ intégralement en mémoire. À la moindre anomalie, RIEN n'est
+    écrit et toutes les anomalies sont listées ligne par ligne. Sinon, les comptes sont importés
+    et marqués PROVISOIRES (à faire valider par un expert-comptable SFD).
+
+    Idempotente : rejouable (upsert par numéro de compte).
+    """
+    with SessionLocal() as db:
+        try:
+            rapport = importer(db, chemin)
+        except FichierInvalideError as erreur:
+            db.rollback()
+            typer.secho(f"Fichier invalide : {erreur.args[0]}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from None
+        except ImportRefuseError as erreur:
+            db.rollback()
+            typer.secho(
+                f"Import refusé — {len(erreur.anomalies)} anomalie(s), aucun compte écrit :",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            for anomalie in erreur.anomalies:
+                typer.echo(f"  - {anomalie}", err=True)
+            raise typer.Exit(code=1) from None
+
+        if dry_run:
+            db.rollback()
+        else:
+            db.commit()
+
+    total = rapport.crees + rapport.mis_a_jour
+    typer.echo("")
+    typer.secho(f"  Plan de comptes importé : {total} comptes.", fg=typer.colors.GREEN, bold=True)
+    typer.echo(f"  Créés    : {rapport.crees}")
+    typer.echo(f"  Mis à jour : {rapport.mis_a_jour}")
+    typer.secho(
+        "  Tous marqués PROVISOIRES — à valider par un expert-comptable SFD "
+        "(voir docs/conformite-comptable.md).",
+        fg=typer.colors.YELLOW,
+    )
+    if dry_run:
+        typer.echo("  Simulation — rien n'a été écrit.")
     typer.echo("")
 
 

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
+from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import (
     Agency,
     City,
@@ -91,6 +92,8 @@ TABLES_ATTENDUES = frozenset(
         "parameters.kyc_risk_thresholds",
         # Historique des évaluations de risque, append-only (migration 0013).
         "tiers.risk_assessments",
+        # Socle comptable C0 — plan de comptes (migration 0015).
+        "comptabilite.accounts",
     }
 )
 
@@ -124,6 +127,7 @@ MODELES = [
     KycRiskRule,
     KycRiskThreshold,
     RiskAssessment,
+    Account,
 ]
 
 

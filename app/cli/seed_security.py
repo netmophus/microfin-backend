@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 25 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 30 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -196,6 +196,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     # plus pour eux (les doublons de pièce sont attrapés à la saisie par le contrôle T2c, ils
     # n'ont donc pas besoin de parcourir les désactivés).
     Permission("tiers.read.deleted", "tiers", "Consulter les fiches désactivées (supervision)"),
+    # --- Module Comptabilité (C0) : le plan de comptes est une DONNÉE gérée par le comptable.
+    # read = consulter le plan ; manage = importer, créer, désactiver, changer libellé/sens
+    # (dans les limites des garde-fous : jamais un compte système, jamais un compte mouvementé).
+    Permission("compta.plan.read", "compta", "Consulter le plan de comptes"),
+    Permission("compta.plan.manage", "compta", "Gérer le plan de comptes (import, création, MAJ)"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -228,7 +233,9 @@ MATRICE: dict[str, frozenset[str]] = {
     ),
     "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
     "MEMBRE_COMITE_CREDIT": frozenset(),
-    "COMPTABLE": frozenset(),
+    # Le comptable tient le plan de comptes : le consulter et le gérer (import initial + gestion
+    # courante). Les autres droits compta (écritures, journaux, états) arriveront avec C1/C2.
+    "COMPTABLE": frozenset({"compta.plan.read", "compta.plan.manage"}),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
     # cela permettrait d'entrer dans le compte d'un caissier et d'agir sous son nom.
     # PAS de perimetre.reseau : cloisonné à son agence. Il supervise l'enrôlement, donc
