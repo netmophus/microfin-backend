@@ -44,6 +44,11 @@ class Product(Base):
     is_provisional: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, server_default=sa.true()
     )
+    # Compte de dette du plan (classe 3) crédité au dépôt : rattachement PROVISOIRE (migration
+    # 0019), nullable tant que l'expert ne l'a pas validé. Voir docs/conformite-comptable.md.
+    compte_epargne_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

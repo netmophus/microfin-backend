@@ -43,6 +43,25 @@ et valider avant toute mise en production.
 | Souscription parts sociales | D Caisse / C 1021 Parts sociales libérées | ⚠️ À VALIDER |
 | Frais de tenue de compte | D compte membre / C 7xxx Produits | ⚠️ À VALIDER |
 
+## Rattachement produit d'épargne → compte du plan (Épargne, PROVISOIRE)
+
+Chaque produit d'épargne pointe vers le **compte de dette** (classe 3, sens crédit) crédité au
+dépôt. Rattachement livré **provisoire** (`epargne.products.compte_epargne_id`), à valider par
+l'expert-comptable SFD.
+
+| Produit | Compte de rattachement (provisoire) | Statut |
+|---------|-------------------------------------|--------|
+| Épargne à vue (EAV) | **3111** Épargne à vue - membres | ⚠️ À VALIDER |
+| Dépôt à terme (DAT) | **3121** Dépôts à terme - membres | ⚠️ À VALIDER |
+| Épargne programmée (EPR) | **3131** Épargne programmée - membres | ⚠️ À VALIDER |
+
+**Question ouverte — membre / client** : le plan distingue épargne à vue **membres (3111)** et
+**clients (3112)** (idem par nature de produit). Le compte de dette dépend donc de la **nature du
+tiers** (sociétaire vs simple usager), que le module Tiers ne porte pas encore. Provisoirement,
+tous les produits sont rattachés au compte **membre** (cas courant mutualiste). Le cas **client
+(3112)** est à trancher — probablement au moment des **parts sociales**, quand le marqueur
+membre/client existera. Les schémas d'écriture (E1) résoudront alors le choix du compte.
+
 ## Journaux et exercice (C1)
 
 Journaux livrés (seed `seed-comptabilite`), **tous provisoires** (`journals.is_provisional`) —
