@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.engagements import Engagement, engagements_bloquants
 from app.modules.audit.service import ContexteRequete, ecrire_audit
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
@@ -100,6 +101,17 @@ class ActivationImpossibleError(Exception):
     def __init__(self, conditions: list["ConditionActivation"]) -> None:
         self.conditions = conditions
         super().__init__("activation impossible")
+
+
+class EngagementsOuvertsError(Exception):
+    """La désactivation est refusée : le membre a des engagements ouverts. -> 422, TOUS listés.
+
+    Symétrique de l'activation : on ne fait pas SORTIR de l'annuaire un membre dont l'IMF détient
+    encore l'épargne (ou, demain, à qui elle a prêté). Voir app.core.engagements."""
+
+    def __init__(self, engagements: list[Engagement]) -> None:
+        self.engagements = engagements
+        super().__init__("engagements ouverts")
 
 
 # --- conditions d'activation (stub T1e, point de greffe T3) ----------------------------
@@ -370,6 +382,14 @@ def executer_transition(
     if transition.types is not None and tier.tier_type not in transition.types:
         assert transition.message_type is not None
         raise TypeIncompatibleError(transition.message_type)
+
+    # Garde d'engagements À LA DÉSACTIVATION, AVANT toute mutation : on ne fait pas SORTIR de
+    # l'annuaire un membre dont l'IMF détient encore l'épargne (ou, demain, à qui elle a prêté).
+    # Tous les modules enregistrés répondent d'un coup ; toutes les raisons sont listées.
+    if nom == "deactivate":
+        engagements = engagements_bloquants(db, tier.id)
+        if engagements:
+            raise EngagementsOuvertsError(engagements)
 
     # Garde d'unicité À LA RESTAURATION, AVANT toute mutation : pendant l'absence de la fiche,
     # un numéro de pièce unique a pu être repris ailleurs (une pièce de désactivé est exclue du

@@ -49,6 +49,7 @@ from app.modules.tiers.contacts import (
 from app.modules.tiers.cycle_de_vie import (
     ActivationImpossibleError,
     CibleIntrouvableError,
+    EngagementsOuvertsError,
     TransitionIllegaleError,
     TypeIncompatibleError,
     activer,
@@ -399,6 +400,17 @@ def _traduire_cycle(erreur: Exception) -> HTTPException:
                 "message": "L'activation de la fiche requiert des conditions non remplies.",
                 "conditions_manquantes": [
                     {"code": c.code, "libelle": c.libelle} for c in erreur.conditions
+                ],
+            },
+        )
+    if isinstance(erreur, EngagementsOuvertsError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "message": "Ce membre a des engagements ouverts : soldez-les avant de désactiver.",
+                "engagements": [
+                    {"domaine": e.domaine, "reference": e.reference, "libelle": e.libelle}
+                    for e in erreur.engagements
                 ],
             },
         )
