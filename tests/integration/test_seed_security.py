@@ -43,7 +43,7 @@ def test_les_donnees_declarees_sont_coherentes() -> None:
     codes_permissions = {permission.code for permission in PERMISSIONS}
 
     assert len(ROLES) == 11
-    assert len(PERMISSIONS) == 34  # 18 Sécurité + 10 Tiers + 6 Compta (C0 plan + C1/C2 écritures)
+    assert len(PERMISSIONS) == 39  # 18 Sécurité + 10 Tiers + 6 Compta + 5 Épargne (E0/E2)
     assert set(MATRICE) == codes_roles
     for role_code, accordees in MATRICE.items():
         assert accordees <= codes_permissions, f"{role_code} cite une permission inconnue"
@@ -79,7 +79,7 @@ def test_le_seed_installe_les_roles_et_permissions(session: Session) -> None:
     nb_permissions = session.execute(text("SELECT count(*) FROM security.permissions")).scalar_one()
 
     assert nb_roles == 11
-    assert nb_permissions == 34
+    assert nb_permissions == 39
 
 
 def test_le_seed_est_idempotent(session: Session) -> None:
@@ -177,8 +177,12 @@ def test_une_permission_hors_matrice_est_revoquee(session: Session) -> None:
     rapport = executer_seed(session)
 
     assert rapport.revocations == 1
-    # Le droit hors matrice disparaît ; le caissier reconverge vers sa matrice (tiers.read.basic).
-    assert _codes_accordes(session, "CAISSIER") == {"tiers.read.basic"}
+    # Le droit hors matrice disparaît ; le caissier reconverge vers sa matrice.
+    assert _codes_accordes(session, "CAISSIER") == {
+        "tiers.read.basic",
+        "epargne.account.read",
+        "epargne.product.read",
+    }
 
 
 def test_les_habilitations_dun_role_personnalise_sont_preservees(session: Session) -> None:

@@ -396,9 +396,12 @@ def test_me_renvoie_l_identite_et_les_permissions(
     assert corps["last_name"] == utilisateur.last_name
     assert corps["first_name"] == utilisateur.first_name
     assert [r["code"] for r in corps["roles"]] == ["CAISSIER"]
-    # CAISSIER : aucune permission Sécurité, mais tiers.read.basic depuis T1c (identification
-    # au guichet, sans les données KYC). /me résout et renvoie ce que le front filtre.
-    assert corps["permissions"] == ["tiers.read.basic"]
+    # CAISSIER : aucune permission Sécurité, mais tiers.read.basic (identification au guichet,
+    # sans KYC) et la lecture épargne (il opérera les dépôts/retraits). /me renvoie la liste
+    # résolue (triée) que le front filtre.
+    assert corps["permissions"] == sorted(
+        ["epargne.account.read", "epargne.product.read", "tiers.read.basic"]
+    )
     assert corps["must_change_password"] is False
 
 

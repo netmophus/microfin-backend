@@ -17,6 +17,7 @@ from app.cli.seed_dev import (
     RoleManquantError,
     executer_seed_dev,
 )
+from app.cli.seed_epargne import executer_seed_produits
 from app.cli.seed_security import executer_seed
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -173,6 +174,20 @@ def seed_comptabilite() -> None:
     typer.echo("")
     typer.secho(f"  Journaux comptables en place : {nb}.", fg=typer.colors.GREEN, bold=True)
     typer.secho("  PROVISOIRES — à valider/compléter par le comptable.", fg=typer.colors.YELLOW)
+    typer.echo("")
+
+
+@app.command("seed-epargne")
+def seed_epargne() -> None:
+    """Installe les produits d'épargne standard (PROVISOIRES). Idempotente."""
+    with SessionLocal() as db:
+        nb = executer_seed_produits(db)
+        db.commit()
+    typer.echo("")
+    typer.secho(f"  Produits d'épargne en place : {nb}.", fg=typer.colors.GREEN, bold=True)
+    typer.secho(
+        "  PROVISOIRES — à valider/compléter par l'IMF (taux, règles).", fg=typer.colors.YELLOW
+    )
     typer.echo("")
 
 

@@ -28,6 +28,14 @@ from app.modules.comptabilite.models import (
 from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
+from app.modules.epargne.models import (
+    NumberingSequence as EpargneNumberingSequence,
+)
+from app.modules.epargne.models import (
+    Product,
+    SavingsAccount,
+    SavingsMovement,
+)
 from app.modules.parameters.models import (
     Agency,
     City,
@@ -110,6 +118,11 @@ TABLES_ATTENDUES = frozenset(
         "comptabilite.numbering_sequences",
         "comptabilite.journal_entries",
         "comptabilite.journal_lines",
+        # Épargne E0+E2 — produits, comptes, mouvements, numérotation (migration 0018).
+        "epargne.products",
+        "epargne.accounts",
+        "epargne.movements",
+        "epargne.numbering_sequences",
     }
 )
 
@@ -149,6 +162,10 @@ MODELES = [
     ComptaNumberingSequence,
     JournalEntry,
     JournalLine,
+    Product,
+    SavingsAccount,
+    SavingsMovement,
+    EpargneNumberingSequence,
 ]
 
 

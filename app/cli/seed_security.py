@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 34 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 39 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -208,6 +208,14 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("compta.ecriture.post", "compta", "Saisir un brouillon et valider une écriture"),
     Permission("compta.ecriture.reverse", "compta", "Contre-passer une écriture validée"),
     Permission("compta.exercice.manage", "compta", "Ouvrir/clôturer un exercice comptable"),
+    # --- Module Épargne (E0/E2). open = ouvrir un compte (membre actif) ; close = clôturer ;
+    # product.manage = gérer le référentiel des produits (config métier). Les opérations
+    # (dépôt/retrait) auront leur permission au bloc E3.
+    Permission("epargne.product.read", "epargne", "Consulter les produits d'épargne"),
+    Permission("epargne.product.manage", "epargne", "Gérer les produits d'épargne"),
+    Permission("epargne.account.read", "epargne", "Consulter les comptes d'épargne"),
+    Permission("epargne.account.open", "epargne", "Ouvrir un compte d'épargne (membre actif)"),
+    Permission("epargne.account.close", "epargne", "Clôturer un compte d'épargne"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -234,9 +242,22 @@ PERMISSIONS: tuple[Permission, ...] = (
 # une agence). PAS au Responsable d'agence : il est cloisonné à SON agence, c'est tout
 # l'intérêt du cloisonnement.
 MATRICE: dict[str, frozenset[str]] = {
-    "CAISSIER": frozenset({"tiers.read.basic"}),
+    # Le caissier opérera les dépôts/retraits (E3) : il doit voir les comptes et les produits.
+    "CAISSIER": frozenset(
+        {"tiers.read.basic", "epargne.account.read", "epargne.product.read"}
+    ),
+    # Le chargé de clientèle enrôle ET ouvre les comptes d'épargne des membres.
     "CHARGE_CLIENTELE": frozenset(
-        {"tiers.create", "tiers.read", "tiers.read.basic", "tiers.update", "tiers.suspend"}
+        {
+            "tiers.create",
+            "tiers.read",
+            "tiers.read.basic",
+            "tiers.update",
+            "tiers.suspend",
+            "epargne.account.open",
+            "epargne.account.read",
+            "epargne.product.read",
+        }
     ),
     "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
     "MEMBRE_COMITE_CREDIT": frozenset(),
@@ -250,6 +271,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.ecriture.post",
             "compta.ecriture.reverse",
             "compta.exercice.manage",
+            "epargne.account.read",
+            "epargne.product.read",
         }
     ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
@@ -272,6 +295,10 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.validate",
             "tiers.identity.verify",
             "tiers.read.deleted",
+            "epargne.account.open",
+            "epargne.account.close",
+            "epargne.account.read",
+            "epargne.product.read",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
@@ -286,6 +313,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read",
             "tiers.read.basic",
             "tiers.read.deleted",
+            "epargne.account.read",
             "perimetre.reseau",
         }
     ),
@@ -334,6 +362,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "roles.assign",
             "sessions.read",
             "sessions.revoke",
+            "epargne.product.read",
+            "epargne.product.manage",
             "perimetre.reseau",
         }
     ),
