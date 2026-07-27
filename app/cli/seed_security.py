@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 39 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 41 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -216,6 +216,9 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("epargne.account.read", "epargne", "Consulter les comptes d'épargne"),
     Permission("epargne.account.open", "epargne", "Ouvrir un compte d'épargne (membre actif)"),
     Permission("epargne.account.close", "epargne", "Clôturer un compte d'épargne"),
+    # Opérations de guichet (E3) : dépôt et retrait. Réservées au caissier (et au responsable).
+    Permission("epargne.operation.deposit", "epargne", "Enregistrer un dépôt au guichet"),
+    Permission("epargne.operation.withdraw", "epargne", "Enregistrer un retrait au guichet"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -242,9 +245,15 @@ PERMISSIONS: tuple[Permission, ...] = (
 # une agence). PAS au Responsable d'agence : il est cloisonné à SON agence, c'est tout
 # l'intérêt du cloisonnement.
 MATRICE: dict[str, frozenset[str]] = {
-    # Le caissier opérera les dépôts/retraits (E3) : il doit voir les comptes et les produits.
+    # Le caissier tient le guichet : dépôts et retraits (E3), et voit les comptes/produits.
     "CAISSIER": frozenset(
-        {"tiers.read.basic", "epargne.account.read", "epargne.product.read"}
+        {
+            "tiers.read.basic",
+            "epargne.account.read",
+            "epargne.product.read",
+            "epargne.operation.deposit",
+            "epargne.operation.withdraw",
+        }
     ),
     # Le chargé de clientèle enrôle ET ouvre les comptes d'épargne des membres.
     "CHARGE_CLIENTELE": frozenset(
@@ -299,6 +308,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.account.close",
             "epargne.account.read",
             "epargne.product.read",
+            "epargne.operation.deposit",
+            "epargne.operation.withdraw",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

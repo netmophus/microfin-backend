@@ -37,7 +37,13 @@ class Product(Base):
     currency: Mapped[str] = mapped_column(
         sa.CHAR(3), nullable=False, server_default=sa.text("'XOF'")
     )
+    # Solde minimum à garder pour maintenir le compte ouvert (plancher). Provisoire, défaut 0.
     min_balance: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
+    # De combien le solde peut passer sous zéro (découvert autorisé). Provisoire, défaut 0
+    # (l'épargne à vue standard ne descend pas sous zéro).
+    decouvert_autorise: Mapped[int] = mapped_column(
         sa.BigInteger, nullable=False, server_default=sa.text("0")
     )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.true())

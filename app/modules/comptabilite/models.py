@@ -171,6 +171,48 @@ class JournalEntry(Base):
         return f"<JournalEntry {self.entry_number or '(brouillon)'} {self.status}>"
 
 
+class EntrySchema(Base):
+    """Modèle d'écriture d'une opération métier (« epargne.depot »…). Donnée provisoire."""
+
+    __tablename__ = "entry_schemas"
+    __table_args__: tuple[Any, ...] = ({"schema": "comptabilite"},)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    code: Mapped[str] = mapped_column(sa.String(50), nullable=False, unique=True)
+    label: Mapped[str] = mapped_column(sa.String(150), nullable=False)
+    journal_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_JOURNAL))
+    is_provisional: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.true()
+    )
+    is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.true())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<EntrySchema {self.code}>"
+
+
+class EntrySchemaLine(Base):
+    """Une ligne du modèle : un rôle abstrait (CAISSE, EPARGNE…) et un sens (D/C)."""
+
+    __tablename__ = "entry_schema_lines"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("schema_id", "line_order", name="ordre_unique"),
+        sa.Index("ix_schema_lines_schema", "schema_id"),
+        {"schema": "comptabilite"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    schema_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.entry_schemas.id", ondelete="CASCADE"), nullable=False
+    )
+    line_order: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False)
+    role: Mapped[str] = mapped_column(sa.String(30), nullable=False)
+    side: Mapped[str] = mapped_column(sa.CHAR(1), nullable=False)
+
+
 class JournalLine(Base):
     """Une ligne d'écriture : un compte de saisie, un sens (D/C), un montant entier (XOF)."""
 

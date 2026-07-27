@@ -27,11 +27,38 @@
 | 5 | Distinction membre / client (comptes `xxx1` vs `xxx2`) — critère métier | ⚠️ À VALIDER |
 | 6 | Nombre de décimales des montants (XOF = 0 en présentation ; calcul d'intérêts ?) | ⚠️ À VALIDER |
 
-## Les schémas d'écriture (à définir en C3, paramétrables)
+## Les schémas d'écriture (E1, paramétrables — POSÉS, provisoires)
 
 Pour **chaque opération**, quels comptes sont débités / crédités. Le moteur (poser une écriture
-depuis un schéma) est du code ; **les comptes sont de la donnée**. Valeurs provisoires à définir
-et valider avant toute mise en production.
+depuis un schéma) est du code ; **les comptes sont de la donnée**. Les modèles sont désormais
+stockés en base (`comptabilite.entry_schemas` + `entry_schema_lines`), par **rôle** résolu à
+l'opération : `epargne.depot` = D **CAISSE** / C **EPARGNE** ; `epargne.retrait` = l'inverse. Tous
+**provisoires**, à valider avant mise en production.
+
+**La caisse (face argent)** : le rôle CAISSE se résout via `parameters.agencies.compte_caisse_id`
+— **un compte de caisse par agence** (provisoire : Siège → **5721** Caisses agences). C'est la face
+COMPTABLE seulement ; le vrai module Caisse (guichets, arrêtés, dénombrement, écarts) est reporté.
+
+**Collectif ↔ auxiliaire (loi de rapprochement)** : le rôle EPARGNE se résout via
+`epargne.products.compte_epargne_id` — le compte **général 3111**, qui porte le **total** de tous
+les membres. Le **détail par membre** vit dans l'auxiliaire (`epargne.accounts`). Invariant à
+contrôler (fonction `rapprocher`) : **Σ soldes épargne rattachés à 3111 == solde comptable de
+3111**. Un écart = fraude ou bug, à détecter avant l'inspecteur.
+
+Valeurs provisoires à définir et valider avant toute mise en production.
+
+### Paramètres d'opération par produit (E3, PROVISOIRES)
+
+Le plancher d'un retrait est **paramétrable par produit**, pas en dur. Disponible au retrait =
+`solde - solde_minimum + découvert_autorisé`.
+
+| Paramètre (`epargne.products`) | Rôle | Défaut | Statut |
+|--------------------------------|------|--------|--------|
+| `min_balance` | Solde minimum à garder pour maintenir le compte ouvert | 0 | ⚠️ À VALIDER (par produit) |
+| `decouvert_autorise` | De combien le solde peut passer sous zéro (comptes 3021/3022) | 0 | ⚠️ À VALIDER (par produit) |
+
+Épargne à vue standard : les deux à **0** (le solde ne descend pas sous zéro ; un découvert est du
+crédit, pas de l'épargne). L'expert dira quels produits ont droit à un découvert et à quel plafond.
 
 | Opération | Schéma provisoire (à valider) | Statut |
 |-----------|-------------------------------|--------|

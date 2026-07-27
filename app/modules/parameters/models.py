@@ -50,6 +50,11 @@ class Agency(Base):
     double_validation_kyc: Mapped[bool] = mapped_column(
         sa.Boolean(), nullable=False, server_default=sa.true()
     )
+    # Compte comptable de caisse de l'agence (5721), rattachement PROVISOIRE (migration 0020) : la
+    # FACE comptable de l'argent. Le vrai module Caisse (guichets, arrêtés, écarts) viendra dessus.
+    compte_caisse_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("security.users.id", use_alter=True), nullable=True

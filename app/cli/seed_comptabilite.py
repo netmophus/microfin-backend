@@ -56,6 +56,81 @@ def executer_seed_journaux(db: Session) -> int:
     return len(JOURNAUX)
 
 
+# --- Modèles d'écriture (pont comptable E1), PROVISOIRES ---------------------------------------
+@dataclass(frozen=True)
+class ModeleEcriture:
+    code: str
+    label: str
+    journal: str  # code du journal où poser la pièce
+    lignes: tuple[tuple[str, str], ...]  # (rôle, sens D/C), ordonnées
+
+
+# Dépôt : D CAISSE / C EPARGNE (la caisse entre, la dette envers le membre monte).
+# Retrait : l'inverse. Comptes exacts résolus au moment de l'opération (rôle -> compte).
+MODELES: tuple[ModeleEcriture, ...] = (
+    ModeleEcriture("epargne.depot", "Dépôt d'épargne", "CA", (("CAISSE", "D"), ("EPARGNE", "C"))),
+    ModeleEcriture(
+        "epargne.retrait", "Retrait d'épargne", "CA", (("EPARGNE", "D"), ("CAISSE", "C"))
+    ),
+)
+
+_UPSERT_SCHEMA = text(
+    """
+    INSERT INTO comptabilite.entry_schemas (code, label, journal_id, is_provisional)
+    VALUES (:code, :label, (SELECT id FROM comptabilite.journals WHERE code = :journal), TRUE)
+    ON CONFLICT (code) DO UPDATE SET
+        label      = EXCLUDED.label,
+        journal_id = EXCLUDED.journal_id,
+        updated_at = NOW()
+    RETURNING id
+    """
+)
+
+
+def executer_seed_schemas(db: Session) -> int:
+    """Installe/actualise les modèles d'écriture provisoires (dépôt, retrait). Ne committe pas."""
+    for modele in MODELES:
+        schema_id = db.execute(
+            _UPSERT_SCHEMA,
+            {"code": modele.code, "label": modele.label, "journal": modele.journal},
+        ).scalar_one()
+        # Réécrit les lignes du modèle (idempotent) : on repart d'un jeu propre.
+        db.execute(
+            text("DELETE FROM comptabilite.entry_schema_lines WHERE schema_id = :s"),
+            {"s": schema_id},
+        )
+        for ordre, (role, side) in enumerate(modele.lignes, start=1):
+            db.execute(
+                text(
+                    "INSERT INTO comptabilite.entry_schema_lines "
+                    "(schema_id, line_order, role, side) VALUES (:s, :o, :r, :side)"
+                ),
+                {"s": schema_id, "o": ordre, "r": role, "side": side},
+            )
+    return len(MODELES)
+
+
+def rattacher_caisse_agences(db: Session, numero: str = "5721") -> int:
+    """Rattache PROVISOIREMENT le compte de caisse `numero` aux agences qui n'en ont pas.
+
+    Ne remplace jamais un rattachement déjà posé (la vraie config caisse sera propre à l'IMF).
+    Renvoie le nombre d'agences nouvellement rattachées (0 si le compte n'existe pas).
+    """
+    return len(
+        db.execute(
+            text(
+                "UPDATE parameters.agencies SET compte_caisse_id = "
+                "(SELECT id FROM comptabilite.accounts WHERE account_number = :n), "
+                "updated_at = NOW() "
+                "WHERE compte_caisse_id IS NULL "
+                "AND EXISTS (SELECT 1 FROM comptabilite.accounts WHERE account_number = :n) "
+                "RETURNING id"
+            ),
+            {"n": numero},
+        ).fetchall()
+    )
+
+
 class ExerciceChevauchantError(Exception):
     """Un exercice existant recouvre déjà la période demandée."""
 

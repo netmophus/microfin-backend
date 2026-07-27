@@ -20,6 +20,8 @@ from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
 from app.modules.comptabilite.models import (
     Account,
+    EntrySchema,
+    EntrySchemaLine,
     Exercice,
     Journal,
     JournalEntry,
@@ -118,6 +120,9 @@ TABLES_ATTENDUES = frozenset(
         "comptabilite.numbering_sequences",
         "comptabilite.journal_entries",
         "comptabilite.journal_lines",
+        # Épargne E1 — pont comptable : modèles d'écriture (migration 0020).
+        "comptabilite.entry_schemas",
+        "comptabilite.entry_schema_lines",
         # Épargne E0+E2 — produits, comptes, mouvements, numérotation (migration 0018).
         "epargne.products",
         "epargne.accounts",
@@ -162,6 +167,8 @@ MODELES = [
     ComptaNumberingSequence,
     JournalEntry,
     JournalLine,
+    EntrySchema,
+    EntrySchemaLine,
     Product,
     SavingsAccount,
     SavingsMovement,

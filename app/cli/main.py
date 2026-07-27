@@ -10,7 +10,12 @@ from app.cli.creer_admin import (
     RoleIntrouvableError,
     creer_admin,
 )
-from app.cli.seed_comptabilite import executer_seed_journaux, ouvrir_exercice
+from app.cli.seed_comptabilite import (
+    executer_seed_journaux,
+    executer_seed_schemas,
+    ouvrir_exercice,
+    rattacher_caisse_agences,
+)
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
     AgenceManquanteError,
@@ -167,12 +172,19 @@ def import_plan_comptable(
 
 @app.command("seed-comptabilite")
 def seed_comptabilite() -> None:
-    """Installe les journaux standard (PROVISOIRES). Idempotente. À jouer après seed-security."""
+    """Installe journaux + modèles d'écriture + rattachement caisse (PROVISOIRES). Idempotente."""
     with SessionLocal() as db:
-        nb = executer_seed_journaux(db)
+        nb_journaux = executer_seed_journaux(db)
+        nb_schemas = executer_seed_schemas(db)
+        nb_caisses = rattacher_caisse_agences(db)
         db.commit()
     typer.echo("")
-    typer.secho(f"  Journaux comptables en place : {nb}.", fg=typer.colors.GREEN, bold=True)
+    typer.secho(
+        f"  Comptabilité amorcée : {nb_journaux} journaux, {nb_schemas} modèles d'écriture, "
+        f"{nb_caisses} agence(s) rattachée(s) à une caisse.",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
     typer.secho("  PROVISOIRES — à valider/compléter par le comptable.", fg=typer.colors.YELLOW)
     typer.echo("")
 
