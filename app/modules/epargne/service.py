@@ -20,7 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.epargne import numerotation
-from app.modules.epargne.models import SavingsAccount
+from app.modules.epargne.models import SavingsAccount, SavingsMovement
+from app.modules.epargne.operations import TYPE_CLOTURE, poser_ecriture_operation
 
 
 class OuvertureError(Exception):
@@ -39,8 +40,8 @@ class FermetureError(Exception):
     """Base des refus de fermeture de compte."""
 
 
-class CompteNonSoldeError(FermetureError):
-    """Le compte porte encore un solde : on ne ferme pas un compte non vidé."""
+class CompteDebiteurError(FermetureError):
+    """Le compte est débiteur (solde < 0) : on régularise avant de fermer, pas en fermant."""
 
 
 class CompteDejaClotureError(FermetureError):
@@ -146,6 +147,24 @@ def verifier_coherence_solde(db: Session, account_id: uuid.UUID) -> CoherenceSol
     )
 
 
+def _mouvement_restitution(
+    db: Session, compte: SavingsAccount, montant: int, piece_id: uuid.UUID, par: uuid.UUID | None
+) -> None:
+    """Écrit le mouvement de restitution de clôture, relié à sa pièce (helper isolé, testable)."""
+    db.add(
+        SavingsMovement(
+            account_id=compte.id,
+            sens="debit",
+            amount=montant,
+            balance_after=0,
+            operation_type="cloture",
+            journal_entry_id=piece_id,
+            created_by=par,
+        )
+    )
+    db.flush()
+
+
 def cloturer_compte(
     db: Session,
     compte: SavingsAccount,
@@ -154,20 +173,27 @@ def cloturer_compte(
     motif: str | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> SavingsAccount:
-    """Ferme un compte SOLDÉ. Refuse s'il reste un solde. La fermeture est distincte du solde 0 :
-    un compte vidé mais non fermé reste OUVERT (et bloque la désactivation du membre).
-
-    On vérifie le solde par la VÉRITÉ (somme des mouvements), pas seulement le cache.
-    """
+    """Ferme un compte (cœur, sur un compte déjà chargé). Acte comptable, TOUT dans la transaction
+    de l'appelant :
+      - solde > 0 : RESTITUTION (retrait final, pièce D 3111 / C 5721) + mouvement 'cloture' ;
+      - solde = 0 : fermeture directe, aucune écriture ;
+      - solde < 0 : REFUS (débiteur, on ne ferme pas sur une créance de l'IMF).
+    Le passage en 'cloture' est DÉFINITIF (trigger 0022 : non réouvrable)."""
     if compte.status == "cloture":
         raise CompteDejaClotureError(f"compte {compte.account_number} déjà clôturé")
-
-    coherence = verifier_coherence_solde(db, compte.id)
-    if coherence.calcule != 0:
-        raise CompteNonSoldeError(
-            f"compte {compte.account_number} : solde de {coherence.calcule} F — "
-            "videz le compte avant de le fermer"
+    if compte.balance < 0:
+        raise CompteDebiteurError(
+            f"compte {compte.account_number} débiteur ({compte.balance} F) : régularisez avant "
+            "de fermer"
         )
+
+    if compte.balance > 0:
+        # Restitution en espèces : pièce de clôture (peut lever si rattachement manquant).
+        piece = poser_ecriture_operation(
+            db, compte, TYPE_CLOTURE, compte.balance, par, contexte=contexte
+        )
+        _mouvement_restitution(db, compte, compte.balance, piece.id, par)
+        compte.balance = 0
 
     compte.status = "cloture"
     compte.closed_by = par

@@ -72,6 +72,12 @@ MODELES: tuple[ModeleEcriture, ...] = (
     ModeleEcriture(
         "epargne.retrait", "Retrait d'épargne", "CA", (("EPARGNE", "D"), ("CAISSE", "C"))
     ),
+    # Clôture : mêmes D/C qu'un retrait, mais ÉTIQUETÉE clôture (restitution de fin de vie ≠
+    # retrait courant) — traçabilité fine en audit.
+    ModeleEcriture(
+        "epargne.cloture", "Clôture d'épargne (restitution)", "CA",
+        (("EPARGNE", "D"), ("CAISSE", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(

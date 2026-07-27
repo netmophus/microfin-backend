@@ -25,6 +25,7 @@ from app.modules.parameters.models import Agency
 # Codes des modèles d'écriture des opérations d'épargne (seed comptabilite).
 TYPE_DEPOT = "epargne.depot"
 TYPE_RETRAIT = "epargne.retrait"
+TYPE_CLOTURE = "epargne.cloture"
 
 
 class RattachementManquantError(Exception):

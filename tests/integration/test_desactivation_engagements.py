@@ -171,25 +171,7 @@ def test_tous_les_comptes_ouverts_sont_listes_dun_coup(db: Session) -> None:
     assert references == {c1.account_number, c2.account_number}
 
 
-# --- La fermeture (remontée d'E5, prérequis du blocage) -----------------------------
-
-
-def test_fermeture_refusee_si_solde_non_nul(db: Session) -> None:
-    agency_id, product_id, tier_id = _cadre(db, "E")
-    compte = _ouvrir(db, agency_id, product_id, tier_id)
-    _crediter(db, compte.id, 500)
-
-    with pytest.raises(epargne.CompteNonSoldeError):
-        epargne.cloturer_compte(db, compte, par=None)
-
-
-def test_fermeture_reussit_si_solde_nul(db: Session) -> None:
-    agency_id, product_id, tier_id = _cadre(db, "F")
-    compte = _ouvrir(db, agency_id, product_id, tier_id)
-
-    epargne.cloturer_compte(db, compte, par=None)
-
-    assert compte.status == "cloture"
+# (La fermeture est testée en détail dans test_fermeture.py — restitution, définitif, etc.)
 
 
 # --- Non-inertie : le vérificateur est bien branché à l'app -------------------------

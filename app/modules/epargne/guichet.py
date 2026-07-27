@@ -31,6 +31,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.epargne import service
 from app.modules.epargne.models import Product, SavingsAccount, SavingsMovement
 from app.modules.epargne.operations import TYPE_DEPOT, TYPE_RETRAIT, poser_ecriture_operation
 from app.modules.security.autorisation import UtilisateurCourant
@@ -234,3 +235,20 @@ def retirer(
         code_operation=TYPE_RETRAIT, sens="debit", signe=-1,
         action_audit=ActionsAudit.RETRAIT, contexte=contexte,
     )
+
+
+def fermer_compte(
+    db: Session,
+    courant: UtilisateurCourant,
+    compte_id: uuid.UUID,
+    *,
+    motif: str | None = None,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> SavingsAccount:
+    """Ferme un compte — acte de GESTION (responsable), pas de guichet. Réutilise le verrou et le
+    périmètre. La restitution + l'écriture de clôture + le passage en 'cloture' se font dans UNE
+    transaction (cf. service.cloturer_compte). Un compte hors périmètre -> 404."""
+    compte = _charger_compte_verrou(db, courant, compte_id)
+    service.cloturer_compte(db, compte, courant.user_id, motif=motif, contexte=contexte)
+    db.commit()
+    return compte
