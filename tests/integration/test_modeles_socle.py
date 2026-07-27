@@ -18,7 +18,16 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
-from app.modules.comptabilite.models import Account
+from app.modules.comptabilite.models import (
+    Account,
+    Exercice,
+    Journal,
+    JournalEntry,
+    JournalLine,
+)
+from app.modules.comptabilite.models import (
+    NumberingSequence as ComptaNumberingSequence,
+)
 from app.modules.parameters.models import (
     Agency,
     City,
@@ -94,6 +103,13 @@ TABLES_ATTENDUES = frozenset(
         "tiers.risk_assessments",
         # Socle comptable C0 — plan de comptes (migration 0015).
         "comptabilite.accounts",
+        # Socle comptable C1 — cadre : exercices + journaux (migration 0016).
+        "comptabilite.exercices",
+        "comptabilite.journals",
+        # Socle comptable C2 — écritures : pièces + lignes + numérotation (migration 0017).
+        "comptabilite.numbering_sequences",
+        "comptabilite.journal_entries",
+        "comptabilite.journal_lines",
     }
 )
 
@@ -128,6 +144,11 @@ MODELES = [
     KycRiskThreshold,
     RiskAssessment,
     Account,
+    Exercice,
+    Journal,
+    ComptaNumberingSequence,
+    JournalEntry,
+    JournalLine,
 ]
 
 

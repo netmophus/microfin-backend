@@ -10,6 +10,7 @@ from app.cli.creer_admin import (
     RoleIntrouvableError,
     creer_admin,
 )
+from app.cli.seed_comptabilite import executer_seed_journaux, ouvrir_exercice
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
     AgenceManquanteError,
@@ -160,6 +161,57 @@ def import_plan_comptable(
     )
     if dry_run:
         typer.echo("  Simulation — rien n'a été écrit.")
+    typer.echo("")
+
+
+@app.command("seed-comptabilite")
+def seed_comptabilite() -> None:
+    """Installe les journaux standard (PROVISOIRES). Idempotente. À jouer après seed-security."""
+    with SessionLocal() as db:
+        nb = executer_seed_journaux(db)
+        db.commit()
+    typer.echo("")
+    typer.secho(f"  Journaux comptables en place : {nb}.", fg=typer.colors.GREEN, bold=True)
+    typer.secho("  PROVISOIRES — à valider/compléter par le comptable.", fg=typer.colors.YELLOW)
+    typer.echo("")
+
+
+@app.command("ouvrir-exercice")
+def commande_ouvrir_exercice(
+    code: Annotated[str, typer.Option(help="Code de l'exercice, ex. « 2026 ».")],
+    debut: Annotated[str, typer.Option(help="Date de début (AAAA-MM-JJ).")],
+    fin: Annotated[str, typer.Option(help="Date de fin (AAAA-MM-JJ).")],
+    label: Annotated[str, typer.Option(help="Libellé.")] = "",
+) -> None:
+    """Ouvre un exercice comptable. Refuse un chevauchement avec un exercice existant (base)."""
+    from datetime import date
+
+    from sqlalchemy.exc import IntegrityError
+
+    with SessionLocal() as db:
+        try:
+            exercice = ouvrir_exercice(
+                db,
+                code=code,
+                label=label or f"Exercice {code}",
+                date_debut=date.fromisoformat(debut),
+                date_fin=date.fromisoformat(fin),
+            )
+            db.commit()
+        except IntegrityError as erreur:
+            db.rollback()
+            detail = "chevauchement avec un exercice existant" if "chevauch" in str(
+                erreur
+            ) else "code déjà utilisé, bornes incohérentes ou chevauchement"
+            typer.secho(f"Refus : {detail}.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from None
+
+    typer.echo("")
+    typer.secho(
+        f"  Exercice {exercice.code} ouvert ({exercice.date_debut} -> {exercice.date_fin}).",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
     typer.echo("")
 
 

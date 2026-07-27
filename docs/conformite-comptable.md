@@ -45,10 +45,24 @@ et valider avant toute mise en production.
 
 ## Journaux et exercice (C1)
 
+Journaux livrés (seed `seed-comptabilite`), **tous provisoires** (`journals.is_provisional`) —
+à valider/compléter par le comptable : **CA** (caisse), **BQ** (banque), **OD** (opérations
+diverses), **AN** (à-nouveaux). L'exercice est ouvert à l'installation (`ouvrir-exercice`), la
+clôture est reportée.
+
 | # | Valeur | Statut |
 |---|--------|--------|
-| 7 | Liste et codification des journaux (caisse/guichet, opérations diverses…) | ⚠️ À VALIDER |
+| 7 | Liste et codification des journaux (CA/BQ/OD/AN livrés) | ⚠️ À VALIDER |
 | 8 | Définition de l'exercice (dates) ; règles de clôture (reportées) | ⚠️ À VALIDER |
+
+## Les écritures (C2) — règles imposées par le logiciel
+
+- Une pièce validée est **équilibrée** (Σ débit = Σ crédit au niveau pièce), a **≥ 2 lignes**,
+  et n'écrit que sur des **comptes de saisie**. Garanti par le service ET par la base (trigger
+  différé au commit + trigger immédiat sur le compte de saisie).
+- Montants en **francs CFA entiers** (BIGINT), jamais de flottant.
+- Une pièce validée est **immuable** ; correction = **contre-passation** uniquement.
+- Numérotation **atomique, sans trou**, par journal et par exercice (ex. `CA-2026-000001`).
 
 _Mettre à jour ce tableau à chaque décision de l'expert : remplacer le défaut provisoire par la
 valeur validée, passer le statut à ✅ VALIDÉ (date + nom), et lever `is_provisional` en base._

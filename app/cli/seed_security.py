@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 30 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 34 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -201,6 +201,13 @@ PERMISSIONS: tuple[Permission, ...] = (
     # (dans les limites des garde-fous : jamais un compte système, jamais un compte mouvementé).
     Permission("compta.plan.read", "compta", "Consulter le plan de comptes"),
     Permission("compta.plan.manage", "compta", "Gérer le plan de comptes (import, création, MAJ)"),
+    # --- Écritures + cadre (C1/C2). post = créer un brouillon et le valider ; reverse =
+    # contre-passer une pièce validée (la seule correction possible) ; exercice.manage =
+    # ouvrir/clôturer un exercice (clôture reportée).
+    Permission("compta.ecriture.read", "compta", "Consulter les écritures et journaux"),
+    Permission("compta.ecriture.post", "compta", "Saisir un brouillon et valider une écriture"),
+    Permission("compta.ecriture.reverse", "compta", "Contre-passer une écriture validée"),
+    Permission("compta.exercice.manage", "compta", "Ouvrir/clôturer un exercice comptable"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -233,9 +240,18 @@ MATRICE: dict[str, frozenset[str]] = {
     ),
     "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
     "MEMBRE_COMITE_CREDIT": frozenset(),
-    # Le comptable tient le plan de comptes : le consulter et le gérer (import initial + gestion
-    # courante). Les autres droits compta (écritures, journaux, états) arriveront avec C1/C2.
-    "COMPTABLE": frozenset({"compta.plan.read", "compta.plan.manage"}),
+    # Le comptable tient le plan de comptes ET la comptabilité : plan, écritures (saisie +
+    # validation + contre-passation) et exercices. Les états/balance/clôture viendront plus tard.
+    "COMPTABLE": frozenset(
+        {
+            "compta.plan.read",
+            "compta.plan.manage",
+            "compta.ecriture.read",
+            "compta.ecriture.post",
+            "compta.ecriture.reverse",
+            "compta.exercice.manage",
+        }
+    ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
     # cela permettrait d'entrer dans le compte d'un caissier et d'agir sous son nom.
     # PAS de perimetre.reseau : cloisonné à son agence. Il supervise l'enrôlement, donc
