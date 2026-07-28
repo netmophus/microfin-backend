@@ -30,14 +30,21 @@ from app.modules.epargne.guichet import (
     fermer_compte,
     retirer,
 )
+from app.modules.epargne.interets import previsualiser_interets, verser_interets
+from app.modules.epargne.rapprochement import rapprocher_tout
 from app.modules.epargne.schemas import (
+    ApercuInterets,
+    ApercuLigneInterets,
     CompteEpargneDetail,
     CompteEpargneResume,
     CompteGuichet,
+    DemandeInterets,
+    LigneRapprochement,
     MouvementResume,
     OperationGuichet,
     OuvertureCompte,
     ProduitEpargne,
+    RapportInterets,
     ResultatOperation,
 )
 from app.modules.epargne.service import (
@@ -266,6 +273,92 @@ def fermer_compte_endpoint(
         p for p in consultation.lister_produits(db) if p.id == compte.product_id
     )
     return _resume(compte, produit)
+
+
+# --- Intérêts (F4) : prévisualiser, puis verser. Acte d'INSTITUTION, réservé à la direction ----
+
+
+@router.post("/epargne/interets/apercu", response_model=ApercuInterets)
+def previsualiser_interets_endpoint(
+    corps: DemandeInterets,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.interet.executer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuInterets:
+    """Prévisualisation obligatoire : CALCULE sans rien verser (dry-run). Renvoie le total ET un
+    échantillon détaillé (taux, méthode, base, montant par compte) pour vérifier « ça a l'air
+    juste » avant de créer de l'argent. Dit si la période est déjà (partiellement) versée."""
+    apercu = previsualiser_interets(
+        db, periode=corps.periode.strip(), debut=corps.debut, fin=corps.fin
+    )
+    return ApercuInterets(
+        periode=apercu.periode,
+        debut=apercu.debut,
+        fin=apercu.fin,
+        jours=apercu.jours,
+        comptes_actifs=apercu.comptes_actifs,
+        comptes_taux_zero=apercu.comptes_taux_zero,
+        comptes_a_crediter=apercu.comptes_a_crediter,
+        total=apercu.total,
+        deja_traites=apercu.deja_traites,
+        deja_verse_le=apercu.deja_verse_le,
+        echantillon=[
+            ApercuLigneInterets(
+                account_number=ligne.account_number,
+                produit=ligne.produit,
+                taux_bp=ligne.taux_bp,
+                methode=ligne.methode,
+                base_solde=ligne.base_solde,
+                montant=ligne.montant,
+            )
+            for ligne in apercu.echantillon
+        ],
+    )
+
+
+@router.post("/epargne/interets", response_model=RapportInterets)
+def verser_interets_endpoint(
+    corps: DemandeInterets,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.interet.executer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RapportInterets:
+    """Versement effectif : crédite les comptes, pose les écritures (D 603 / C 3111). Idempotent —
+    une période déjà versée ressort en `ignores`, l'écran le dira (« déjà versés »). Le moteur
+    committe compte par compte."""
+    rapport = verser_interets(
+        db,
+        periode=corps.periode.strip(),
+        debut=corps.debut,
+        fin=corps.fin,
+        par=courant.user_id,
+        contexte=_contexte(request),
+    )
+    return RapportInterets(
+        traites=rapport.traites,
+        credites=rapport.credites,
+        ignores=rapport.ignores,
+        total=rapport.total,
+    )
+
+
+@router.get("/epargne/rapprochement", response_model=list[LigneRapprochement])
+def rapprochement_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.rapprochement.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[LigneRapprochement]:
+    """Vue de contrôle (auditeur/direction) : pour chaque compte collectif, Σ des soldes d'épargne
+    (auxiliaire) face au solde comptable (général). Concordant, ou écart signalé avec le montant.
+    Vue RÉSEAU (l'invariant porte sur tout le collectif), non cloisonnée à une agence."""
+    return [
+        LigneRapprochement(
+            compte_general=r.compte_general,
+            auxiliaire=r.auxiliaire,
+            general=r.general,
+            concordant=r.concordant,
+            ecart=r.ecart,
+        )
+        for r in rapprocher_tout(db)
+    ]
 
 
 @router.post("/epargne/comptes/{compte_id}/retrait", response_model=ResultatOperation)

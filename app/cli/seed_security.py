@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 41 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 43 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -219,6 +219,16 @@ PERMISSIONS: tuple[Permission, ...] = (
     # Opérations de guichet (E3) : dépôt et retrait. Réservées au caissier (et au responsable).
     Permission("epargne.operation.deposit", "epargne", "Enregistrer un dépôt au guichet"),
     Permission("epargne.operation.withdraw", "epargne", "Enregistrer un retrait au guichet"),
+    # Intérêts (F4). executer = lancer le versement des intérêts d'une période. Acte
+    # d'INSTITUTION (le taux, le moment, la périodicité engagent toute l'IMF), pas une opération
+    # d'agence : réservé à la direction, jamais au responsable d'agence cloisonné — sinon chaque
+    # agence verserait quand elle veut, avec des incohérences comptables et un risque réglementaire.
+    Permission("epargne.interet.executer", "epargne", "Verser les intérêts d'une période"),
+    # rapprochement.read = vue de contrôle Σ soldes d'épargne (auxiliaire) vs solde comptable
+    # (général) du compte collectif. Acte de CONTRÔLE, réservé à l'audit/la direction/le comptable.
+    Permission(
+        "epargne.rapprochement.read", "epargne", "Voir le rapprochement épargne/comptabilité"
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -282,6 +292,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.exercice.manage",
             "epargne.account.read",
             "epargne.product.read",
+            "epargne.rapprochement.read",
         }
     ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
@@ -325,6 +336,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read.basic",
             "tiers.read.deleted",
             "epargne.account.read",
+            "epargne.rapprochement.read",
             "perimetre.reseau",
         }
     ),
@@ -356,6 +368,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read",
             "tiers.read.basic",
             "tiers.read.deleted",
+            "epargne.interet.executer",
+            "epargne.rapprochement.read",
             "perimetre.reseau",
         }
     ),

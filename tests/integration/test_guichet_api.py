@@ -260,3 +260,107 @@ def test_fermeture_sans_permission_403(client: TestClient, db: Session) -> None:
 
     reponse = client.post(f"/epargne/comptes/{compte.id}/fermeture", headers=caissier)
     assert reponse.status_code == 403
+
+
+# --- Intérêts (F4a) : prévisualisation détaillée, versement, « déjà versé », rapprochement ------
+
+
+def _compte_remunere(db: Session, agence: Agency) -> SavingsAccount:
+    """Un compte sur un produit rémunéré à 10 % l'an (base 365) : un dépôt gardé toute l'année
+    produit exactement 10 % — de quoi vérifier le détail de la prévisualisation."""
+    produit = Product(
+        code=f"PR{uuid.uuid4().hex[:4]}", name="Épargne rémunérée", type="a_vue",
+        compte_epargne_id=_cid(db, "3111"), compte_charge_interet_id=_cid(db, "603"),
+        taux_bp=1000, base_jours=365, methode_calcul_solde="fin_periode",
+    )
+    db.add(produit)
+    db.flush()
+    tier_id = _membre_nomme(db, agence, "Diallo", "Aminata")
+    return service.ouvrir_compte(
+        db, tier_id=tier_id, product_id=produit.id, agency_id=agence.id, par=None
+    )
+
+
+def test_apercu_interets_montre_le_total_et_le_detail(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-I1")
+    compte = _compte_remunere(db, agence)
+    caissier = _entete(db, agence, "CAISSIER")
+    client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 100000}, headers=caissier)
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+
+    reponse = client.post(
+        "/epargne/interets/apercu",
+        json={"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"},
+        headers=direction,
+    )
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["total"] >= 10000
+    # DÉTAIL par compte : le taux appliqué est visible, pas seulement le total (erreur de taux
+    # détectable AVANT de créer de l'argent).
+    mien = next(
+        x for x in corps["echantillon"] if x["account_number"] == compte.account_number
+    )
+    assert mien["montant"] == 10000
+    assert mien["taux_bp"] == 1000
+    assert mien["methode"] == "fin_periode"
+
+    # DRY-RUN : le solde n'a pas bougé (aucun versement).
+    db.refresh(compte)
+    assert compte.balance == 100000
+
+
+def test_versement_puis_apercu_dit_deja_verse(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-I2")
+    compte = _compte_remunere(db, agence)
+    caissier = _entete(db, agence, "CAISSIER")
+    client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 100000}, headers=caissier)
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+    bornes = {"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"}
+
+    versement = client.post("/epargne/interets", json=bornes, headers=direction)
+    assert versement.status_code == 200
+    assert versement.json()["credites"] >= 1
+
+    # Relance en aperçu : la période est déjà versée -> le compte n'est plus à créditer, et on
+    # sait QUAND (pas d'échec silencieux).
+    apercu = client.post("/epargne/interets/apercu", json=bornes, headers=direction)
+    corps = apercu.json()
+    assert not any(x["account_number"] == compte.account_number for x in corps["echantillon"])
+    assert corps["deja_traites"] >= 1
+    assert corps["deja_verse_le"] is not None
+
+
+def test_interets_reserves_a_la_direction_403(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-I3")
+    _compte_remunere(db, agence)
+    # Le responsable d'agence NE verse PAS les intérêts : c'est un acte d'institution.
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")
+    bornes = {"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"}
+
+    assert client.post("/epargne/interets/apercu", json=bornes, headers=resp).status_code == 403
+    assert client.post("/epargne/interets", json=bornes, headers=resp).status_code == 403
+
+
+def test_rapprochement_concordant_apres_depot(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-R1")
+    compte = _compte(db, agence)
+    caissier = _entete(db, agence, "CAISSIER")
+    client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 40000}, headers=caissier)
+    auditeur = _entete(db, agence, "AUDITEUR_INTERNE")
+
+    reponse = client.get("/epargne/rapprochement", headers=auditeur)
+    assert reponse.status_code == 200
+    ligne = next(x for x in reponse.json() if x["compte_general"] == "3111")
+    # Σ soldes d'épargne == solde comptable de 3111 : concordant, écart nul.
+    assert ligne["concordant"] is True
+    assert ligne["ecart"] == 0
+
+
+def test_rapprochement_sans_permission_403(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-R2")
+    # Le caissier opère au guichet mais ne CONTRÔLE pas le rapprochement.
+    caissier = _entete(db, agence, "CAISSIER")
+
+    reponse = client.get("/epargne/rapprochement", headers=caissier)
+    assert reponse.status_code == 403

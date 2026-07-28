@@ -21,8 +21,8 @@ clôture) ; un membre SUSPENDU est crédité normalement (c'est son argent).
 """
 
 import uuid
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -46,6 +46,36 @@ class RapportInterets:
     credites: int = 0  # comptes ayant reçu un intérêt > 0
     ignores: int = 0  # comptes déjà traités pour la période (idempotence)
     total: int = 0  # total des intérêts versés (XOF)
+
+
+@dataclass(frozen=True)
+class ApercuLigne:
+    """Un compte de l'échantillon de prévisualisation : de quoi vérifier « ça a l'air juste »."""
+
+    account_number: str
+    produit: str
+    taux_bp: int
+    methode: str
+    base_solde: int
+    montant: int
+
+
+@dataclass
+class ApercuInterets:
+    """Prévisualisation d'un versement (dry-run) : rien n'est écrit. On MONTRE avant de créer
+    de l'argent — total ET détail (taux, méthode, période, échantillon par compte)."""
+
+    periode: str
+    debut: date
+    fin: date
+    jours: int
+    comptes_actifs: int = 0  # comptes actifs examinés (diagnostic : « aucun compte » possible)
+    comptes_taux_zero: int = 0  # parmi eux, ceux dont le produit est à taux 0 (barème non fixé)
+    comptes_a_crediter: int = 0
+    total: int = 0
+    deja_traites: int = 0
+    deja_verse_le: datetime | None = None  # si la période a déjà été versée, quand
+    echantillon: list[ApercuLigne] = field(default_factory=list)
 
 
 # --- Le calcul, PUR (aucune base de données) ----------------------------------------
@@ -223,6 +253,77 @@ def _verser_un(
     )
     db.flush()
     return montant
+
+
+def previsualiser_interets(
+    db: Session,
+    *,
+    periode: str,
+    debut: date,
+    fin: date,
+    taille_echantillon: int = 12,
+) -> ApercuInterets:
+    """Prévisualisation (dry-run) : CALCULE ce qui SERAIT versé, sans RIEN écrire.
+
+    On MONTRE avant de créer de l'argent sur des milliers de comptes. En plus du total, on rend un
+    ÉCHANTILLON détaillé (taux, méthode, base, montant par compte) : un responsable financier doit
+    pouvoir vérifier « ça a l'air juste » — une erreur de taux se voit dans le détail, pas dans un
+    total global. Lecture seule : aucun flush, aucun commit, aucune écriture comptable.
+
+    Anti-double : les comptes DÉJÀ traités pour la période sont comptés à part (`deja_traites`,
+    `deja_verse_le`) et EXCLUS du total à verser — l'aperçu ne montre que ce qui reste à faire.
+    """
+    ids = list(
+        db.execute(
+            select(SavingsAccount.id).where(SavingsAccount.status == "actif")
+        ).scalars()
+    )
+    jours = (fin - debut).days + 1
+    apercu = ApercuInterets(
+        periode=periode, debut=debut, fin=fin, jours=jours, comptes_actifs=len(ids)
+    )
+    for account_id in ids:
+        deja = db.execute(
+            select(InteretCalcul.computed_at).where(
+                InteretCalcul.account_id == account_id, InteretCalcul.periode == periode
+            )
+        ).scalar_one_or_none()
+        if deja is not None:
+            apercu.deja_traites += 1
+            if apercu.deja_verse_le is None or deja < apercu.deja_verse_le:
+                apercu.deja_verse_le = deja
+            continue
+
+        compte = db.get(SavingsAccount, account_id)
+        assert compte is not None
+        produit = db.get(Product, compte.product_id)
+        assert produit is not None
+        if produit.taux_bp == 0:
+            apercu.comptes_taux_zero += 1  # diagnostic : barème non encore fixé
+        solde_initial, points = _trajectoire(db, account_id, debut, fin)
+        base_solde = calculer_base_solde(
+            produit.methode_calcul_solde, solde_initial, points, debut, fin
+        )
+        montant = 0
+        if base_solde >= produit.solde_minimum_remunere:
+            montant = calculer_montant(
+                base_solde, produit.taux_bp, jours, produit.base_jours, produit.regle_arrondi
+            )
+        if montant > 0:
+            apercu.comptes_a_crediter += 1
+            apercu.total += montant
+            if len(apercu.echantillon) < taille_echantillon:
+                apercu.echantillon.append(
+                    ApercuLigne(
+                        account_number=compte.account_number,
+                        produit=produit.name,
+                        taux_bp=produit.taux_bp,
+                        methode=produit.methode_calcul_solde,
+                        base_solde=base_solde,
+                        montant=montant,
+                    )
+                )
+    return apercu
 
 
 def verser_interets(

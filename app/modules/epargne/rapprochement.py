@@ -73,3 +73,21 @@ def rapprocher(db: Session, compte_general_id: uuid.UUID) -> Rapprochement:
         concordant=(auxiliaire == general),
         ecart=int(auxiliaire) - int(general),
     )
+
+
+def rapprocher_tout(db: Session) -> list[Rapprochement]:
+    """Rapproche CHAQUE compte collectif rattaché à un produit d'épargne (3111, 3121, 3131…).
+
+    Un contrôleur veut la vue d'ensemble, pas un compte à la fois : on liste les comptes généraux
+    DISTINCTS pointés par les produits et on rapproche chacun. Trié par numéro pour une lecture
+    stable. Un produit sans rattachement (compte_epargne_id NULL, provisoire) n'a pas de général à
+    rapprocher : il est ignoré ici.
+    """
+    ids = db.execute(
+        text(
+            "SELECT DISTINCT compte_epargne_id FROM epargne.products "
+            "WHERE compte_epargne_id IS NOT NULL"
+        )
+    ).scalars()
+    resultats = [rapprocher(db, compte_id) for compte_id in ids]
+    return sorted(resultats, key=lambda r: r.compte_general)

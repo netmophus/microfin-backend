@@ -7,7 +7,7 @@ encore validés) pour l'afficher à l'écran.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -77,3 +77,64 @@ class ResultatOperation(BaseModel):
     account_number: str
     nouveau_solde: int
     entry_number: str | None
+
+
+# --- Intérêts (F4) : prévisualisation obligatoire, puis versement -------------------
+
+
+class DemandeInterets(BaseModel):
+    """Corps d'une prévisualisation ou d'un versement d'intérêts : la période et ses bornes.
+
+    `periode` est le libellé qui verrouille l'anti-double-versement (ex. « 2026-S1 ») : deux
+    versements sur la même période, même clé -> refusés en base. `debut`/`fin` bornent le calcul.
+    """
+
+    periode: str
+    debut: date
+    fin: date
+
+
+class ApercuLigneInterets(BaseModel):
+    """Un compte de l'échantillon : de quoi vérifier « ça a l'air juste » avant de lancer."""
+
+    account_number: str
+    produit: str
+    taux_bp: int  # points de base (350 = 3,5 %) ; l'écran l'affiche en %
+    methode: str  # min_periode | moyen_quotidien | fin_periode
+    base_solde: int
+    montant: int
+
+
+class ApercuInterets(BaseModel):
+    """Prévisualisation d'un versement : le TOTAL et le DÉTAIL, rien n'est encore versé."""
+
+    periode: str
+    debut: date
+    fin: date
+    jours: int
+    comptes_actifs: int  # comptes actifs examinés (diagnostic de l'écran : « aucun compte »)
+    comptes_taux_zero: int  # parmi eux, produits à taux 0 (barème non fixé)
+    comptes_a_crediter: int
+    total: int  # total à verser, francs CFA entiers
+    deja_traites: int  # comptes déjà versés pour cette période (anti-double)
+    deja_verse_le: datetime | None  # quand, si la période a déjà été (au moins en partie) versée
+    echantillon: list[ApercuLigneInterets]
+
+
+class RapportInterets(BaseModel):
+    """Résultat d'un versement effectif."""
+
+    traites: int
+    credites: int
+    ignores: int
+    total: int
+
+
+class LigneRapprochement(BaseModel):
+    """Une ligne de la vue de contrôle : un compte collectif, ses deux côtés, l'écart."""
+
+    compte_general: str  # numéro du plan (3111, 3121…)
+    auxiliaire: int  # Σ des soldes d'épargne rattachés
+    general: int  # solde comptable du compte
+    concordant: bool
+    ecart: int  # auxiliaire moins general (0 si concordant)

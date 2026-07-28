@@ -24,6 +24,7 @@ from app.modules.epargne.guichet import deposer, fermer_compte
 from app.modules.epargne.interets import (
     calculer_base_solde,
     calculer_montant,
+    previsualiser_interets,
     verser_interets,
 )
 from app.modules.epargne.models import Product, SavingsAccount
@@ -180,6 +181,35 @@ def test_versement_credite_pose_ecriture_et_archive(db: Session) -> None:
     assert lignes == {("603", "D", 10000), ("3111", "C", 10000)}
     # archivé, rejouable
     assert _interet_calculs(db, c.compte.id) == [("2026", 10000)]
+
+
+def test_previsualisation_calcule_le_detail_sans_rien_ecrire(db: Session) -> None:
+    c = _cadre(db, "PV")
+    apercu = previsualiser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+
+    # Le total ET le détail, pour vérifier « ça a l'air juste » avant de lancer.
+    assert apercu.comptes_a_crediter >= 1
+    assert apercu.total >= 10000
+    mien = next(x for x in apercu.echantillon if x.account_number == c.compte.account_number)
+    assert mien.montant == 10000
+    assert mien.taux_bp == 1000  # le taux appliqué est visible, pas seulement le total
+    assert mien.methode == "fin_periode"
+
+    # DRY-RUN : rien n'a été écrit. Ni solde, ni calcul archivé.
+    db.refresh(c.compte)
+    assert c.compte.balance == 100000  # le dépôt seul, aucun intérêt versé
+    assert _interet_calculs(db, c.compte.id) == []
+
+
+def test_previsualisation_signale_periode_deja_versee(db: Session) -> None:
+    c = _cadre(db, "PVD")
+    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+
+    apercu = previsualiser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    # La période est déjà versée : rien à re-verser, et on sait QUAND (pas d'échec silencieux).
+    assert not any(x.account_number == c.compte.account_number for x in apercu.echantillon)
+    assert apercu.deja_traites >= 1
+    assert apercu.deja_verse_le is not None
 
 
 def test_anti_double_versement_relance_ne_verse_rien(db: Session) -> None:
