@@ -180,11 +180,12 @@ def cloturer_compte(
       - solde < 0 : REFUS (débiteur, on ne ferme pas sur une créance de l'IMF).
     Le passage en 'cloture' est DÉFINITIF (trigger 0022 : non réouvrable)."""
     if compte.status == "cloture":
-        raise CompteDejaClotureError(f"compte {compte.account_number} déjà clôturé")
+        raise CompteDejaClotureError("Ce compte est déjà fermé.")
     if compte.balance < 0:
+        # Message en langage humain (règle : un client peut lire l'écran). Débit -> montant positif.
+        du = f"{-compte.balance:,} F".replace(",", " ")
         raise CompteDebiteurError(
-            f"compte {compte.account_number} débiteur ({compte.balance} F) : régularisez avant "
-            "de fermer"
+            f"Ce compte est débiteur de {du} : régularisez le solde avant de le fermer."
         )
 
     if compte.balance > 0:

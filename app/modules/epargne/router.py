@@ -27,6 +27,7 @@ from app.modules.epargne.guichet import (
     OperationGeleeError,
     SoldeInsuffisantError,
     deposer,
+    fermer_compte,
     retirer,
 )
 from app.modules.epargne.schemas import (
@@ -40,6 +41,8 @@ from app.modules.epargne.schemas import (
     ResultatOperation,
 )
 from app.modules.epargne.service import (
+    CompteDebiteurError,
+    CompteDejaClotureError,
     MembreNonActifError,
     ProduitIntrouvableError,
     ouvrir_compte,
@@ -241,6 +244,28 @@ def deposer_endpoint(
         nouveau_solde=resultat.nouveau_solde,
         entry_number=resultat.entry_number,
     )
+
+
+@router.post("/epargne/comptes/{compte_id}/fermeture", response_model=CompteEpargneResume)
+def fermer_compte_endpoint(
+    compte_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.close"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> CompteEpargneResume:
+    """Ferme un compte (responsable) : restitution du solde résiduel + clôture définitive."""
+    try:
+        compte = fermer_compte(db, courant, compte_id, contexte=_contexte(request))
+    except CompteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        ) from None
+    except (CompteDebiteurError, CompteDejaClotureError) as erreur:
+        raise _422(erreur) from None
+    produit = next(
+        p for p in consultation.lister_produits(db) if p.id == compte.product_id
+    )
+    return _resume(compte, produit)
 
 
 @router.post("/epargne/comptes/{compte_id}/retrait", response_model=ResultatOperation)

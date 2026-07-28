@@ -220,3 +220,43 @@ def test_compte_hors_agence_404(client: TestClient, db: Session) -> None:
         f"/epargne/comptes/{compte.id}/depot", json={"montant": 1000}, headers=entete_b
     )
     assert reponse.status_code == 404
+
+
+# --- Fermeture (F3a) : responsable, restitution, refus débiteur ---------------------
+
+
+def test_fermeture_restitue_et_ferme(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-F1")
+    compte = _compte(db, agence)
+    caissier = _entete(db, agence, "CAISSIER")
+    client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 5000}, headers=caissier)
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    reponse = client.post(f"/epargne/comptes/{compte.id}/fermeture", headers=resp)
+    assert reponse.status_code == 200
+    assert reponse.json()["status"] == "cloture"
+    assert reponse.json()["balance"] == 0  # solde restitué
+
+
+def test_fermeture_debiteur_422_message_humain(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-F2")
+    compte = _compte(db, agence)
+    db.execute(
+        text("UPDATE epargne.accounts SET balance = -100 WHERE id = :a"), {"a": compte.id}
+    )
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    reponse = client.post(f"/epargne/comptes/{compte.id}/fermeture", headers=resp)
+    assert reponse.status_code == 422
+    detail = reponse.json()["detail"]
+    assert "débiteur" in detail.lower() and ">" not in detail  # humain, sans syntaxe technique
+
+
+def test_fermeture_sans_permission_403(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-F3")
+    compte = _compte(db, agence)
+    # Le caissier opère mais ne FERME pas (acte de gestion réservé au responsable).
+    caissier = _entete(db, agence, "CAISSIER")
+
+    reponse = client.post(f"/epargne/comptes/{compte.id}/fermeture", headers=caissier)
+    assert reponse.status_code == 403
