@@ -88,8 +88,8 @@ def ouvrir_compte(
     statut = _statut_tier(db, tier_id)
     if statut != "actif":
         raise MembreNonActifError(
-            f"le membre (tier={tier_id}) n'est pas actif (statut={statut}) : "
-            "seul un membre actif peut ouvrir un compte d'épargne"
+            "Ce membre n'est pas actif : seul un membre dont le KYC est validé peut ouvrir un "
+            "compte d'épargne."
         )
 
     produit = db.execute(
@@ -97,7 +97,7 @@ def ouvrir_compte(
         {"id": product_id},
     ).scalar_one_or_none()
     if produit is None:
-        raise ProduitIntrouvableError(f"produit {product_id} inexistant ou inactif")
+        raise ProduitIntrouvableError("Produit d'épargne inexistant ou indisponible.")
 
     compte = SavingsAccount(
         account_number=numerotation.prochain_numero(db),

@@ -162,6 +162,14 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     DELETE des agences bute sur fk_tiers_primary_agency_id_agencies. Le rollback rend tout."""
     db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
     db.execute(text("DELETE FROM security.user_agencies"))
+    # Épargne : les comptes référencent tiers ET agences (module E0+) -> purger avant elles.
+    # Les mouvements sont APPEND-ONLY (trigger) : on le désactive le temps de la purge simulée
+    # (transaction annulée au rollback ; sans effet sur la garantie réelle).
+    db.execute(text("DELETE FROM epargne.interet_calculs"))
+    db.execute(text("ALTER TABLE epargne.movements DISABLE TRIGGER trg_mouvement_immuable"))
+    db.execute(text("DELETE FROM epargne.movements"))
+    db.execute(text("ALTER TABLE epargne.movements ENABLE TRIGGER trg_mouvement_immuable"))
+    db.execute(text("DELETE FROM epargne.accounts"))
     # Casser d'abord la FK CIRCULAIRE tiers.activation_assessment_id -> risk_assessments
     # (0014) : sinon la purge de risk_assessments bute tant qu'un tiers activé la référence.
     db.execute(text("UPDATE tiers.tiers SET activation_assessment_id = NULL"))

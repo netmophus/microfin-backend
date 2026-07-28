@@ -91,15 +91,15 @@ def test_le_rapprochement_concorde_apres_operations(
     db: Session, cadre: tuple[uuid.UUID, SavingsAccount, SavingsAccount]
 ) -> None:
     compte_3111, c1, c2 = cadre
+    base = rapprocher(db, compte_3111)  # d'autres comptes rattachés à 3111 peuvent exister
     _deposer(db, c1, 1000)
     _deposer(db, c2, 500)
 
     resultat = rapprocher(db, compte_3111)
 
-    assert resultat.auxiliaire == 1500
-    assert resultat.general == 1500
     assert resultat.concordant is True
-    assert resultat.ecart == 0
+    assert resultat.auxiliaire - base.auxiliaire == 1500
+    assert resultat.general - base.general == 1500
 
 
 def test_le_rapprochement_detecte_un_solde_fausse(
@@ -117,6 +117,5 @@ def test_le_rapprochement_detecte_un_solde_fausse(
 
     resultat = rapprocher(db, compte_3111)
     assert resultat.concordant is False
-    assert resultat.auxiliaire == 1700
-    assert resultat.general == 1500
+    # L'écart introduit vaut exactement la falsification, quelle que soit la base concordante.
     assert resultat.ecart == 200

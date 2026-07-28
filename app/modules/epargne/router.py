@@ -20,12 +20,24 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.epargne import consultation
+from app.modules.epargne.guichet import (
+    CompteClotureError,
+    CompteIntrouvableError,
+    MontantInvalideError,
+    OperationGeleeError,
+    SoldeInsuffisantError,
+    deposer,
+    retirer,
+)
 from app.modules.epargne.schemas import (
     CompteEpargneDetail,
     CompteEpargneResume,
+    CompteGuichet,
     MouvementResume,
+    OperationGuichet,
     OuvertureCompte,
     ProduitEpargne,
+    ResultatOperation,
 )
 from app.modules.epargne.service import (
     MembreNonActifError,
@@ -169,3 +181,92 @@ def ouvrir_compte_endpoint(
         p for p in consultation.lister_produits(db) if p.id == corps.product_id
     )
     return _resume(compte, produit)
+
+
+# --- Guichet : recherche + dépôt/retrait --------------------------------------------
+
+
+def _422(erreur: Exception) -> HTTPException:
+    """Refus d'opération -> 422 avec le message métier (dit POURQUOI). Jamais une erreur brute."""
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur))
+
+
+@router.get("/epargne/recherche-compte", response_model=CompteGuichet)
+def rechercher_compte_endpoint(
+    numero: str,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> CompteGuichet:
+    """Trouve un compte par son NUMÉRO (chemin du guichet). Le NOM du membre est renvoyé,
+    proéminent à l'écran : vérification humaine contre une faute de frappe dans le numéro."""
+    ligne = consultation.rechercher_par_numero(db, courant, numero.strip())
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        )
+    compte, produit, tier_id, nom = ligne
+    return CompteGuichet(
+        id=compte.id,
+        account_number=compte.account_number,
+        tier_id=tier_id,
+        membre_nom=nom,
+        product_name=produit.name,
+        product_type=produit.type,
+        currency=compte.currency,
+        balance=compte.balance,
+        status=compte.status,
+        is_provisional=produit.is_provisional,
+    )
+
+
+@router.post("/epargne/comptes/{compte_id}/depot", response_model=ResultatOperation)
+def deposer_endpoint(
+    compte_id: uuid.UUID,
+    corps: OperationGuichet,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.operation.deposit"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatOperation:
+    """Dépôt au guichet (caissier, cloisonné). Le service commet la transaction unique."""
+    try:
+        resultat = deposer(db, courant, compte_id, corps.montant, contexte=_contexte(request))
+    except CompteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        ) from None
+    except (MontantInvalideError, OperationGeleeError, CompteClotureError) as erreur:
+        raise _422(erreur) from None
+    return ResultatOperation(
+        account_number=resultat.account_number,
+        nouveau_solde=resultat.nouveau_solde,
+        entry_number=resultat.entry_number,
+    )
+
+
+@router.post("/epargne/comptes/{compte_id}/retrait", response_model=ResultatOperation)
+def retirer_endpoint(
+    compte_id: uuid.UUID,
+    corps: OperationGuichet,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.operation.withdraw"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatOperation:
+    """Retrait au guichet. Refus parlant si solde insuffisant / membre suspendu / compte fermé."""
+    try:
+        resultat = retirer(db, courant, compte_id, corps.montant, contexte=_contexte(request))
+    except CompteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        ) from None
+    except (
+        SoldeInsuffisantError,
+        MontantInvalideError,
+        OperationGeleeError,
+        CompteClotureError,
+    ) as erreur:
+        raise _422(erreur) from None
+    return ResultatOperation(
+        account_number=resultat.account_number,
+        nouveau_solde=resultat.nouveau_solde,
+        entry_number=resultat.entry_number,
+    )

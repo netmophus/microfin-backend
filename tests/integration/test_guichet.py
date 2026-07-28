@@ -209,12 +209,15 @@ def test_rapprochement_concorde_apres_une_serie_doperations(db: Session) -> None
     c2 = service.ouvrir_compte(
         db, tier_id=tier2, product_id=c1.produit.id, agency_id=c1.agence.id, par=None
     )
+    # Base AVANT nos opérations (la base de dev peut porter d'autres comptes rattachés à 3111).
+    base = rapprocher(db, c3111)
 
     deposer(db, c1.caissier, c1.compte.id, 1000)
     deposer(db, c1.caissier, c2.id, 500)
     retirer(db, c1.caissier, c1.compte.id, 300)
 
     resultat = rapprocher(db, c3111)
-    assert resultat.auxiliaire == 1200  # 700 + 500
-    assert resultat.general == 1200
     assert resultat.concordant is True
+    # Nos opérations font bouger auxiliaire ET général du MÊME montant (700 + 500).
+    assert resultat.auxiliaire - base.auxiliaire == 1200
+    assert resultat.general - base.general == 1200

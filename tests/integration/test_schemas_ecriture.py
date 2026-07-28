@@ -128,20 +128,24 @@ def test_refus_propre_si_produit_sans_compte_epargne(db: Session) -> None:
     agence = _agence(db, "X1", _compte_id(db, "5721"))
     produit = _produit(db, "X1", None)  # pas de compte d'épargne rattaché
     compte = _ouvrir(db, agence, produit)
+    avant = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
 
     with pytest.raises(RattachementManquantError) as exc:
         poser_ecriture_operation(db, compte, TYPE_DEPOT, 10000, par=None)
     assert "compte d'épargne" in str(exc.value)
-    # Rien écrit : aucune pièce.
-    assert db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one() == 0
+    # Rien écrit : aucune pièce nouvelle (la base de dev peut en porter d'autres).
+    apres = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
+    assert apres == avant
 
 
 def test_refus_propre_si_agence_sans_caisse(db: Session) -> None:
     agence = _agence(db, "X2", None)  # pas de caisse rattachée
     produit = _produit(db, "X2", _compte_id(db, "3111"))
     compte = _ouvrir(db, agence, produit)
+    avant = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
 
     with pytest.raises(RattachementManquantError) as exc:
         poser_ecriture_operation(db, compte, TYPE_DEPOT, 10000, par=None)
     assert "caisse" in str(exc.value)
-    assert db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one() == 0
+    apres = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
+    assert apres == avant

@@ -51,3 +51,29 @@ class CompteEpargneDetail(CompteEpargneResume):
 
 class OuvertureCompte(BaseModel):
     product_id: uuid.UUID
+
+
+class CompteGuichet(BaseModel):
+    """Ce que le caissier voit après recherche par numéro. Le NOM du membre est proéminent :
+    c'est la vérification humaine contre une faute de frappe dans le numéro."""
+
+    id: uuid.UUID
+    account_number: str
+    tier_id: uuid.UUID
+    membre_nom: str
+    product_name: str
+    product_type: str
+    currency: str
+    balance: int
+    status: str
+    is_provisional: bool
+
+
+class OperationGuichet(BaseModel):
+    montant: int  # francs CFA entiers ; le service refuse <= 0 (message clair)
+
+
+class ResultatOperation(BaseModel):
+    account_number: str
+    nouveau_solde: int
+    entry_number: str | None

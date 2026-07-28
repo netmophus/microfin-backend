@@ -8,12 +8,30 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.epargne.models import Product, SavingsAccount, SavingsMovement
 from app.modules.security.autorisation import UtilisateurCourant
+from app.modules.tiers.models import GroupProfile, IndividualProfile, LegalEntityProfile, Tier
+
+# Tables cœur des sous-types (héritage joint) : on les joint par tier_id sans re-polymorphisme.
+_T = Tier.__table__
+_IND = IndividualProfile.__table__
+_LE = LegalEntityProfile.__table__
+_GP = GroupProfile.__table__
+
+
+def _nom_membre() -> Any:
+    """Nom lisible du membre selon son type (physique / morale / groupement), tier_number en
+    dernier recours — miroir de _nom_affichage des tiers."""
+    return func.coalesce(
+        func.nullif(func.trim(func.concat_ws(" ", _IND.c.last_name, _IND.c.first_name)), ""),
+        _LE.c.legal_name,
+        _GP.c.group_name,
+        _T.c.tier_number,
+    )
 
 
 def lister_produits(db: Session) -> Sequence[Product]:
@@ -47,6 +65,25 @@ def lire_compte(
         .join(Product, Product.id == SavingsAccount.product_id)
         .where(
             SavingsAccount.id == compte_id,
+            courant.condition_perimetre(SavingsAccount.agency_id),
+        )
+    ).first()
+
+
+def rechercher_par_numero(
+    db: Session, courant: UtilisateurCourant, numero: str
+) -> Any | None:
+    """Cherche un compte par son NUMÉRO (chemin du guichet), dans le périmètre. Rend
+    (compte, produit, tier_id, nom_membre) ou None (-> 404). Le nom sert de vérification humaine."""
+    return db.execute(
+        select(SavingsAccount, Product, _T.c.id.label("tier_id"), _nom_membre().label("nom"))
+        .join(Product, Product.id == SavingsAccount.product_id)
+        .join(_T, _T.c.id == SavingsAccount.tier_id)
+        .outerjoin(_IND, _IND.c.tier_id == _T.c.id)
+        .outerjoin(_LE, _LE.c.tier_id == _T.c.id)
+        .outerjoin(_GP, _GP.c.tier_id == _T.c.id)
+        .where(
+            SavingsAccount.account_number == numero,
             courant.condition_perimetre(SavingsAccount.agency_id),
         )
     ).first()

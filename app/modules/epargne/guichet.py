@@ -37,6 +37,11 @@ from app.modules.epargne.operations import TYPE_DEPOT, TYPE_RETRAIT, poser_ecrit
 from app.modules.security.autorisation import UtilisateurCourant
 
 
+def _fcfa(montant: int) -> str:
+    """Formate un montant en francs, lisible par un caissier (et son client) : « 7 000 F »."""
+    return f"{montant:,} F".replace(",", " ")
+
+
 class OperationError(Exception):
     """Base des refus d'opération de guichet."""
 
@@ -98,18 +103,20 @@ def _charger_compte_verrou(
 
 
 def _controler(db: Session, compte: SavingsAccount, montant: int) -> None:
-    """Contrôles communs au dépôt et au retrait (hors plancher, propre au retrait)."""
+    """Contrôles communs au dépôt et au retrait (hors plancher, propre au retrait).
+
+    Messages en langage HUMAIN (un client peut lire par-dessus l'épaule) : ni symbole, ni nom de
+    variable, ni code de statut brut.
+    """
     if compte.status != "actif":
-        raise CompteClotureError(f"compte {compte.account_number} fermé : aucune opération")
+        raise CompteClotureError("Ce compte est fermé : aucune opération possible.")
     if montant <= 0:
-        raise MontantInvalideError(f"montant {montant} invalide (doit être > 0)")
+        raise MontantInvalideError("Montant invalide : saisissez un montant supérieur à zéro.")
     statut_membre = db.execute(
         text("SELECT status FROM tiers.tiers WHERE id = :t"), {"t": compte.tier_id}
     ).scalar_one_or_none()
     if statut_membre != "actif":
-        raise OperationGeleeError(
-            f"membre {statut_membre} : opérations gelées jusqu'à réactivation"
-        )
+        raise OperationGeleeError("Opérations gelées : le membre est suspendu.")
 
 
 def _enregistrer_mouvement(
@@ -159,10 +166,24 @@ def _operer(
         assert produit is not None  # FK garantit l'existence
         disponible = compte.balance - produit.min_balance + produit.decouvert_autorise
         if montant > disponible:
+            # Détail (solde minimum / découvert) SEULEMENT s'il fait diverger le disponible du
+            # solde brut ; sinon « disponible = solde », inutile à dire.
+            raison = ""
+            if disponible != compte.balance:
+                raisons = []
+                if produit.min_balance > 0:
+                    raisons.append(
+                        f"un solde minimum de {_fcfa(produit.min_balance)} doit rester "
+                        "sur le compte"
+                    )
+                if produit.decouvert_autorise > 0:
+                    raisons.append(
+                        f"un découvert de {_fcfa(produit.decouvert_autorise)} est autorisé"
+                    )
+                raison = f" ({' et '.join(raisons)})"
             raise SoldeInsuffisantError(
-                f"retrait {montant} > disponible {disponible} "
-                f"(solde {compte.balance}, plancher {produit.min_balance}, "
-                f"découvert {produit.decouvert_autorise})"
+                f"Retrait impossible : le solde disponible est de {_fcfa(disponible)}{raison}, "
+                f"le retrait demandé de {_fcfa(montant)}."
             )
 
     # GÉNÉRAL : la pièce comptable équilibrée (peut lever si rattachement manquant -> refus propre).
