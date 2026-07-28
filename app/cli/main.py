@@ -203,6 +203,34 @@ def seed_epargne() -> None:
     typer.echo("")
 
 
+@app.command("verser-interets")
+def verser_interets_cmd(
+    periode: Annotated[str, typer.Option(help="Libellé de période (clé anti-double).")],
+    debut: Annotated[str, typer.Option(help="Début de période (AAAA-MM-JJ).")],
+    fin: Annotated[str, typer.Option(help="Fin de période (AAAA-MM-JJ).")],
+) -> None:
+    """Verse les intérêts de la période à tous les comptes actifs. Idempotente (anti-double).
+
+    Relançable sans risque : un compte déjà traité pour la période est sauté (contrainte base).
+    """
+    from datetime import date
+
+    from app.modules.epargne.interets import verser_interets
+
+    with SessionLocal() as db:
+        rapport = verser_interets(
+            db, periode=periode, debut=date.fromisoformat(debut), fin=date.fromisoformat(fin)
+        )
+    typer.echo("")
+    typer.secho(
+        f"  Intérêts période {periode} : {rapport.traites} comptes traités, "
+        f"{rapport.credites} crédités, {rapport.ignores} ignorés, total {rapport.total} F.",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    typer.echo("")
+
+
 @app.command("ouvrir-exercice")
 def commande_ouvrir_exercice(
     code: Annotated[str, typer.Option(help="Code de l'exercice, ex. « 2026 ».")],

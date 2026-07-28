@@ -26,6 +26,7 @@ from app.modules.parameters.models import Agency
 TYPE_DEPOT = "epargne.depot"
 TYPE_RETRAIT = "epargne.retrait"
 TYPE_CLOTURE = "epargne.cloture"
+TYPE_INTERET = "epargne.interet"
 
 
 class RattachementManquantError(Exception):
@@ -33,9 +34,11 @@ class RattachementManquantError(Exception):
 
 
 def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
-    compte_epargne = db.execute(
-        select(Product.compte_epargne_id).where(Product.id == compte.product_id)
-    ).scalar_one()
+    compte_epargne, compte_charge_interet = db.execute(
+        select(Product.compte_epargne_id, Product.compte_charge_interet_id).where(
+            Product.id == compte.product_id
+        )
+    ).one()
     compte_caisse = db.execute(
         select(Agency.compte_caisse_id).where(Agency.id == compte.agency_id)
     ).scalar_one()
@@ -53,6 +56,12 @@ def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
                     "l'agence de ce compte n'a pas de compte de caisse rattaché"
                 )
             return compte_caisse
+        if role == "INTERETS":
+            if compte_charge_interet is None:
+                raise RattachementManquantError(
+                    "le produit n'a pas de compte de charge d'intérêts rattaché"
+                )
+            return compte_charge_interet
         raise RattachementManquantError(f"rôle « {role} » inconnu dans le modèle d'écriture")
 
     return resoudre
@@ -65,13 +74,17 @@ def poser_ecriture_operation(
     montant: int,
     par: uuid.UUID | None,
     *,
+    entry_date: object | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> JournalEntry:
-    """Pose la pièce comptable équilibrée d'une opération (dépôt/retrait) sur `compte`.
+    """Pose la pièce comptable équilibrée d'une opération sur `compte`.
 
-    Ne touche pas au solde du membre : E3 s'en charge, dans la même transaction.
+    entry_date : date de la pièce (par défaut aujourd'hui). Le versement d'intérêts la date en FIN
+    de période. Ne touche pas au solde du membre : l'appelant s'en charge, dans la même transaction.
     """
-    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    jour = entry_date
+    if jour is None:
+        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
     return poser_depuis_schema(
         db,
         code=code_operation,

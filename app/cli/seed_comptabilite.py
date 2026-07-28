@@ -78,6 +78,12 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "epargne.cloture", "Clôture d'épargne (restitution)", "CA",
         (("EPARGNE", "D"), ("CAISSE", "C")),
     ),
+    # Intérêts : la charge de l'IMF monte (D 603), la dette envers le membre monte (C 3111).
+    # Journal des opérations diverses (pas de mouvement de caisse).
+    ModeleEcriture(
+        "epargne.interet", "Intérêts d'épargne (versement)", "OD",
+        (("INTERETS", "D"), ("EPARGNE", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(

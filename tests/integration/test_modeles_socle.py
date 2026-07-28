@@ -31,12 +31,13 @@ from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
 from app.modules.epargne.models import (
-    NumberingSequence as EpargneNumberingSequence,
-)
-from app.modules.epargne.models import (
+    InteretCalcul,
     Product,
     SavingsAccount,
     SavingsMovement,
+)
+from app.modules.epargne.models import (
+    NumberingSequence as EpargneNumberingSequence,
 )
 from app.modules.parameters.models import (
     Agency,
@@ -128,6 +129,8 @@ TABLES_ATTENDUES = frozenset(
         "epargne.accounts",
         "epargne.movements",
         "epargne.numbering_sequences",
+        # Épargne E5 — intérêts : calculs archivés (migration 0023).
+        "epargne.interet_calculs",
     }
 )
 
@@ -173,6 +176,7 @@ MODELES = [
     SavingsAccount,
     SavingsMovement,
     EpargneNumberingSequence,
+    InteretCalcul,
 ]
 
 

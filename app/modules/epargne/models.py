@@ -55,6 +55,27 @@ class Product(Base):
     compte_epargne_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.accounts.id")
     )
+    # Paramètres d'INTÉRÊT (E5, migration 0023), tous PROVISOIRES — VALEURS de l'expert :
+    # taux en points de base entiers (350 = 3,5 %), pas de flottant. Défaut « taux 0 ».
+    taux_bp: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
+    periodicite: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'annuelle'")
+    )
+    methode_calcul_solde: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'fin_periode'")
+    )
+    base_jours: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("360")
+    )
+    regle_arrondi: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'plus_proche'")
+    )
+    solde_minimum_remunere: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
+    compte_charge_interet_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
@@ -143,3 +164,36 @@ class SavingsMovement(Base):
     label: Mapped[str | None] = mapped_column(sa.String(300))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+
+class InteretCalcul(Base):
+    """Calcul d'intérêts archivé — un par compte et par PÉRIODE. Append-only, rejouable.
+
+    UNIQUE(account_id, periode) : le garde-fou anti-double-versement. `detail` (JSONB) fige la
+    photographie du calcul pour le rejouer (comme le snapshot du score KYC).
+    """
+
+    __tablename__ = "interet_calculs"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("account_id", "periode", name="uq_interet_periode"),
+        sa.Index("ix_interet_calculs_account", "account_id"),
+        {"schema": "epargne"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("epargne.accounts.id"), nullable=False
+    )
+    periode: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    base_solde: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    methode: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    taux_bp: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    base_jours: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    jours: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    montant: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(postgresql.JSONB)
+    journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    )
+    computed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    computed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))

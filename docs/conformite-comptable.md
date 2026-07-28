@@ -60,6 +60,32 @@ Le plancher d'un retrait est **paramétrable par produit**, pas en dur. Disponib
 Épargne à vue standard : les deux à **0** (le solde ne descend pas sous zéro ; un découvert est du
 crédit, pas de l'épargne). L'expert dira quels produits ont droit à un découvert et à quel plafond.
 
+### Intérêts d'épargne (E5, PROVISOIRES) — la mécanique accueille, l'expert choisit
+
+Le moteur d'intérêts est neutre ; **toutes les valeurs ci-dessous sont des paramètres produit
+provisoires** (`epargne.products`), à valider. Défaut « taux 0 » = pas d'intérêt tant que non fixé.
+
+| Paramètre | Rôle | Défaut | Statut |
+|-----------|------|--------|--------|
+| `taux_bp` | Taux annuel en points de base (350 = 3,5 %) | 0 | ⚠️ À VALIDER |
+| `periodicite` | mensuelle / trimestrielle / annuelle | annuelle | ⚠️ À VALIDER |
+| `methode_calcul_solde` | **LE point réglementaire** : min_periode / moyen_quotidien / fin_periode | fin_periode | ⚠️ À VALIDER |
+| `base_jours` | Base jours (360 / 365) | 360 | ⚠️ À VALIDER |
+| `regle_arrondi` | plus_proche / plancher | plus_proche | ⚠️ À VALIDER |
+| `solde_minimum_remunere` | Seuil sous lequel pas d'intérêt | 0 | ⚠️ À VALIDER |
+| `compte_charge_interet_id` | Compte de charge (603 à vue / 604 programmée) | 603/604 | ⚠️ À VALIDER |
+| Fiscalité (retenue) | Hors E5 pour l'instant, place réservée | — | ⚠️ À VALIDER |
+
+**Méthode de calcul du solde** (le plus sensible) — les trois méthodes sont implémentées, le
+produit choisit : **min de la période** (conservateur), **moyen quotidien** (le plus juste, pondéré
+par le temps), **fin de période** (le plus simple). Toutes reconstituées depuis l'historique des
+mouvements. L'expert tranche par produit.
+
+**Schéma d'écriture du versement (provisoire)** : `epargne.interet` = **D 603** Intérêts sur
+épargne à vue / **C 3111** Épargne à vue membres (journal OD). La charge de l'IMF monte, la dette
+envers le membre monte. Membre suspendu : crédité normalement (c'est son argent). Compte fermé :
+plus d'intérêts.
+
 | Opération | Schéma provisoire (à valider) | Statut |
 |-----------|-------------------------------|--------|
 | Dépôt épargne à vue (membre) | D 57x Caisse / C 3111 Épargne à vue membres | ⚠️ À VALIDER |
