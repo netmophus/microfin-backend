@@ -8,7 +8,7 @@ Le solde `balance` est un CACHE : la vérité est la somme des mouvements (voir
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -164,6 +164,13 @@ class SavingsMovement(Base):
     label: Mapped[str | None] = mapped_column(sa.String(300))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    # Date de VALEUR (migration 0024) : jour à partir duquel le mouvement compte pour les intérêts.
+    # Distincte de la date d'OPÉRATION (created_at). Par défaut = date d'opération (CURRENT_DATE),
+    # tant qu'aucune règle (quinzaines…) ne l'en écarte. FONDATION DORMANTE : aucun calcul ne la
+    # lit encore (le moteur date toujours sur created_at). Figée à la création (mouvement immuable).
+    date_valeur: Mapped[date] = mapped_column(
+        sa.Date, nullable=False, server_default=sa.text("CURRENT_DATE")
+    )
 
 
 class InteretCalcul(Base):

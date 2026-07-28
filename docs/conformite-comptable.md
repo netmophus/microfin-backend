@@ -81,6 +81,29 @@ produit choisit : **min de la période** (conservateur), **moyen quotidien** (le
 par le temps), **fin de période** (le plus simple). Toutes reconstituées depuis l'historique des
 mouvements. L'expert tranche par produit.
 
+**⚠️ À VALIDER — méthode réglementairement attendue pour les SFD UEMOA (règle des quinzaines ?).**
+Une méthode classique en zone franc est la **règle des quinzaines** : le mois est découpé en deux
+périodes de 15 jours, avec une **date de valeur** — un dépôt ne produit d'intérêt qu'à partir de la
+quinzaine suivante, un retrait fait perdre l'intérêt dès sa quinzaine. **Elle n'est PAS implémentée
+aujourd'hui** : les trois méthodes ci-dessus datent chaque mouvement à sa **date d'opération**
+(`movements.created_at`), et les mouvements **ne portent pas de date de valeur** distincte. Question
+à trancher par l'expert : (a) quelle méthode est réglementairement attendue pour un SFD UEMOA
+(quinzaines, capitaux moyens, autre ?) ; (b) si quinzaines/date de valeur, la valeur est-elle
+**dérivée mécaniquement** de la date d'opération et du sens (implémentable comme une méthode de
+plus, sans changer la structure), ou faut-il une **date de valeur saisissable/corrigible** par
+mouvement (alors : ajouter une colonne `date_valeur` à `epargne.movements`, décision de conception).
+Ne pas deviner : c'est une valeur réglementaire.
+
+**Date de valeur EN PLACE, dormante (migration 0024).** La colonne `epargne.movements.date_valeur`
+(DATE) existe désormais, **égale par défaut à la date d'opération** (`created_at::date`, backfill
+des mouvements existants compris). **AUCUNE règle ne l'exploite encore** : le moteur d'intérêts date
+toujours sur `created_at`, donc **aucun calcul n'est modifié**. Elle est **figée à la création** et
+immuable ensuite (même trigger que le mouvement). Fondation prête : quand l'expert aura confirmé la
+méthode (quinzaines ou autre), le service posera `date_valeur` À L'INSERTION selon la règle en
+vigueur, et le moteur lira `date_valeur` au lieu de `created_at` ; les mouvements passés gardent leur
+date de valeur d'origine (on ne réécrit pas le passé, le calcul reste rejouable). **À VALIDER : la
+méthode elle-même** (voir ci-dessus).
+
 **Schéma d'écriture du versement (provisoire)** : `epargne.interet` = **D 603** Intérêts sur
 épargne à vue / **C 3111** Épargne à vue membres (journal OD). La charge de l'IMF monte, la dette
 envers le membre monte. Membre suspendu : crédité normalement (c'est son argent). Compte fermé :

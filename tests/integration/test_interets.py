@@ -15,7 +15,7 @@ from datetime import date
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
@@ -181,6 +181,32 @@ def test_versement_credite_pose_ecriture_et_archive(db: Session) -> None:
     assert lignes == {("603", "D", 10000), ("3111", "C", 10000)}
     # archivé, rejouable
     assert _interet_calculs(db, c.compte.id) == [("2026", 10000)]
+
+
+def test_mouvement_porte_une_date_valeur_egale_a_la_date_operation(db: Session) -> None:
+    # FONDATION DORMANTE (migration 0024) : chaque mouvement porte une date de valeur, posée par
+    # défaut à la date d'opération tant qu'aucune règle (quinzaines…) ne l'en écarte.
+    c = _cadre(db, "DV")  # le dépôt de _cadre crée un mouvement
+    op_date, date_valeur = db.execute(
+        text(
+            "SELECT created_at::date, date_valeur FROM epargne.movements "
+            "WHERE account_id = :a ORDER BY created_at LIMIT 1"
+        ),
+        {"a": c.compte.id},
+    ).one()
+    assert date_valeur == op_date
+
+
+def test_date_valeur_immuable_comme_le_mouvement(db: Session) -> None:
+    # La date de valeur est FIGÉE à la création : le trigger d'immuabilité refuse tout UPDATE,
+    # elle aussi (on ne réécrit pas le passé ; une règle future la pose à l'insertion des NOUVEAUX).
+    c = _cadre(db, "DVI")
+    with pytest.raises(DBAPIError) as erreur:
+        db.execute(
+            text("UPDATE epargne.movements SET date_valeur = '2000-01-01' WHERE account_id = :a"),
+            {"a": c.compte.id},
+        )
+    assert "immuable" in str(erreur.value)
 
 
 def test_previsualisation_calcule_le_detail_sans_rien_ecrire(db: Session) -> None:
