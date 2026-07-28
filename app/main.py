@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.modules.audit.router import router as audit_router
 from app.modules.epargne.engagements import enregistrer as enregistrer_engagements_epargne
+from app.modules.epargne.router import router as epargne_router
 from app.modules.parameters.router import router as agences_router
 from app.modules.parameters.router import (
     router_countries,
@@ -30,6 +31,7 @@ app.include_router(router_secteurs)
 app.include_router(roles_router)
 app.include_router(audit_router)
 app.include_router(tiers_router)
+app.include_router(epargne_router)
 
 
 @app.get("/health")
