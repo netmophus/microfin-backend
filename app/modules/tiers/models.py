@@ -453,3 +453,92 @@ class RiskAssessment(Base):
         sa.Boolean(), nullable=False, server_default=sa.false()
     )
     detail: Mapped[dict[str, Any]] = mapped_column(postgresql.JSONB(), nullable=False)
+
+
+# --- Parts sociales (PS1, migration 0026) ---------------------------------------------------
+
+
+class ShareParameters(Base):
+    """Config d'INSTITUTION des parts sociales (une ligne), PROVISOIRE. Valeurs validées par
+    l'expert / les statuts : valeur d'une part, minimum pour adhérer, remboursable, MOMENT de
+    l'adhésion (souscription | libération), rattachements 1021/1022."""
+
+    __tablename__ = "share_parameters"
+    __table_args__: tuple[Any, ...] = ({"schema": "tiers"},)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    unit_value: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
+    minimum_shares: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("1")
+    )
+    is_refundable: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.true()
+    )
+    membership_on: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'liberation'")
+    )
+    compte_parts_liberees_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    compte_parts_non_liberees_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    is_provisional: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.true()
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+
+class MemberShares(Base):
+    """Solde de parts d'un tier (le CACHE). Vérité = Σ des mouvements (ShareSubscription). Verrou
+    FOR UPDATE à l'opération. Libérées = capital réel (1021) ; non libérées = promesses (1022)."""
+
+    __tablename__ = "member_shares"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("tier_id", name="uq_member_shares_tier"),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    shares_liberees: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("0")
+    )
+    shares_non_liberees: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+
+class ShareSubscription(Base):
+    """Un mouvement de parts — APPEND-ONLY (trigger d'immuabilité). Relié à sa pièce comptable ;
+    porte l'agence de l'acte (résout la caisse). Types : souscription / liberation /
+    souscription_comptant / remboursement (PS2)."""
+
+    __tablename__ = "share_subscriptions"
+    __table_args__: tuple[Any, ...] = (
+        sa.Index("ix_share_subscriptions_tier", "tier_id"),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    agency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.agencies.id"), nullable=False
+    )
+    type: Mapped[str] = mapped_column(sa.String(30), nullable=False)
+    shares_count: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    unit_value: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    amount: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    )
+    certificate_number: Mapped[str | None] = mapped_column(sa.String(30))
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))

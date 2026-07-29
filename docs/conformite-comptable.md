@@ -149,6 +149,39 @@ que deviennent ses comptes d'épargne DÉJÀ ouverts (routés 3112) ?
   reflète la qualité au jour J. Plus lourd (déplace des soldes), à auditer. **AUCUN transfert
   automatique n'est codé** ; cette option n'existera que si l'expert la valide.
 
+## Parts sociales (PS1, PROVISOIRES) — la mécanique accueille, l'expert/les statuts choisissent
+
+Config d'institution `tiers.share_parameters` (une ligne, `is_provisional`), toutes valeurs
+`⚠️ À VALIDER` par l'expert / les statuts de l'IMF (comme les taux d'épargne). Défaut « neutre ».
+
+| Paramètre | Rôle | Défaut | Statut |
+|-----------|------|--------|--------|
+| `unit_value` | Valeur d'une part (XOF entier) | 0 | ⚠️ À VALIDER |
+| `minimum_shares` | Nombre minimum de parts pour adhérer | 1 | ⚠️ À VALIDER |
+| `is_refundable` | Parts remboursables ou non | vrai | ⚠️ À VALIDER |
+| `membership_on` | Membre à la **souscription** ou à la **libération** | libération | ⚠️ À VALIDER |
+| `compte_parts_liberees_id` / `_non_liberees_id` | Rattachement 1021 / 1022 | 1021 / 1022 | ⚠️ À VALIDER |
+
+**Moment de l'adhésion** : défaut **libération** (on est membre quand le capital est réellement
+versé — parts libérées ≥ minimum), paramétrable en `souscription`. Le marqueur `tiers.is_member`
+bascule DANS la transaction de l'opération. Montants en **francs entiers** (le `NUMERIC(18,2)` des
+specs est transposé en BIGINT). Hypothèse provisoire : **valeur d'une part constante** (sinon
+historiser, comme la date de valeur d'épargne) — vaut pour la libération et le rapprochement.
+
+**Schémas d'écriture (provisoires, seed `seed-comptabilite`)**. 1022 sens D (souscrites non
+libérées, créance), 1021 sens C (libérées, capital). Souscription-engagement SANS caisse (journal
+OD) ; libération et comptant AVEC caisse (journal CA — argent qui entre, comme un dépôt).
+
+| Opération | Schéma | Journal | Statut |
+|-----------|--------|---------|--------|
+| Souscription (engagement) | **D 1022 / C 1021** | OD | ⚠️ À VALIDER |
+| Libération (paiement) | **D 5721 / C 1022** | CA | ⚠️ À VALIDER |
+| Souscription au comptant | **D 5721 / C 1021** | CA | ⚠️ À VALIDER |
+| Remboursement (départ, PS2) | **D 1021 / C 5721** | CA | ⚠️ À VALIDER |
+
+**Rapprochement du capital** (contrôle) : `Σ (parts libérées × valeur d'une part) == solde
+comptable 1021` — même loi que l'épargne (Σ soldes == 3111), sur le capital. Un écart = anomalie.
+
 ## Journaux et exercice (C1)
 
 Journaux livrés (seed `seed-comptabilite`), **tous provisoires** (`journals.is_provisional`) —

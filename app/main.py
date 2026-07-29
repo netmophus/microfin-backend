@@ -13,6 +13,7 @@ from app.modules.parameters.router import (
 from app.modules.security.router import router as auth_router
 from app.modules.security.router_roles import router as roles_router
 from app.modules.security.router_users import router as users_router
+from app.modules.tiers.parts_engagements import enregistrer as enregistrer_engagements_parts
 from app.modules.tiers.router import router as tiers_router
 
 app = FastAPI(title="Microfinance SIG", version="0.1.0")
@@ -20,6 +21,7 @@ app = FastAPI(title="Microfinance SIG", version="0.1.0")
 # Branche les vérificateurs d'engagements des modules métier (désactivation d'un tiers). Ici, à
 # l'assemblage de l'app, pour que le garde-fou ne soit jamais inerte. Un méta-test le vérifie.
 enregistrer_engagements_epargne()
+enregistrer_engagements_parts()
 
 app.include_router(auth_router)
 app.include_router(users_router)

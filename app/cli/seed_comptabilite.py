@@ -84,6 +84,26 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "epargne.interet", "Intérêts d'épargne (versement)", "OD",
         (("INTERETS", "D"), ("EPARGNE", "C")),
     ),
+    # --- Parts sociales (PS1), PROVISOIRES. 1022 sens D (souscrites non libérées, créance),
+    # 1021 sens C (libérées, capital). Souscription-engagement SANS caisse (journal OD) ;
+    # libération et comptant AVEC caisse (journal CA — argent qui entre, comme un dépôt).
+    ModeleEcriture(
+        "parts.souscription", "Souscription de parts (engagement)", "OD",
+        (("PARTS_NON_LIBEREES", "D"), ("PARTS_LIBEREES", "C")),
+    ),
+    ModeleEcriture(
+        "parts.liberation", "Libération de parts (paiement)", "CA",
+        (("CAISSE", "D"), ("PARTS_NON_LIBEREES", "C")),
+    ),
+    ModeleEcriture(
+        "parts.souscription_comptant", "Souscription de parts au comptant", "CA",
+        (("CAISSE", "D"), ("PARTS_LIBEREES", "C")),
+    ),
+    # Remboursement (départ du sociétaire) — l'opération vient en PS2 ; le schéma est posé ici.
+    ModeleEcriture(
+        "parts.remboursement", "Remboursement de parts", "CA",
+        (("PARTS_LIBEREES", "D"), ("CAISSE", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(
@@ -141,6 +161,40 @@ def rattacher_caisse_agences(db: Session, numero: str = "5721") -> int:
             {"n": numero},
         ).fetchall()
     )
+
+
+def seed_parametres_parts(db: Session) -> int:
+    """Installe la config PROVISOIRE des parts sociales (une ligne) + rattache 1021/1022.
+
+    Idempotent et non destructif : crée la ligne si aucune n'existe (valeurs neutres — l'IMF fixe
+    la valeur d'une part et le minimum) ; sinon complète seulement les rattachements comptables
+    laissés à NULL. Renvoie 1 si la ligne a été créée, 0 sinon.
+    """
+    existe = db.execute(text("SELECT count(*) FROM tiers.share_parameters")).scalar_one()
+    if existe:
+        # Complète les rattachements manquants sans écraser la config d'une IMF.
+        db.execute(
+            text(
+                "UPDATE tiers.share_parameters SET "
+                "compte_parts_liberees_id = COALESCE(compte_parts_liberees_id, "
+                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '1021')), "
+                "compte_parts_non_liberees_id = COALESCE(compte_parts_non_liberees_id, "
+                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '1022')), "
+                "updated_at = NOW()"
+            )
+        )
+        return 0
+    db.execute(
+        text(
+            "INSERT INTO tiers.share_parameters "
+            "(unit_value, minimum_shares, is_refundable, membership_on, "
+            " compte_parts_liberees_id, compte_parts_non_liberees_id, is_provisional) "
+            "VALUES (0, 1, TRUE, 'liberation', "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number = '1021'), "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number = '1022'), TRUE)"
+        )
+    )
+    return 1
 
 
 class ExerciceChevauchantError(Exception):

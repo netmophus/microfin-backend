@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 43 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 45 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -229,6 +229,10 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission(
         "epargne.rapprochement.read", "epargne", "Voir le rapprochement épargne/comptabilité"
     ),
+    # --- Parts sociales (PS1). subscribe = souscrire/libérer des parts (guichet : encaissement).
+    # read = consulter les parts d'un tier. Le remboursement (départ) aura sa permission en PS2.
+    Permission("tiers.shares.subscribe", "tiers", "Souscrire / libérer des parts sociales"),
+    Permission("tiers.shares.read", "tiers", "Consulter les parts sociales d'un tiers"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -263,6 +267,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.product.read",
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
+            "tiers.shares.subscribe",
+            "tiers.shares.read",
         }
     ),
     # Le chargé de clientèle enrôle ET ouvre les comptes d'épargne des membres.
@@ -276,6 +282,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.account.open",
             "epargne.account.read",
             "epargne.product.read",
+            "tiers.shares.subscribe",
+            "tiers.shares.read",
         }
     ),
     "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
@@ -293,6 +301,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.account.read",
             "epargne.product.read",
             "epargne.rapprochement.read",
+            "tiers.shares.read",
         }
     ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
@@ -321,6 +330,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.product.read",
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
+            "tiers.shares.subscribe",
+            "tiers.shares.read",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
@@ -337,6 +348,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read.deleted",
             "epargne.account.read",
             "epargne.rapprochement.read",
+            "tiers.shares.read",
             "perimetre.reseau",
         }
     ),
@@ -370,6 +382,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read.deleted",
             "epargne.interet.executer",
             "epargne.rapprochement.read",
+            "tiers.shares.read",
             "perimetre.reseau",
         }
     ),

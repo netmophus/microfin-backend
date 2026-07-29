@@ -15,6 +15,7 @@ from app.cli.seed_comptabilite import (
     executer_seed_schemas,
     ouvrir_exercice,
     rattacher_caisse_agences,
+    seed_parametres_parts,
 )
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
@@ -177,6 +178,7 @@ def seed_comptabilite() -> None:
         nb_journaux = executer_seed_journaux(db)
         nb_schemas = executer_seed_schemas(db)
         nb_caisses = rattacher_caisse_agences(db)
+        seed_parametres_parts(db)
         db.commit()
     typer.echo("")
     typer.secho(

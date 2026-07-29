@@ -69,8 +69,11 @@ from app.modules.tiers.models import (
     IndividualProfile,
     LegalEntityProfile,
     LifecycleEvent,
+    MemberShares,
     NumberingSequence,
     RiskAssessment,
+    ShareParameters,
+    ShareSubscription,
     Tier,
 )
 
@@ -131,6 +134,10 @@ TABLES_ATTENDUES = frozenset(
         "epargne.numbering_sequences",
         # Épargne E5 — intérêts : calculs archivés (migration 0023).
         "epargne.interet_calculs",
+        # Tiers PS1 — parts sociales : config, solde, registre append-only (migration 0026).
+        "tiers.share_parameters",
+        "tiers.member_shares",
+        "tiers.share_subscriptions",
     }
 )
 
@@ -177,6 +184,9 @@ MODELES = [
     SavingsMovement,
     EpargneNumberingSequence,
     InteretCalcul,
+    ShareParameters,
+    MemberShares,
+    ShareSubscription,
 ]
 
 
