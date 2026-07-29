@@ -73,6 +73,14 @@ class Tier(Base):
     status: Mapped[str] = mapped_column(
         sa.String(30), nullable=False, server_default=sa.text("'prospect'")
     )
+    # Marqueur SOCIÉTARIAT (migration 0025), ORTHOGONAL au status (cycle de vie) et au tier_type
+    # (nature juridique). FALSE = client (simple usager), TRUE = membre (sociétaire). On naît
+    # client ; on devient membre par un ACTE VOLONTAIRE — souscrire des parts sociales (à venir).
+    # Reflet MAINTENU par le futur service de parts (souscription -> TRUE, retrait total -> FALSE),
+    # jamais basculé à la main : la vérité est la Σ des parts détenues (comme le solde d'épargne).
+    is_member: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.false()
+    )
     primary_phone: Mapped[str | None] = mapped_column(sa.String(30))
     language_preference: Mapped[str | None] = mapped_column(sa.String(10))
     activated_at: Mapped[datetime | None] = mapped_column(TS)

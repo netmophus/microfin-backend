@@ -144,6 +144,7 @@ def _vers_fiche(
         tier_number=tier.tier_number,
         tier_type=tier.tier_type,
         status=tier.status,
+        is_member=tier.is_member,
         primary_agency_id=tier.primary_agency_id,
         primary_phone=primary_phone if primary_phone is not None else tier.primary_phone,
         language_preference=tier.language_preference,

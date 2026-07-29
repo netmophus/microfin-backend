@@ -133,10 +133,21 @@ l'expert-comptable SFD.
 
 **Question ouverte — membre / client** : le plan distingue épargne à vue **membres (3111)** et
 **clients (3112)** (idem par nature de produit). Le compte de dette dépend donc de la **nature du
-tiers** (sociétaire vs simple usager), que le module Tiers ne porte pas encore. Provisoirement,
-tous les produits sont rattachés au compte **membre** (cas courant mutualiste). Le cas **client
-(3112)** est à trancher — probablement au moment des **parts sociales**, quand le marqueur
-membre/client existera. Les schémas d'écriture (E1) résoudront alors le choix du compte.
+tiers** (sociétaire vs simple usager). **Le marqueur existe désormais** sur le tiers
+(`tiers.tiers.is_member`, migration 0025 : FALSE = client par défaut, TRUE = membre). Le **routage
+comptable** qui l'exploite (membre → 3111, client → 3112) est le chantier **Parts sociales / PS3** ;
+provisoirement, tous les produits restent rattachés au compte **membre** (3111), rétrocompatible.
+
+**⚠️ À VALIDER — épargne existante au passage client → membre.** Quand un client devient membre,
+que deviennent ses comptes d'épargne DÉJÀ ouverts (routés 3112) ?
+- *Préférence provisoire (à confirmer par l'expert)* : **les comptes existants ne basculent PAS**
+  automatiquement ; seuls les **nouveaux** comptes suivent la nouvelle qualité. Plus simple, aucun
+  mouvement d'argent non sollicité. Contrainte technique associée : le routage doit être **ancré
+  par compte** (le compte mémorise son collectif à l'ouverture), sinon un même compte s'éclaterait
+  sur 3111 ET 3112 et casserait le rapprochement.
+- *Alternative* : **transfert** du solde `D 3112 / C 3111` au passage membre, pour que le bilan
+  reflète la qualité au jour J. Plus lourd (déplace des soldes), à auditer. **AUCUN transfert
+  automatique n'est codé** ; cette option n'existera que si l'expert la valide.
 
 ## Journaux et exercice (C1)
 

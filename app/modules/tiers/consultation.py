@@ -83,6 +83,7 @@ def _requete_resume(
             _T.c.tier_number,
             _T.c.tier_type,
             _T.c.status,
+            _T.c.is_member,
             _T.c.primary_agency_id,
             nom.label("display_name"),
         )
@@ -111,6 +112,7 @@ def _en_resume(ligne: Row[Any]) -> TierResume:
         tier_type=ligne.tier_type,
         display_name=ligne.display_name,
         status=ligne.status,
+        is_member=ligne.is_member,
         primary_agency_id=ligne.primary_agency_id,
     )
 

@@ -280,6 +280,9 @@ class FicheTier(BaseModel):
     tier_number: str
     tier_type: str
     status: str
+    # Sociétariat (0025) : FALSE = client, TRUE = membre. Dimension distincte du status (cycle de
+    # vie) — les deux coexistent (un membre peut être actif ou suspendu). Écrit par les parts.
+    is_member: bool
     primary_agency_id: uuid.UUID
     primary_phone: str | None
     language_preference: str | None
@@ -319,6 +322,7 @@ class TierResume(BaseModel):
     tier_type: str
     display_name: str
     status: str
+    is_member: bool  # sociétariat (0025) : marqueur non sensible, lisible au guichet
     primary_agency_id: uuid.UUID
 
 
