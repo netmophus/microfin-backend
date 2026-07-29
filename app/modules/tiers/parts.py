@@ -22,6 +22,7 @@ telle quelle ; si l'IMF change la valeur, il faudra historiser (comme la date de
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -97,6 +98,35 @@ class ResultatParts:
     entry_number: str | None
 
 
+@dataclass(frozen=True)
+class MouvementParts:
+    """Une ligne d'historique des parts (pour l'onglet)."""
+
+    type: str
+    shares_count: int
+    unit_value: int
+    amount: int
+    entry_number: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class FichePartsSociales:
+    """Vue de consultation des parts d'un tier : solde, capital (francs), config, historique."""
+
+    is_member: bool
+    shares_liberees: int
+    shares_non_liberees: int
+    capital_libere: int  # parts libérées x valeur d'une part (francs)
+    capital_non_libere: int
+    unit_value: int
+    minimum_shares: int
+    is_refundable: bool
+    membership_on: str
+    is_provisional: bool
+    mouvements: list[MouvementParts]
+
+
 def _config(db: Session) -> ShareParameters:
     config = db.execute(select(ShareParameters).limit(1)).scalar_one_or_none()
     if config is None:
@@ -104,6 +134,60 @@ def _config(db: Session) -> ShareParameters:
             "Les parts sociales ne sont pas paramétrées : contactez votre administrateur."
         )
     return config
+
+
+def consulter(
+    db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID
+) -> FichePartsSociales:
+    """Lecture des parts d'un tier (dans le périmètre, sinon 404). TOLÉRANTE : un tier sans parts
+    rend des zéros, une config absente rend des valeurs neutres — la fiche ne casse jamais."""
+    ligne = db.execute(
+        select(Tier.is_member).where(
+            Tier.id == tier_id,
+            Tier.deleted_at.is_(None),
+            courant.condition_perimetre(Tier.primary_agency_id),
+        )
+    ).one_or_none()
+    if ligne is None:
+        raise TierIntrouvableError()
+    (is_member,) = ligne
+
+    config = db.execute(select(ShareParameters).limit(1)).scalar_one_or_none()
+    unit_value = config.unit_value if config else 0
+    shares = db.execute(
+        select(MemberShares).where(MemberShares.tier_id == tier_id)
+    ).scalar_one_or_none()
+    liberees = shares.shares_liberees if shares else 0
+    non_liberees = shares.shares_non_liberees if shares else 0
+
+    mouvements = [
+        MouvementParts(
+            type=t, shares_count=n, unit_value=uv, amount=m, entry_number=piece, created_at=quand
+        )
+        for t, n, uv, m, piece, quand in db.execute(
+            text(
+                "SELECT ss.type, ss.shares_count, ss.unit_value, ss.amount, je.entry_number, "
+                "ss.created_at FROM tiers.share_subscriptions ss "
+                "LEFT JOIN comptabilite.journal_entries je ON je.id = ss.journal_entry_id "
+                "WHERE ss.tier_id = :t ORDER BY ss.created_at, ss.id"
+            ),
+            {"t": tier_id},
+        )
+    ]
+
+    return FichePartsSociales(
+        is_member=is_member,
+        shares_liberees=liberees,
+        shares_non_liberees=non_liberees,
+        capital_libere=liberees * unit_value,
+        capital_non_libere=non_liberees * unit_value,
+        unit_value=unit_value,
+        minimum_shares=config.minimum_shares if config else 1,
+        is_refundable=config.is_refundable if config else True,
+        membership_on=config.membership_on if config else "liberation",
+        is_provisional=config.is_provisional if config else True,
+        mouvements=mouvements,
+    )
 
 
 def _charger_tier(

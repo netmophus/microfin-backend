@@ -335,6 +335,34 @@ class PageTiers(BaseModel):
     taille: int
 
 
+# --- Parts sociales (PS1b) : consultation ------------------------------------------------------
+
+
+class MouvementPartsItem(BaseModel):
+    type: str  # souscription | liberation | souscription_comptant | remboursement | annulation
+    shares_count: int
+    unit_value: int
+    amount: int  # francs CFA entiers
+    entry_number: str | None  # n° de la pièce comptable liée
+    created_at: datetime
+
+
+class FichePartsSociales(BaseModel):
+    """Vue des parts d'un tier : solde, capital (francs), config PROVISOIRE, historique."""
+
+    is_member: bool
+    shares_liberees: int
+    shares_non_liberees: int
+    capital_libere: int  # parts libérées x valeur d'une part
+    capital_non_libere: int
+    unit_value: int  # valeur d'une part (PROVISOIRE)
+    minimum_shares: int  # minimum pour adhérer (PROVISOIRE)
+    is_refundable: bool
+    membership_on: str  # souscription | liberation
+    is_provisional: bool  # la config est-elle provisoire (non validée par l'expert)
+    mouvements: list[MouvementPartsItem]
+
+
 class EvenementTimeline(BaseModel):
     """Un événement de la frise. event_type est un CODE brut, traduit côté front (comme l'audit)."""
 

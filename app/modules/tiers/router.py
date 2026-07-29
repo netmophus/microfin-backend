@@ -73,6 +73,8 @@ from app.modules.tiers.models import (
     LegalEntityProfile,
     Tier,
 )
+from app.modules.tiers.parts import TierIntrouvableError as PartsTierIntrouvable
+from app.modules.tiers.parts import consulter as consulter_parts
 from app.modules.tiers.pieces import (
     DonneesPiece,
     DoublonPieceError,
@@ -98,10 +100,12 @@ from app.modules.tiers.schemas import (
     CreationPiece,
     CreationTelephone,
     EvenementTimeline,
+    FichePartsSociales,
     FicheTier,
     GroupementDetail,
     IndividuDetail,
     MajKyc,
+    MouvementPartsItem,
     PageTiers,
     PersonneMoraleDetail,
     PieceItem,
@@ -373,6 +377,45 @@ def timeline_tier(
     if evenements is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
     return evenements
+
+
+@router.get("/{tier_id}/parts", response_model=FichePartsSociales)
+def lire_parts_endpoint(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> FichePartsSociales:
+    """Parts sociales d'un tier : solde (libérées/non libérées), capital en francs, config
+    PROVISOIRE (valeur d'une part, minimum), historique. Cloisonné : hors périmètre -> 404."""
+    try:
+        fiche = consulter_parts(db, courant, tier_id)
+    except PartsTierIntrouvable:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    return FichePartsSociales(
+        is_member=fiche.is_member,
+        shares_liberees=fiche.shares_liberees,
+        shares_non_liberees=fiche.shares_non_liberees,
+        capital_libere=fiche.capital_libere,
+        capital_non_libere=fiche.capital_non_libere,
+        unit_value=fiche.unit_value,
+        minimum_shares=fiche.minimum_shares,
+        is_refundable=fiche.is_refundable,
+        membership_on=fiche.membership_on,
+        is_provisional=fiche.is_provisional,
+        mouvements=[
+            MouvementPartsItem(
+                type=m.type,
+                shares_count=m.shares_count,
+                unit_value=m.unit_value,
+                amount=m.amount,
+                entry_number=m.entry_number,
+                created_at=m.created_at,
+            )
+            for m in fiche.mouvements
+        ],
+    )
 
 
 # --- cycle de vie (T1e) ----------------------------------------------------------------

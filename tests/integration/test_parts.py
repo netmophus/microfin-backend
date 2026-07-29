@@ -233,6 +233,26 @@ def test_detenir_des_parts_bloque_la_desactivation(db: Session) -> None:
     assert "part" in engagements[0].libelle.lower()
 
 
+def test_consulter_parts_sans_parts_puis_apres_souscription(db: Session) -> None:
+    courant, tier_id = _cadre(db, "CO", unit_value=5000, minimum=1)
+
+    # Avant toute opération : zéros, mais la config provisoire est rendue (pas de crash).
+    vide = parts.consulter(db, courant, tier_id)
+    assert vide.shares_liberees == 0 and vide.capital_libere == 0
+    assert vide.is_member is False
+    assert vide.unit_value == 5000 and vide.minimum_shares == 1
+    assert vide.is_provisional is True
+    assert vide.mouvements == []
+
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)
+    fiche = parts.consulter(db, courant, tier_id)
+    assert fiche.shares_liberees == 10
+    assert fiche.capital_libere == 50000  # 10 x 5000
+    assert fiche.is_member is True
+    assert len(fiche.mouvements) == 1
+    assert fiche.mouvements[0].type == "souscription_comptant"
+
+
 def test_le_verificateur_parts_est_enregistre_a_lassemblage_de_lapp() -> None:
     import app.main  # noqa: F401  (l'import assemble l'app et enregistre les vérificateurs)
 
