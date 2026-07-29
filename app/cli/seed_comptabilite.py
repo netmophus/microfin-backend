@@ -99,10 +99,16 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "parts.souscription_comptant", "Souscription de parts au comptant", "CA",
         (("CAISSE", "D"), ("PARTS_LIBEREES", "C")),
     ),
-    # Remboursement (départ du sociétaire) — l'opération vient en PS2 ; le schéma est posé ici.
+    # Remboursement (départ du sociétaire) : rendre le capital libéré. D 1021 / C caisse.
     ModeleEcriture(
         "parts.remboursement", "Remboursement de parts", "CA",
         (("PARTS_LIBEREES", "D"), ("CAISSE", "C")),
+    ),
+    # Annulation d'une souscription NON libérée (promesse jamais payée) : on solde l'engagement,
+    # sans caisse (rien n'a été versé). D 1021 / C 1022 — l'inverse de la souscription-engagement.
+    ModeleEcriture(
+        "parts.annulation", "Annulation de souscription (non libérée)", "OD",
+        (("PARTS_LIBEREES", "D"), ("PARTS_NON_LIBEREES", "C")),
     ),
 )
 

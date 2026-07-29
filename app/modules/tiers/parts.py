@@ -30,7 +30,9 @@ from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_aud
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.models import MemberShares, ShareParameters, ShareSubscription, Tier
 from app.modules.tiers.parts_operations import (
+    TYPE_ANNULATION,
     TYPE_LIBERATION,
+    TYPE_REMBOURSEMENT,
     TYPE_SOUSCRIPTION,
     TYPE_SOUSCRIPTION_COMPTANT,
     poser_ecriture_parts,
@@ -61,6 +63,18 @@ class LiberationExcessiveError(PartsError):
     """On tente de libérer plus de parts que le membre n'en a souscrit sans les libérer."""
 
 
+class RemboursementExcessifError(PartsError):
+    """On tente de rembourser plus de parts LIBÉRÉES que le membre n'en détient."""
+
+
+class AnnulationExcessiveError(PartsError):
+    """On tente d'annuler plus de parts NON LIBÉRÉES que le membre n'en a souscrit."""
+
+
+class NonRemboursableError(PartsError):
+    """Les parts ne sont pas remboursables (statuts de l'IMF) : le remboursement est refusé."""
+
+
 class ParametrageManquantError(PartsError):
     """Aucune config de parts sociales : l'IMF n'a pas paramétré le sociétariat."""
 
@@ -68,6 +82,8 @@ class ParametrageManquantError(PartsError):
 class ActionsAudit:
     SOUSCRIPTION = "tiers.shares.subscribe"
     LIBERATION = "tiers.shares.liberate"
+    REMBOURSEMENT = "tiers.shares.refund"
+    ANNULATION = "tiers.shares.cancel"
 
 
 @dataclass(frozen=True)
@@ -91,10 +107,14 @@ def _config(db: Session) -> ShareParameters:
 
 
 def _charger_tier(
-    db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID
+    db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID, *, exiger_actif: bool
 ) -> tuple[uuid.UUID, str]:
     """Rend (agence du tier, statut) si le tier est dans le périmètre ; lève 404 sinon.
-    Exige un membre ACTIF (gate KYC) — on ne souscrit pas de parts pour un prospect/suspendu."""
+
+    `exiger_actif` : à la SOUSCRIPTION/libération, on exige un membre ACTIF (gate KYC — pas de
+    parts pour un prospect/suspendu). Au REMBOURSEMENT (sortie), on ne l'exige pas : un membre
+    suspendu doit pouvoir récupérer son capital.
+    """
     ligne = db.execute(
         select(Tier.primary_agency_id, Tier.status).where(
             Tier.id == tier_id,
@@ -105,7 +125,7 @@ def _charger_tier(
     if ligne is None:
         raise TierIntrouvableError()
     agency_id, statut = ligne
-    if statut != "actif":
+    if exiger_actif and statut != "actif":
         raise MembreNonActifError(
             "Ce tiers doit être actif (dossier validé) avant de souscrire des parts sociales."
         )
@@ -153,10 +173,11 @@ def _operer(
     *,
     code_operation: str,
     action_audit: str,
+    exiger_actif: bool = True,
     contexte: ContexteRequete,
 ) -> ResultatParts:
-    """Tronc commun souscription/libération : périmètre + gate, verrou, contrôles, pièce +
-    mouvement + cache + marqueur, audit, commit."""
+    """Tronc commun de TOUTES les opérations de parts : périmètre + gate, verrou, contrôles, pièce
+    + mouvement + cache + marqueur, audit, commit. La TRANSACTION UNIQUE : tout ou rien."""
     if shares_count <= 0:
         raise PartsInvalidesError("Nombre de parts invalide : saisissez au moins une part.")
     config = _config(db)
@@ -166,12 +187,26 @@ def _operer(
             "Montant invalide : la valeur d'une part n'est pas encore fixée."
         )
 
-    agency_id, _ = _charger_tier(db, courant, tier_id)
+    agency_id, _ = _charger_tier(db, courant, tier_id, exiger_actif=exiger_actif)
     shares = _solde_verrou(db, tier_id, courant.user_id)
 
+    # Contrôles propres à l'opération (sur le solde SOUS verrou).
     if code_operation == TYPE_LIBERATION and shares.shares_non_liberees < shares_count:
         raise LiberationExcessiveError(
             "Libération impossible : ce membre n'a pas autant de parts souscrites non libérées."
+        )
+    if code_operation == TYPE_REMBOURSEMENT:
+        if not config.is_refundable:
+            raise NonRemboursableError(
+                "Les parts sociales ne sont pas remboursables selon les statuts en vigueur."
+            )
+        if shares.shares_liberees < shares_count:
+            raise RemboursementExcessifError(
+                "Remboursement impossible : ce membre ne détient pas autant de parts libérées."
+            )
+    if code_operation == TYPE_ANNULATION and shares.shares_non_liberees < shares_count:
+        raise AnnulationExcessiveError(
+            "Annulation impossible : ce membre n'a pas autant de parts souscrites non libérées."
         )
 
     # GÉNÉRAL : la pièce équilibrée (peut lever si rattachement manquant -> refus propre).
@@ -209,6 +244,10 @@ def _operer(
     elif code_operation == TYPE_LIBERATION:
         shares.shares_non_liberees -= shares_count
         shares.shares_liberees += shares_count
+    elif code_operation == TYPE_REMBOURSEMENT:
+        shares.shares_liberees -= shares_count  # on rend le capital libéré
+    elif code_operation == TYPE_ANNULATION:
+        shares.shares_non_liberees -= shares_count  # on solde la promesse non payée
     shares.updated_by = courant.user_id
     db.flush()
 
@@ -272,4 +311,40 @@ def liberer(
     return _operer(
         db, courant, tier_id, shares_count,
         code_operation=TYPE_LIBERATION, action_audit=ActionsAudit.LIBERATION, contexte=contexte,
+    )
+
+
+def rembourser(
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    shares_count: int,
+    *,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatParts:
+    """Rembourse des parts LIBÉRÉES (départ du sociétaire) -> D 1021 / C CAISSE, le capital sort.
+    Refusé si les parts ne sont pas remboursables (statuts). Le marqueur suit : sous le minimum
+    libéré, is_member repasse à FALSE (redevient client) — remboursement TOTAL = sortie complète.
+    N'exige PAS un membre actif : un membre suspendu doit pouvoir récupérer son capital."""
+    return _operer(
+        db, courant, tier_id, shares_count,
+        code_operation=TYPE_REMBOURSEMENT, action_audit=ActionsAudit.REMBOURSEMENT,
+        exiger_actif=False, contexte=contexte,
+    )
+
+
+def annuler_souscription(
+    db: Session,
+    courant: UtilisateurCourant,
+    tier_id: uuid.UUID,
+    shares_count: int,
+    *,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatParts:
+    """Annule des parts NON LIBÉRÉES (promesses jamais payées) -> D 1021 / C 1022, sans caisse.
+    Complète une sortie : rien à rendre (rien n'a été versé), on solde l'engagement."""
+    return _operer(
+        db, courant, tier_id, shares_count,
+        code_operation=TYPE_ANNULATION, action_audit=ActionsAudit.ANNULATION,
+        exiger_actif=False, contexte=contexte,
     )

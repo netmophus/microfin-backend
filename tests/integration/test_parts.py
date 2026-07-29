@@ -18,9 +18,11 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.core.engagements import verificateurs_enregistres
+from app.modules.audit.service import CONTEXTE_VIDE
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers import parts
+from app.modules.tiers.cycle_de_vie import EngagementsOuvertsError, executer_transition
 from app.modules.tiers.parts_engagements import verifier_engagements_parts
 from app.modules.tiers.parts_rapprochement import rapprocher_capital_libere
 
@@ -80,6 +82,16 @@ def _cadre(
         ),
         {"n": f"M-PS-{suffixe}", "a": agence.id},
     ).scalar_one()
+    # Profil individuel : la désactivation (loop) charge la fiche polymorphe -> enfant requis.
+    nat = db.execute(text("SELECT id FROM parameters.countries LIMIT 1")).scalar_one()
+    db.execute(
+        text(
+            "INSERT INTO tiers.individual_profiles "
+            "(tier_id, last_name, first_name, birth_date, gender, nationality_id) "
+            "VALUES (:t, 'Test', 'Sociétaire', '1990-01-01', 'M', :nat)"
+        ),
+        {"t": tier_id, "nat": nat},
+    )
     db.execute(text("DELETE FROM tiers.share_parameters"))
     db.execute(
         text(
@@ -225,3 +237,127 @@ def test_le_verificateur_parts_est_enregistre_a_lassemblage_de_lapp() -> None:
     import app.main  # noqa: F401  (l'import assemble l'app et enregistre les vérificateurs)
 
     assert verifier_engagements_parts in verificateurs_enregistres()
+
+
+# --- PS2 : remboursement / annulation (sortie du sociétariat) -------------------------------
+
+
+def _responsable(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
+    """Un responsable : rembourse les parts ET désactive (deux permissions de la sortie)."""
+    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    return UtilisateurCourant(
+        user_id=uid,
+        roles=("RESPONSABLE_AGENCE",),
+        permissions=frozenset({"tiers.shares.refund", "tiers.deactivate"}),
+        primary_agency_id=agency_id,
+        agency_id=agency_id,
+        voit_tout=True,
+    )
+
+
+def test_remboursement_total_rend_le_capital_et_repasse_client(db: Session) -> None:
+    courant, tier_id = _cadre(db, "RB")
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # membre, 50 000 en 1021
+    assert _est_membre(db, tier_id) is True
+
+    r = parts.rembourser(db, courant, tier_id, 10)  # 10 x 5000 = 50 000
+    assert r.shares_liberees == 0
+    assert r.is_member is False  # redevient client, DANS la txn du remboursement
+    # Le capital sort : D 1021 / C 5721 (l'argent quitte la caisse).
+    assert _lignes(db, tier_id, "remboursement") == {("1021", "D", 50000), ("5721", "C", 50000)}
+    assert _est_membre(db, tier_id) is False
+
+
+def test_boucle_desactivation_membre_puis_remboursement(db: Session) -> None:
+    courant, tier_id = _cadre(db, "BC")
+    resp = _responsable(db, courant.agency_id)
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)
+
+    # Membre avec des parts -> désactivation REFUSÉE (engagement).
+    with pytest.raises(EngagementsOuvertsError) as exc:
+        executer_transition(db, resp, tier_id, "deactivate", CONTEXTE_VIDE, motif="test")
+    assert any("part" in e.libelle.lower() for e in exc.value.engagements)
+
+    # Remboursement total -> plus de capital.
+    parts.rembourser(db, resp, tier_id, 10)
+
+    # Désactivation désormais AUTORISÉE : la boucle se referme.
+    tier = executer_transition(db, resp, tier_id, "deactivate", CONTEXTE_VIDE, motif="test")
+    assert tier.status == "desactive"
+
+
+def test_remboursement_partiel_sous_le_minimum_repasse_client_mais_reste_bloque(
+    db: Session,
+) -> None:
+    courant, tier_id = _cadre(db, "PA", minimum=5)
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # 10 >= 5 -> membre
+    assert _est_membre(db, tier_id) is True
+
+    r = parts.rembourser(db, courant, tier_id, 8)  # reste 2 < minimum 5
+    assert r.shares_liberees == 2
+    assert r.is_member is False  # le marqueur suit : redevient client
+    # Mais détient encore 2 parts -> toujours NON désactivable.
+    assert verifier_engagements_parts(db, tier_id) != []
+
+
+def test_remboursement_excessif_refuse(db: Session) -> None:
+    courant, tier_id = _cadre(db, "RX")
+    parts.souscrire(db, courant, tier_id, 3, comptant=True)
+    with pytest.raises(parts.RemboursementExcessifError):
+        parts.rembourser(db, courant, tier_id, 5)
+
+
+def test_remboursement_refuse_si_parts_non_remboursables(db: Session) -> None:
+    courant, tier_id = _cadre(db, "NR")
+    parts.souscrire(db, courant, tier_id, 4, comptant=True)
+    db.execute(text("UPDATE tiers.share_parameters SET is_refundable = FALSE"))
+    with pytest.raises(parts.NonRemboursableError):
+        parts.rembourser(db, courant, tier_id, 4)
+
+
+def test_annulation_non_liberees_solde_lengagement_sans_caisse(db: Session) -> None:
+    courant, tier_id = _cadre(db, "AN")
+    parts.souscrire(db, courant, tier_id, 6, comptant=False)  # 6 non libérées
+    r = parts.annuler_souscription(db, courant, tier_id, 6)
+    assert r.shares_non_liberees == 0
+    # D 1021 / C 1022, sans caisse (inverse de la souscription-engagement).
+    assert _lignes(db, tier_id, "annulation") == {("1021", "D", 30000), ("1022", "C", 30000)}
+
+
+def test_rapprochement_capital_tient_apres_remboursement(db: Session) -> None:
+    courant, tier_id = _cadre(db, "RR")
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)
+    parts.rembourser(db, courant, tier_id, 4)  # reste 6 libérées
+    resultat = rapprocher_capital_libere(db)
+    assert resultat.concordant is True
+    assert resultat.ecart == 0
+
+
+def test_remboursement_interrompu_ne_laisse_rien(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    courant, tier_id = _cadre(db, "RI2")
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # membre, 10 libérées
+
+    def panne(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("panne au milieu du remboursement")
+
+    monkeypatch.setattr(parts, "ecrire_audit", panne)
+    with pytest.raises(RuntimeError):
+        parts.rembourser(db, courant, tier_id, 10)
+    db.rollback()
+
+    # RIEN à moitié : le membre garde ses 10 parts, is_member reste True, aucun mouvement de remb.
+    liberees = db.execute(
+        text("SELECT shares_liberees FROM tiers.member_shares WHERE tier_id = :t"), {"t": tier_id}
+    ).scalar_one()
+    nb_remb = db.execute(
+        text(
+            "SELECT count(*) FROM tiers.share_subscriptions "
+            "WHERE tier_id = :t AND type = 'remboursement'"
+        ),
+        {"t": tier_id},
+    ).scalar_one()
+    assert liberees == 10
+    assert nb_remb == 0
+    assert _est_membre(db, tier_id) is True

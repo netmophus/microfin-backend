@@ -24,6 +24,7 @@ TYPE_SOUSCRIPTION = "parts.souscription"
 TYPE_LIBERATION = "parts.liberation"
 TYPE_SOUSCRIPTION_COMPTANT = "parts.souscription_comptant"
 TYPE_REMBOURSEMENT = "parts.remboursement"
+TYPE_ANNULATION = "parts.annulation"
 
 
 class RattachementPartsManquantError(Exception):

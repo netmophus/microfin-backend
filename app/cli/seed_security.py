@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 45 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 46 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -233,6 +233,9 @@ PERMISSIONS: tuple[Permission, ...] = (
     # read = consulter les parts d'un tier. Le remboursement (départ) aura sa permission en PS2.
     Permission("tiers.shares.subscribe", "tiers", "Souscrire / libérer des parts sociales"),
     Permission("tiers.shares.read", "tiers", "Consulter les parts sociales d'un tiers"),
+    # Remboursement / annulation (PS2, sortie du sociétariat) : rendre le capital est un acte de
+    # GESTION sensible -> réservé au responsable (comme la fermeture d'un compte d'épargne).
+    Permission("tiers.shares.refund", "tiers", "Rembourser / annuler des parts sociales"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -332,6 +335,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.operation.withdraw",
             "tiers.shares.subscribe",
             "tiers.shares.read",
+            "tiers.shares.refund",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
