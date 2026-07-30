@@ -73,8 +73,16 @@ from app.modules.tiers.models import (
     LegalEntityProfile,
     Tier,
 )
+from app.modules.tiers.parts import (
+    PartsError,
+    liberer,
+    souscrire,
+)
 from app.modules.tiers.parts import TierIntrouvableError as PartsTierIntrouvable
-from app.modules.tiers.parts import consulter as consulter_parts
+from app.modules.tiers.parts import (
+    consulter as consulter_parts,
+)
+from app.modules.tiers.parts_operations import RattachementPartsManquantError
 from app.modules.tiers.pieces import (
     DonneesPiece,
     DoublonPieceError,
@@ -99,6 +107,7 @@ from app.modules.tiers.schemas import (
     CreationPersonneMorale,
     CreationPiece,
     CreationTelephone,
+    DemandeParts,
     EvenementTimeline,
     FichePartsSociales,
     FicheTier,
@@ -109,6 +118,7 @@ from app.modules.tiers.schemas import (
     PageTiers,
     PersonneMoraleDetail,
     PieceItem,
+    ResultatParts,
     SuppressionContact,
     SuppressionPiece,
     TierResume,
@@ -416,6 +426,84 @@ def lire_parts_endpoint(
             for m in fiche.mouvements
         ],
     )
+
+
+def _resultat_parts(resultat: object) -> ResultatParts:
+    return ResultatParts(
+        is_member=resultat.is_member,
+        shares_liberees=resultat.shares_liberees,
+        shares_non_liberees=resultat.shares_non_liberees,
+        entry_number=resultat.entry_number,
+    )
+
+
+def _parts_erreur(erreur: Exception) -> HTTPException:
+    """Refus d'opération de parts -> 422 avec le message métier (dit POURQUOI, langage humain)."""
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur))
+
+
+@router.post("/{tier_id}/parts/souscription", response_model=ResultatParts)
+def souscrire_parts_endpoint(
+    tier_id: uuid.UUID,
+    corps: DemandeParts,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.subscribe"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatParts:
+    """Souscription (ENGAGEMENT sans paiement) — le chargé de clientèle. D 1022 / C 1021."""
+    try:
+        resultat = souscrire(db, courant, tier_id, corps.shares_count, comptant=False,
+                             contexte=_contexte(request))
+    except PartsTierIntrouvable:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    except (PartsError, RattachementPartsManquantError) as erreur:
+        raise _parts_erreur(erreur) from None
+    return _resultat_parts(resultat)
+
+
+@router.post("/{tier_id}/parts/souscription-comptant", response_model=ResultatParts)
+def souscrire_comptant_endpoint(
+    tier_id: uuid.UUID,
+    corps: DemandeParts,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.pay"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatParts:
+    """Souscription AU COMPTANT (souscrire + payer d'un geste) — le caissier encaisse.
+    D 5721 / C 1021 ; le membre devient sociétaire immédiatement."""
+    try:
+        resultat = souscrire(db, courant, tier_id, corps.shares_count, comptant=True,
+                             contexte=_contexte(request))
+    except PartsTierIntrouvable:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    except (PartsError, RattachementPartsManquantError) as erreur:
+        raise _parts_erreur(erreur) from None
+    return _resultat_parts(resultat)
+
+
+@router.post("/{tier_id}/parts/liberation", response_model=ResultatParts)
+def liberer_parts_endpoint(
+    tier_id: uuid.UUID,
+    corps: DemandeParts,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.pay"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatParts:
+    """Libération (paiement de parts souscrites non libérées) — le caissier encaisse.
+    D 5721 / C 1022 ; is_member bascule si le minimum libéré est atteint."""
+    try:
+        resultat = liberer(db, courant, tier_id, corps.shares_count, contexte=_contexte(request))
+    except PartsTierIntrouvable:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    except (PartsError, RattachementPartsManquantError) as erreur:
+        raise _parts_erreur(erreur) from None
+    return _resultat_parts(resultat)
 
 
 # --- cycle de vie (T1e) ----------------------------------------------------------------

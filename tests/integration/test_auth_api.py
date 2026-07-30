@@ -406,7 +406,7 @@ def test_me_renvoie_l_identite_et_les_permissions(
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
             "tiers.read.basic",
-            "tiers.shares.subscribe",
+            "tiers.shares.pay",
             "tiers.shares.read",
         ]
     )

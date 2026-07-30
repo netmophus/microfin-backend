@@ -363,6 +363,21 @@ class FichePartsSociales(BaseModel):
     mouvements: list[MouvementPartsItem]
 
 
+class DemandeParts(BaseModel):
+    """Corps d'une opération de parts : combien de parts."""
+
+    shares_count: int
+
+
+class ResultatParts(BaseModel):
+    """Résultat d'une opération : le nouvel état (le front s'en sert pour rafraîchir le badge)."""
+
+    is_member: bool
+    shares_liberees: int
+    shares_non_liberees: int
+    entry_number: str | None
+
+
 class EvenementTimeline(BaseModel):
     """Un événement de la frise. event_type est un CODE brut, traduit côté front (comme l'audit)."""
 

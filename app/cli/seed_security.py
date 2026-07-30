@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 46 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 47 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -229,9 +229,13 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission(
         "epargne.rapprochement.read", "epargne", "Voir le rapprochement épargne/comptabilité"
     ),
-    # --- Parts sociales (PS1). subscribe = souscrire/libérer des parts (guichet : encaissement).
-    # read = consulter les parts d'un tier. Le remboursement (départ) aura sa permission en PS2.
-    Permission("tiers.shares.subscribe", "tiers", "Souscrire / libérer des parts sociales"),
+    # --- Parts sociales. Séparation des pouvoirs (chargé/caissier/responsable), comme partout :
+    #   subscribe = souscrire (la RELATION, l'engagement) -> chargé de clientèle ;
+    #   pay        = encaisser la libération / le comptant (l'ARGENT au guichet) -> caissier ;
+    #   refund     = rembourser / annuler (DÉCISION de gestion) -> responsable ;
+    #   read       = consulter les parts d'un tier.
+    Permission("tiers.shares.subscribe", "tiers", "Souscrire des parts (engagement)"),
+    Permission("tiers.shares.pay", "tiers", "Encaisser la libération / le comptant de parts"),
     Permission("tiers.shares.read", "tiers", "Consulter les parts sociales d'un tiers"),
     # Remboursement / annulation (PS2, sortie du sociétariat) : rendre le capital est un acte de
     # GESTION sensible -> réservé au responsable (comme la fermeture d'un compte d'épargne).
@@ -270,7 +274,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.product.read",
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
-            "tiers.shares.subscribe",
+            "tiers.shares.pay",  # le caissier ENCAISSE la libération / le comptant (l'argent entre)
             "tiers.shares.read",
         }
     ),
@@ -334,6 +338,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
             "tiers.shares.subscribe",
+            "tiers.shares.pay",
             "tiers.shares.read",
             "tiers.shares.refund",
         }
