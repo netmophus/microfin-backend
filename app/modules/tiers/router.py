@@ -75,7 +75,9 @@ from app.modules.tiers.models import (
 )
 from app.modules.tiers.parts import (
     PartsError,
+    annuler_souscription,
     liberer,
+    rembourser,
     souscrire,
 )
 from app.modules.tiers.parts import TierIntrouvableError as PartsTierIntrouvable
@@ -497,6 +499,50 @@ def liberer_parts_endpoint(
     D 5721 / C 1022 ; is_member bascule si le minimum libéré est atteint."""
     try:
         resultat = liberer(db, courant, tier_id, corps.shares_count, contexte=_contexte(request))
+    except PartsTierIntrouvable:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    except (PartsError, RattachementPartsManquantError) as erreur:
+        raise _parts_erreur(erreur) from None
+    return _resultat_parts(resultat)
+
+
+@router.post("/{tier_id}/parts/remboursement", response_model=ResultatParts)
+def rembourser_parts_endpoint(
+    tier_id: uuid.UUID,
+    corps: DemandeParts,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.refund"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatParts:
+    """Remboursement de parts LIBÉRÉES (départ) — le responsable. D 1021 / C 5721 : le capital
+    sort. Remboursement TOTAL -> is_member repasse à FALSE (redevient client), dans la txn."""
+    try:
+        resultat = rembourser(db, courant, tier_id, corps.shares_count, contexte=_contexte(request))
+    except PartsTierIntrouvable:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
+        ) from None
+    except (PartsError, RattachementPartsManquantError) as erreur:
+        raise _parts_erreur(erreur) from None
+    return _resultat_parts(resultat)
+
+
+@router.post("/{tier_id}/parts/annulation", response_model=ResultatParts)
+def annuler_parts_endpoint(
+    tier_id: uuid.UUID,
+    corps: DemandeParts,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.refund"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatParts:
+    """Annulation de parts NON libérées (promesses jamais payées) — le responsable.
+    D 1021 / C 1022, sans caisse : on solde l'engagement (rien à rendre)."""
+    try:
+        resultat = annuler_souscription(
+            db, courant, tier_id, corps.shares_count, contexte=_contexte(request)
+        )
     except PartsTierIntrouvable:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE

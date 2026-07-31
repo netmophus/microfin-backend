@@ -170,6 +170,22 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     db.execute(text("DELETE FROM epargne.movements"))
     db.execute(text("ALTER TABLE epargne.movements ENABLE TRIGGER trg_mouvement_immuable"))
     db.execute(text("DELETE FROM epargne.accounts"))
+    # Parts sociales : share_subscriptions est APPEND-ONLY (trigger) et référence tiers.tiers +
+    # agencies -> purge avant les tiers, trigger désactivé le temps de la suppression simulée.
+    db.execute(
+        text(
+            "ALTER TABLE tiers.share_subscriptions "
+            "DISABLE TRIGGER trg_share_subscription_immuable"
+        )
+    )
+    db.execute(text("DELETE FROM tiers.share_subscriptions"))
+    db.execute(
+        text(
+            "ALTER TABLE tiers.share_subscriptions "
+            "ENABLE TRIGGER trg_share_subscription_immuable"
+        )
+    )
+    db.execute(text("DELETE FROM tiers.member_shares"))
     # Casser d'abord la FK CIRCULAIRE tiers.activation_assessment_id -> risk_assessments
     # (0014) : sinon la purge de risk_assessments bute tant qu'un tiers activé la référence.
     db.execute(text("UPDATE tiers.tiers SET activation_assessment_id = NULL"))

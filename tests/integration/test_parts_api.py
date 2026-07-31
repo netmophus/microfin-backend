@@ -166,3 +166,34 @@ def test_consultation_par_charge(client: TestClient, db: Session) -> None:
     assert reponse.status_code == 200
     assert reponse.json()["unit_value"] == 5000
     assert reponse.json()["shares_liberees"] == 0
+
+
+def test_remboursement_total_par_responsable_redevient_client(
+    client: TestClient, db: Session
+) -> None:
+    agence, tier_id = _cadre(db, "RB")
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")  # a pay + refund
+    client.post(
+        f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 10}, headers=resp
+    )
+
+    reponse = client.post(
+        f"/tiers/{tier_id}/parts/remboursement", json={"shares_count": 10}, headers=resp
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["is_member"] is False  # redevient client
+    assert reponse.json()["shares_liberees"] == 0
+
+
+def test_charge_ne_peut_pas_rembourser_403(client: TestClient, db: Session) -> None:
+    agence, tier_id = _cadre(db, "RX")
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")
+    charge = _entete(db, agence, "CHARGE_CLIENTELE")  # PAS de refund
+    client.post(
+        f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 5}, headers=resp
+    )
+
+    reponse = client.post(
+        f"/tiers/{tier_id}/parts/remboursement", json={"shares_count": 5}, headers=charge
+    )
+    assert reponse.status_code == 403
