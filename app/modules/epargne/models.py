@@ -52,7 +52,14 @@ class Product(Base):
     )
     # Compte de dette du plan (classe 3) crédité au dépôt : rattachement PROVISOIRE (migration
     # 0019), nullable tant que l'expert ne l'a pas validé. Voir docs/conformite-comptable.md.
+    # C'est le compte MEMBRE (3111/3121/3131).
     compte_epargne_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    # Rattachement CLIENT (PS3, migration 0028) : le compte xxx2 (3112/3122/3132) crédité pour
+    # l'épargne d'un simple client (non sociétaire). NULL = pas encore configuré -> tout va au
+    # compte membre, comportement historique. PROVISOIRE, à valider par l'expert.
+    compte_epargne_client_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.accounts.id")
     )
     # Paramètres d'INTÉRÊT (E5, migration 0023), tous PROVISOIRES — VALEURS de l'expert :
@@ -125,6 +132,13 @@ class SavingsAccount(Base):
     )
     status: Mapped[str] = mapped_column(
         sa.String(20), nullable=False, server_default=sa.text("'actif'")
+    )
+    # Compte collectif du plan ANCRÉ à l'ouverture (PS3, migration 0028) selon le statut
+    # membre/client du titulaire À CE MOMENT-LÀ. Jamais re-routé (option B, à valider expert) :
+    # toutes les écritures du compte vont au même collectif, le rapprochement reste sain.
+    # NULL (comptes legacy) -> repli sur le compte membre du produit, au résolveur.
+    compte_collectif_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
     )
     balance: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, server_default=sa.text("0"))
     opened_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

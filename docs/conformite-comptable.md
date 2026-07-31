@@ -125,11 +125,23 @@ Chaque produit d'épargne pointe vers le **compte de dette** (classe 3, sens cr�
 dépôt. Rattachement livré **provisoire** (`epargne.products.compte_epargne_id`), à valider par
 l'expert-comptable SFD.
 
-| Produit | Compte de rattachement (provisoire) | Statut |
-|---------|-------------------------------------|--------|
-| Épargne à vue (EAV) | **3111** Épargne à vue - membres | ⚠️ À VALIDER |
-| Dépôt à terme (DAT) | **3121** Dépôts à terme - membres | ⚠️ À VALIDER |
-| Épargne programmée (EPR) | **3131** Épargne programmée - membres | ⚠️ À VALIDER |
+| Produit | Compte MEMBRE (provisoire) | Compte CLIENT (PS3, provisoire) | Statut |
+|---------|----------------------------|--------------------------------|--------|
+| Épargne à vue (EAV) | **3111** | **3112** | ⚠️ À VALIDER |
+| Dépôt à terme (DAT) | **3121** | **3122** | ⚠️ À VALIDER |
+| Épargne programmée (EPR) | **3131** | **3132** | ⚠️ À VALIDER |
+
+**Routage membre/client (PS3) — ANCRÉ PAR COMPTE.** Le compte d'épargne FIGE son collectif à
+l'ouverture (`epargne.accounts.compte_collectif_id`) selon le statut du titulaire à ce moment-là :
+membre → compte membre (xxx1), client → compte client (xxx2, repli sur le compte membre si non
+rattaché — comportement historique). Toutes les écritures du compte (dépôt, retrait, clôture,
+intérêts) suivent ce même collectif : un compte ne s'éclate jamais entre 3111 et 3112.
+**⚠️ À VALIDER (option B, provisoire)** : un client devenu membre garde ses comptes existants sur
+xxx2 — seuls les NOUVEAUX comptes suivent le nouveau statut ; AUCUN transfert automatique n'est
+codé (si l'expert exige un transfert xxx2 → xxx1 au passage membre, ce sera une opération
+explicite, jamais silencieuse). Les comptes d'avant PS3 sont ancrés là où leurs écritures sont
+déjà (le compte membre) : rien n'est réécrit. Rapprochement PAR GROUPE : Σ soldes ancrés
+xxx1 == solde xxx1 ET Σ soldes ancrés xxx2 == solde xxx2 (la vue de contrôle montre les deux).
 
 **Question ouverte — membre / client** : le plan distingue épargne à vue **membres (3111)** et
 **clients (3112)** (idem par nature de produit). Le compte de dette dépend donc de la **nature du

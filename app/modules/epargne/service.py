@@ -93,11 +93,24 @@ def ouvrir_compte(
         )
 
     produit = db.execute(
-        text("SELECT 1 FROM epargne.products WHERE id = :id AND is_active"),
+        text(
+            "SELECT compte_epargne_id, compte_epargne_client_id FROM epargne.products "
+            "WHERE id = :id AND is_active"
+        ),
         {"id": product_id},
-    ).scalar_one_or_none()
+    ).one_or_none()
     if produit is None:
         raise ProduitIntrouvableError("Produit d'épargne inexistant ou indisponible.")
+
+    # ROUTAGE ANCRÉ (PS3) : le collectif est FIGÉ ici, selon le statut membre/client du titulaire
+    # AU MOMENT de l'ouverture — jamais re-routé ensuite (option B, à valider par l'expert).
+    # Membre -> compte membre (3111) ; client -> compte client (3112) SI configuré, sinon repli
+    # sur le compte membre (comportement historique tant que 3112 n'est pas rattaché).
+    est_membre = db.execute(
+        text("SELECT is_member FROM tiers.tiers WHERE id = :t"), {"t": tier_id}
+    ).scalar_one()
+    compte_membre, compte_client = produit
+    collectif = compte_membre if (est_membre or compte_client is None) else compte_client
 
     compte = SavingsAccount(
         account_number=numerotation.prochain_numero(db),
@@ -106,6 +119,7 @@ def ouvrir_compte(
         agency_id=agency_id,
         status="actif",
         balance=0,
+        compte_collectif_id=collectif,
         opened_by=par,
         created_by=par,
         updated_by=par,

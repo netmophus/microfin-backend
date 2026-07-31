@@ -39,7 +39,9 @@ class Rapprochement:
 def rapprocher(db: Session, compte_general_id: uuid.UUID) -> Rapprochement:
     """Rapproche l'épargne auxiliaire du compte général `compte_general_id` (ex. 3111).
 
-    - auxiliaire : Σ des soldes-cache des comptes d'épargne dont le produit pointe sur ce compte ;
+    - auxiliaire : Σ des soldes-cache des comptes d'épargne ANCRÉS sur ce collectif (PS3 :
+      l'ancrage `compte_collectif_id` est figé à l'ouverture — membre -> 3111, client -> 3112 ;
+      un compte legacy sans ancrage retombe sur le compte membre de son produit) ;
     - general : solde comptable du compte, calculé sur les écritures VALIDÉES. Le compte d'épargne
       est de sens crédit (une dette) : solde = somme des crédits moins somme des débits.
     """
@@ -47,7 +49,7 @@ def rapprocher(db: Session, compte_general_id: uuid.UUID) -> Rapprochement:
         text(
             "SELECT COALESCE(SUM(a.balance), 0) FROM epargne.accounts a "
             "JOIN epargne.products p ON p.id = a.product_id "
-            "WHERE p.compte_epargne_id = :c"
+            "WHERE COALESCE(a.compte_collectif_id, p.compte_epargne_id) = :c"
         ),
         {"c": compte_general_id},
     ).scalar_one()
@@ -76,17 +78,24 @@ def rapprocher(db: Session, compte_general_id: uuid.UUID) -> Rapprochement:
 
 
 def rapprocher_tout(db: Session) -> list[Rapprochement]:
-    """Rapproche CHAQUE compte collectif rattaché à un produit d'épargne (3111, 3121, 3131…).
+    """Rapproche CHAQUE compte collectif de l'épargne (3111/3112, 3121/3122, 3131…).
 
-    Un contrôleur veut la vue d'ensemble, pas un compte à la fois : on liste les comptes généraux
-    DISTINCTS pointés par les produits et on rapproche chacun. Trié par numéro pour une lecture
-    stable. Un produit sans rattachement (compte_epargne_id NULL, provisoire) n'a pas de général à
-    rapprocher : il est ignoré ici.
+    Un contrôleur veut la vue d'ensemble, pas un compte à la fois : on liste les collectifs
+    DISTINCTS — rattachements MEMBRE et CLIENT des produits (PS3), plus les ancrages effectifs
+    des comptes (un legacy pourrait pointer ailleurs) — et on rapproche chacun. La vue montre
+    donc une ligne 3111 (membres) ET une ligne 3112 (clients), chacune face à son groupe.
+    Trié par numéro pour une lecture stable. Un produit sans rattachement (NULL, provisoire)
+    n'a pas de général à rapprocher : il est ignoré ici.
     """
     ids = db.execute(
         text(
-            "SELECT DISTINCT compte_epargne_id FROM epargne.products "
-            "WHERE compte_epargne_id IS NOT NULL"
+            "SELECT compte_epargne_id AS c FROM epargne.products "
+            "WHERE compte_epargne_id IS NOT NULL "
+            "UNION "
+            "SELECT compte_epargne_client_id FROM epargne.products "
+            "WHERE compte_epargne_client_id IS NOT NULL "
+            "UNION "
+            "SELECT compte_collectif_id FROM epargne.accounts WHERE compte_collectif_id IS NOT NULL"
         )
     ).scalars()
     resultats = [rapprocher(db, compte_id) for compte_id in ids]

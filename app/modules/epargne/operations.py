@@ -39,17 +39,22 @@ def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
             Product.id == compte.product_id
         )
     ).one()
+    # ROUTAGE ANCRÉ (PS3) : le collectif FIGÉ à l'ouverture du compte prime (membre -> 3111,
+    # client -> 3112). Repli sur le compte membre du produit pour un compte legacy (NULL) —
+    # comportement historique intact. Toutes les opérations du compte (dépôt, retrait, clôture,
+    # intérêts) suivent le MÊME collectif : un compte ne s'éclate jamais entre 3111 et 3112.
+    collectif = compte.compte_collectif_id or compte_epargne
     compte_caisse = db.execute(
         select(Agency.compte_caisse_id).where(Agency.id == compte.agency_id)
     ).scalar_one()
 
     def resoudre(role: str) -> uuid.UUID:
         if role == "EPARGNE":
-            if compte_epargne is None:
+            if collectif is None:
                 raise RattachementManquantError(
                     "le produit de ce compte n'a pas de compte d'épargne rattaché (plan comptable)"
                 )
-            return compte_epargne
+            return collectif
         if role == "CAISSE":
             if compte_caisse is None:
                 raise RattachementManquantError(
