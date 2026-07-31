@@ -179,8 +179,13 @@ OD) ; libération et comptant AVEC caisse (journal CA — argent qui entre, comm
 | Souscription au comptant | **D 5721 / C 1021** | CA | ⚠️ À VALIDER |
 | Remboursement (départ, PS2) | **D 1021 / C 5721** | CA | ⚠️ À VALIDER |
 
-**Rapprochement du capital** (contrôle) : `Σ (parts libérées × valeur d'une part) == solde
-comptable 1021` — même loi que l'épargne (Σ soldes == 3111), sur le capital. Un écart = anomalie.
+**Rapprochement du capital** (contrôle) : `Σ (parts libérées × valeur d'une part) == NET comptable
+1021 - 1022`. ⚠️ Le capital réellement libéré n'est PAS 1021 seul : la souscription-engagement
+crédite 1021 (montant souscrit) ET débite 1022 (part non libérée, une créance — motif « capital
+souscrit appelé / non appelé »). Le net `1021 - 1022` = `Σ(crédit - débit)` sur les deux comptes.
+La libération crédite 1022 (la créance s'éteint) → le net monte. Un écart = anomalie. *(Le libellé
+« 1021 = libérées » du plan est un raccourci : 1021 porte le souscrit, 1022 le contra non libéré —
+à confirmer par l'expert avec le reste des schémas de parts.)*
 
 ## Journaux et exercice (C1)
 

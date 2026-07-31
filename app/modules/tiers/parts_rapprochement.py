@@ -25,13 +25,19 @@ from app.modules.tiers.parts import ParametrageManquantError, _config
 class RapprochementCapital:
     compte_general: str  # numéro du compte du plan (1021)
     auxiliaire: int  # Σ (parts libérées x valeur d'une part)
-    general: int  # solde comptable de 1021 (écritures validées)
+    general: int  # NET comptable 1021 - 1022 (capital réellement libéré, écritures validées)
     concordant: bool
     ecart: int  # auxiliaire moins general (0 si concordant)
 
 
 def rapprocher_capital_libere(db: Session) -> RapprochementCapital:
-    """Rapproche le capital libéré auxiliaire (parts) du compte général 1021."""
+    """Rapproche le capital LIBÉRÉ (Σ parts libérées x valeur) au NET comptable 1021 - 1022.
+
+    Motif capital souscrit appelé/non appelé : la souscription-engagement crédite 1021 (montant
+    souscrit) et débite 1022 (part non libérée, une créance). Le capital RÉELLEMENT libéré n'est
+    donc pas 1021 seul mais le NET 1021 - 1022 = Σ(C-D) sur les DEUX comptes. À la libération, on
+    crédite 1022 (la créance s'éteint) : le net monte. Invariant : Σ libérées x valeur == net.
+    """
     config = _config(db)
     if config.compte_parts_liberees_id is None:
         raise ParametrageManquantError("Le compte des parts libérées (1021) n'est pas rattaché.")
@@ -41,14 +47,19 @@ def rapprocher_capital_libere(db: Session) -> RapprochementCapital:
     ).scalar_one()
     auxiliaire = int(parts_liberees) * config.unit_value
 
+    comptes = [config.compte_parts_liberees_id]
+    if config.compte_parts_non_liberees_id is not None:
+        comptes.append(config.compte_parts_non_liberees_id)
+    # NET libéré = Σ(crédit - débit) sur 1021 ET 1022 : le débit 1022 (non libéré) retranche
+    # ce qui n'a pas encore été payé.
     general = db.execute(
         text(
             "SELECT COALESCE(SUM(CASE WHEN l.side = 'C' THEN l.amount ELSE -l.amount END), 0) "
             "FROM comptabilite.journal_lines l "
             "JOIN comptabilite.journal_entries e ON e.id = l.entry_id "
-            "WHERE l.account_id = :c AND e.status = 'validee'"
+            "WHERE l.account_id = ANY(:comptes) AND e.status = 'validee'"
         ),
-        {"c": config.compte_parts_liberees_id},
+        {"comptes": comptes},
     ).scalar_one()
 
     numero = db.execute(
