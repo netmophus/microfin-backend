@@ -185,6 +185,29 @@ def test_remboursement_total_par_responsable_redevient_client(
     assert reponse.json()["shares_liberees"] == 0
 
 
+def test_engagements_desactivation_avant_apres_remboursement(
+    client: TestClient, db: Session
+) -> None:
+    """L'écran lit les blocages AVANT de proposer « Désactiver » : parts détenues -> liste non
+    vide (message actionnable avec le capital en francs) ; après remboursement total -> vide."""
+    agence, tier_id = _cadre(db, "EN")
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")  # a tiers.deactivate + pay + refund
+    client.post(
+        f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 10}, headers=resp
+    )
+
+    avant = client.get(f"/tiers/{tier_id}/deactivation-engagements", headers=resp)
+    assert avant.status_code == 200
+    (engagement,) = [e for e in avant.json() if e["domaine"] == "parts_sociales"]
+    # Actionnable : le capital en francs ET quoi faire.
+    assert "50 000 F" in engagement["libelle"]
+    assert "Remboursez" in engagement["libelle"]
+
+    client.post(f"/tiers/{tier_id}/parts/remboursement", json={"shares_count": 10}, headers=resp)
+    apres = client.get(f"/tiers/{tier_id}/deactivation-engagements", headers=resp)
+    assert [e for e in apres.json() if e["domaine"] == "parts_sociales"] == []
+
+
 def test_charge_ne_peut_pas_rembourser_403(client: TestClient, db: Session) -> None:
     agence, tier_id = _cadre(db, "RX")
     resp = _entete(db, agence, "RESPONSABLE_AGENCE")

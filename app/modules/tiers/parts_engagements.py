@@ -16,7 +16,8 @@ from app.core.engagements import Engagement, enregistrer_verificateur
 
 
 def verifier_engagements_parts(db: Session, tier_id: uuid.UUID) -> list[Engagement]:
-    """Rend un engagement si le tier détient des parts (libérées ou non)."""
+    """Rend un engagement si le tier détient des parts (libérées ou non). Message ACTIONNABLE :
+    il dit le capital (en francs) et QUOI faire (rembourser / annuler) avant de désactiver."""
     ligne = db.execute(
         text(
             "SELECT shares_liberees, shares_non_liberees FROM tiers.member_shares "
@@ -30,10 +31,21 @@ def verifier_engagements_parts(db: Session, tier_id: uuid.UUID) -> list[Engageme
     total = liberees + non_liberees
     if total <= 0:
         return []
-    libelle = (
-        f"Ce membre détient {total} part(s) sociale(s) (capital dans la coopérative) : "
-        "remboursez-les avant de le désactiver."
+    unit_value = (
+        db.execute(text("SELECT unit_value FROM tiers.share_parameters LIMIT 1")).scalar()
+        or 0
     )
+    capital = f"{liberees * unit_value:,} F".replace(",", " ")
+    if liberees > 0:
+        libelle = (
+            f"Ce membre détient {total} part(s) sociale(s) — capital {capital}. "
+            "Remboursez-les avant de le désactiver."
+        )
+    else:  # que des souscriptions non libérées (aucun capital versé) -> annuler
+        libelle = (
+            f"Ce membre a {non_liberees} part(s) souscrite(s) non libérée(s). "
+            "Annulez-les avant de le désactiver."
+        )
     return [Engagement(domaine="parts_sociales", reference=str(tier_id), libelle=libelle)]
 
 

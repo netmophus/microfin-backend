@@ -309,6 +309,15 @@ class ConditionsActivation(BaseModel):
     conditions: list[ConditionActivationItem]
 
 
+class EngagementItem(BaseModel):
+    """Un engagement ouvert qui empêche la désactivation. `libelle` est ACTIONNABLE (dit quoi
+    faire). Le front l'affiche AVANT de proposer « Désactiver » — symétrie des conditions KYC."""
+
+    domaine: str  # 'epargne' | 'parts_sociales' | …
+    reference: str
+    libelle: str
+
+
 class TierResume(BaseModel):
     """Vue RÉSUMÉE (read.basic) — identification au guichet, RIEN de sensible.
 

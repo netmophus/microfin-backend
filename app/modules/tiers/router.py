@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.engagements import engagements_bloquants
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 from app.modules.tiers.consultation import (
@@ -110,6 +111,7 @@ from app.modules.tiers.schemas import (
     CreationPiece,
     CreationTelephone,
     DemandeParts,
+    EngagementItem,
     EvenementTimeline,
     FichePartsSociales,
     FicheTier,
@@ -373,6 +375,24 @@ def conditions_activation_endpoint(
         activable=not manquantes,
         conditions=[ConditionActivationItem(code=c.code, libelle=c.libelle) for c in manquantes],
     )
+
+
+@router.get("/{tier_id}/deactivation-engagements", response_model=list[EngagementItem])
+def engagements_desactivation_endpoint(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("tiers.deactivate"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[EngagementItem]:
+    """Les engagements ouverts qui EMPÊCHENT la désactivation (compte d'épargne, parts sociales…),
+    agrégés de TOUS les modules par le registre neutre. Affiché AVANT le clic « Désactiver » : si
+    la liste n'est pas vide, l'écran n'offre pas de bouton qui échouerait — symétrie avec les
+    conditions d'activation. Un seul motif pour tous les blocages. Hors périmètre -> 404."""
+    if lire_resume(db, courant, tier_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    return [
+        EngagementItem(domaine=e.domaine, reference=e.reference, libelle=e.libelle)
+        for e in engagements_bloquants(db, tier_id)
+    ]
 
 
 @router.get("/{tier_id}/timeline", response_model=list[EvenementTimeline])
