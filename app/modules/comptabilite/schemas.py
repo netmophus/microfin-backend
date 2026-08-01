@@ -1,0 +1,79 @@
+"""Schémas Pydantic — Plan de comptes, Bloc 1 (consultation + gestion unitaire).
+
+Montants et libellés en clair, aucun champ technique exposé sans traduction. `parent_number`
+est RÉSOLU (le numéro du parent, pas son UUID) : un comptable lit un numéro de compte, jamais
+un identifiant opaque.
+"""
+
+import uuid
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+
+class CompteResume(BaseModel):
+    id: uuid.UUID
+    account_number: str
+    name: str
+    short_name: str | None
+    account_class: int
+    parent_number: str | None
+    normal_side: str
+    is_posting: bool
+    is_system: bool
+    is_provisional: bool
+    is_active: bool
+
+
+class CompteDetail(CompteResume):
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PageComptes(BaseModel):
+    lignes: list[CompteResume]
+    total: int
+    page: int
+    taille: int
+
+
+class CreationCompte(BaseModel):
+    """Création MANUELLE, à l'unité — distincte de l'import CSV (un modèle générique à
+    valider). is_system n'est jamais proposé ici : un compte système ne vient QUE du plan de
+    référence importé."""
+
+    account_number: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, max_length=50)
+    account_class: int = Field(ge=1, le=9)
+    parent_number: str | None = Field(default=None, max_length=20)
+    normal_side: Literal["D", "C"]
+    is_posting: bool
+    notes: str | None = None
+
+
+class ModificationCompte(BaseModel):
+    """PATCH partiel : seuls les champs FOURNIS sont modifiés (même patron que la fiche
+    utilisateur — model_fields_set distingue « absent » de « explicitement vidé »)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    short_name: str | None = Field(default=None, max_length=50)
+    notes: str | None = None
+
+    def modifications(self) -> dict[str, object]:
+        """Ne rend que les champs RÉELLEMENT fournis par le client."""
+        return {champ: getattr(self, champ) for champ in self.model_fields_set}
+
+
+class ChangementSens(BaseModel):
+    """Motif OBLIGATOIRE : acte sensible sur le plan comptable, tracé (trace-only pour
+    l'instant — le double contrôle maker-checker est un chantier séparé, à venir)."""
+
+    normal_side: Literal["D", "C"]
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class DesactivationCompte(BaseModel):
+    motif: str = Field(min_length=3, max_length=500)
