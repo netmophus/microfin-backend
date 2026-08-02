@@ -9,23 +9,105 @@
 > redéploiement. Les valeurs livrées sont **provisoires**, marquées « À VALIDER » (drapeau
 > `is_provisional` en base + bannière à l'écran). Aucune n'est présentée comme définitive.
 
-## Le plan de comptes (importé du CSV RCSFD)
+## Le plan de comptes — référentiel officiel RCSFD + extensions IMF
 
-- **345 comptes**, 9 classes, importés à l'installation et **tous marqués provisoires**
-  (`accounts.is_provisional = TRUE`). L'expert valide (globalement ou compte par compte), puis
-  on lève le drapeau.
-- À valider : **les numéros de comptes exacts**, leur **libellé**, le **sens normal** (D/C),
-  `is_posting` (compte de saisie vs regroupement), la **hiérarchie** (parent), la conformité au
-  référentiel RCSFD/BCEAO **en vigueur**.
+**Le plan actif est le référentiel officiel**, depuis le départ : **380 comptes**
+(372 comptes officiels + 8 comptes d'extension membre/client), tous marqués
+`is_system = TRUE` (numérotation officielle, protégée) et **tous provisoires**
+(`accounts.is_provisional = TRUE`) — la numérotation est sûre, mais le **sens** (D/C) et les
+**rattachements** restent à faire valider par un expert-comptable SFD avant mise en production.
+
+- [`reference/plan_comptable_rcsfd_officiel.csv`](reference/plan_comptable_rcsfd_officiel.csv) —
+  le référentiel officiel tel quel (372 comptes), extrait de la décision BCEAO n° 357-11-2016
+  instituant le plan comptable bancaire révisé de l'UMOA.
+- [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv) — le fichier
+  réellement importé (380 lignes : les 372 + les 8 extensions), avec hiérarchie/nature/sens
+  dérivés (méthodologie ci-dessous).
 
 | # | Valeur | Statut |
 |---|--------|--------|
-| 1 | Numéros de comptes du plan (les 345) | ⚠️ À VALIDER |
-| 2 | Sens normal D/C de chaque compte | ⚠️ À VALIDER |
-| 3 | Comptes de saisie (`is_posting`) vs regroupement | ⚠️ À VALIDER |
-| 4 | Hiérarchie parent/enfant | ⚠️ À VALIDER |
-| 5 | Distinction membre / client (comptes `xxx1` vs `xxx2`) — critère métier | ⚠️ À VALIDER |
+| 1 | Numéros de comptes du plan (les 380) | ✅ officiels (BCEAO) + extensions proposées |
+| 2 | Sens normal D/C de chaque compte | ⚠️ À VALIDER — voir priorité de relecture ci-dessous |
+| 3 | Comptes de saisie (`is_posting`) vs regroupement | ⚠️ À VALIDER (déduit mécaniquement de la hiérarchie, fiable) |
+| 4 | Hiérarchie parent/enfant | ✅ dérivée de la numérotation officielle |
+| 5 | Distinction membre / client (comptes à 6 chiffres, extension IMF) | ⚠️ À VALIDER — structure ET libellés proposés |
 | 6 | Nombre de décimales des montants (XOF = 0 en présentation ; calcul d'intérêts ?) | ⚠️ À VALIDER |
+
+### Origine et méthodologie (décision du 02/08/2026)
+
+**Fenêtre unique avant mise en production** : aucune donnée réelle à préserver à ce stade,
+seulement des jeux de test. Décision prise de **repartir d'une base vierge** avec le seul plan
+officiel RCSFD + les 8 extensions, plutôt que de faire coexister un ancien plan provisoire
+(jamais validé) et le nouveau. Traçabilité de la **décision**, pas des données : un premier plan
+provisoire à 345 comptes (classes 1-9, hors nomenclature officielle) a existé, a servi à tester
+le mécanisme (import, garde-fous, rattachements, écritures, les Blocs 1-5 du paramétrage
+comptable), puis a été **purgé** — il n'apparaît plus nulle part dans cette base.
+
+**Dérivation du plan importé** (numéro/libellé/classe viennent tels quels du fichier officiel) :
+- **Parent et nature** (saisie/regroupement) : déduits **mécaniquement** de la numérotation — un
+  compte sans enfant dans le fichier est un compte de saisie, sauf **2511, 2512, 2521, 2531**,
+  reclassés en regroupement puisqu'ils gagnent des enfants à 6 chiffres absents du fichier
+  officiel. Fiable.
+- **Sens (D/C)** : classification par nature comptable standard (actif = D, passif/capitaux
+  propres = C, charges = D, produits = C), avec priorité à la règle « Dettes rattachées » = C /
+  « Créances rattachées » = D quelle que soit la section parente. **Ma proposition**, pas une
+  extraction du texte réglementaire — voir la liste de relecture prioritaire ci-dessous.
+- **8 comptes d'extension** (structure proposée, à valider) :
+
+| Compte | Libellé proposé | Parent | Sens | Rattaché à |
+|---|---|---|---|---|
+| 251111 | Comptes ordinaires — membres | 2511 | C | EAV, membre |
+| 251121 | Comptes ordinaires — clients | 2511 | C | EAV, client |
+| 251211 | Comptes ordinaires sur livret — membres | 2512 | C | (réservé, aucun produit) |
+| 251221 | Comptes ordinaires sur livret — clients | 2512 | C | (réservé, aucun produit) |
+| 252111 | Dépôts à terme reçus — membres | 2521 | C | DAT, membre |
+| 252121 | Dépôts à terme reçus — clients | 2521 | C | DAT, client |
+| 253111 | Compte d'épargne sur livret — membres | 2531 | C | EPR, membre |
+| 253121 | Compte d'épargne sur livret — clients | 2531 | C | EPR, client |
+
+`2512`/`251211`/`251221` sont posés en **réserve** (aucun produit actuel ne les utilise) pour un
+futur 4ᵉ produit de type livret — coût nul de les poser maintenant.
+
+**Priorité de relecture experte — 32 comptes à sens structurellement moins évident.** Sur les
+372 comptes officiels, la hiérarchie et la nature (saisie/regroupement) sont déduites
+mécaniquement de la numérotation (fiable). Le **sens** (D/C) suit la nature comptable standard
+partout ailleurs, mais ces 32 comptes méritent un œil expert en priorité — pas noyés dans les
+372, à traiter d'abord :
+
+**4 comptes reclassés en regroupement** (gagnent des enfants à 6 chiffres qui n'existent pas
+dans le fichier officiel — la reclassification elle-même est à confirmer, pas seulement le sens) :
+
+| Compte | Libellé | Sens proposé |
+|---|---|---|
+| 2511 | Comptes ordinaires | C |
+| 2512 | Comptes ordinaires sur livret | C |
+| 2521 | Dépôts à terme reçus | C |
+| 2531 | Compte d'épargne sur livret | C |
+
+**28 comptes au sens proposé par convention, à confirmer** (ressources affectées, comptes
+transitoires/d'attente, comptes de régularisation, report à nouveau et résultat — sections où
+un compte peut légitimement porter un solde des deux sens selon l'usage réel de l'institution) :
+
+| Compte | Libellé | Sens proposé | Compte | Libellé | Sens proposé |
+|---|---|---|---|---|---|
+| 18 | Ressources affectées | C | 3814 | Comptes d'abonnement de produits | D |
+| 181 | Ressources affectées à court terme | C | 3815 | Produits à recevoir | D |
+| 182 | Ressources affectées à moyen terme | C | 382 | Comptes de régularisation — passif | C |
+| 183 | Ressources affectées à long terme | C | 3822 | Produits constatés d'avance | C |
+| 184 | Intérêts capitalisés | C | 3824 | Comptes d'abonnement de charges | C |
+| 37 | Comptes transitoires et d'attente | D | 3825 | Charges à payer | C |
+| 378 | Autres comptes transitoires | D | 58 | Report à nouveau | C |
+| 379 | Comptes d'attente | D | 59 | Résultat | C |
+| 3791 | Comptes d'attente — actif | D | 591 | Excédent ou déficit en instance d'approbation | C |
+| 3792 | Comptes d'attente — passif | C | 592 | Excédent ou déficit de l'exercice | C |
+| 38 | Comptes de régularisation | D | 593 | Marge | C |
+| 381 | Comptes de régularisation — actif | D | 594 | Produit financier net ou charge financière nette | C |
+| 3811 | Charges à répartir sur plusieurs exercices | D | 595 | Excédent ou déficit d'exploitation | C |
+| 3812 | Charges constatées d'avance | D | 596 | Excédent ou déficit exceptionnel | C |
+
+Tous les 380 comptes (372 officiels + 8 extensions) restent `is_system = TRUE` (numérotation
+officielle, protégée) et `is_provisional = TRUE` (sens à confirmer) — même discipline que le
+reste de ce document : aucune valeur n'est présentée comme définitive avant l'expert.
 
 ## Les schémas d'écriture (E1, paramétrables — POSÉS, provisoires)
 
@@ -36,14 +118,17 @@ l'opération : `epargne.depot` = D **CAISSE** / C **EPARGNE** ; `epargne.retrait
 **provisoires**, à valider avant mise en production.
 
 **La caisse (face argent)** : le rôle CAISSE se résout via `parameters.agencies.compte_caisse_id`
-— **un compte de caisse par agence** (provisoire : Siège → **5721** Caisses agences). C'est la face
-COMPTABLE seulement ; le vrai module Caisse (guichets, arrêtés, dénombrement, écarts) est reporté.
+— **un compte de caisse par agence** (provisoire : toutes les agences → **1011** Billets et
+monnaies émis par la BCEAO). C'est la face COMPTABLE seulement ; le vrai module Caisse
+(guichets, arrêtés, dénombrement, écarts) est reporté.
 
 **Collectif ↔ auxiliaire (loi de rapprochement)** : le rôle EPARGNE se résout via
-`epargne.products.compte_epargne_id` — le compte **général 3111**, qui porte le **total** de tous
-les membres. Le **détail par membre** vit dans l'auxiliaire (`epargne.accounts`). Invariant à
-contrôler (fonction `rapprocher`) : **Σ soldes épargne rattachés à 3111 == solde comptable de
-3111**. Un écart = fraude ou bug, à détecter avant l'inspecteur.
+`epargne.products.compte_epargne_id` — le compte **général** (ex. **251111** pour l'épargne à
+vue membre), qui porte le **total** de tous les membres. Le **détail par membre** vit dans
+l'auxiliaire (`epargne.accounts`). Invariant à contrôler (fonction `rapprocher`) : **Σ soldes
+épargne rattachés au collectif == solde comptable de ce collectif**. Un écart = fraude ou bug, à
+détecter avant l'inspecteur. Vérifié en réel après la bascule (dépôt/retrait/rapprochement
+concordants sur 251111 et 251121, voir smoke test du 02/08/2026).
 
 Valeurs provisoires à définir et valider avant toute mise en production.
 
@@ -73,7 +158,7 @@ provisoires** (`epargne.products`), à valider. Défaut « taux 0 » = pas d'int
 | `base_jours` | Base jours (360 / 365) | 360 | ⚠️ À VALIDER |
 | `regle_arrondi` | plus_proche / plancher | plus_proche | ⚠️ À VALIDER |
 | `solde_minimum_remunere` | Seuil sous lequel pas d'intérêt | 0 | ⚠️ À VALIDER |
-| `compte_charge_interet_id` | Compte de charge (603 à vue / 604 programmée) | 603/604 | ⚠️ À VALIDER |
+| `compte_charge_interet_id` | Compte de charge (602511 à vue / 60252 DAT / 60253 EPR) | selon produit | ⚠️ À VALIDER |
 | Fiscalité (retenue) | Hors E5 pour l'instant, place réservée | — | ⚠️ À VALIDER |
 
 **Méthode de calcul du solde** (le plus sensible) — les trois méthodes sont implémentées, le
@@ -104,62 +189,52 @@ vigueur, et le moteur lira `date_valeur` au lieu de `created_at` ; les mouvement
 date de valeur d'origine (on ne réécrit pas le passé, le calcul reste rejouable). **À VALIDER : la
 méthode elle-même** (voir ci-dessus).
 
-**Schéma d'écriture du versement (provisoire)** : `epargne.interet` = **D 603** Intérêts sur
-épargne à vue / **C 3111** Épargne à vue membres (journal OD). La charge de l'IMF monte, la dette
-envers le membre monte. Membre suspendu : crédité normalement (c'est son argent). Compte fermé :
-plus d'intérêts.
+**Schéma d'écriture du versement (provisoire)** : `epargne.interet` = **D 602511** Intérêts sur
+comptes ordinaires créditeurs / **C 251111** Épargne à vue membres (journal OD). La charge de
+l'IMF monte, la dette envers le membre monte. Membre suspendu : crédité normalement (c'est son
+argent). Compte fermé : plus d'intérêts.
 
 | Opération | Schéma provisoire (à valider) | Statut |
 |-----------|-------------------------------|--------|
-| Dépôt épargne à vue (membre) | D 57x Caisse / C 3111 Épargne à vue membres | ⚠️ À VALIDER |
-| Retrait épargne à vue | D 3111 / C 57x Caisse | ⚠️ À VALIDER |
-| Ouverture dépôt à terme | D 3111 (ou caisse) / C 3121 DAT | ⚠️ À VALIDER |
+| Dépôt épargne à vue (membre) | D 1011 Caisse / C 251111 Épargne à vue membres | ⚠️ À VALIDER |
+| Retrait épargne à vue | D 251111 / C 1011 Caisse | ⚠️ À VALIDER |
+| Ouverture dépôt à terme | D 251111 (ou caisse) / C 252111 DAT | ⚠️ À VALIDER |
 | Intérêts créditeurs (charge) | D 6xxx Charges d'intérêts / C 319x Intérêts courus | ⚠️ À VALIDER |
-| Capitalisation des intérêts | D 319x / C 3111 | ⚠️ À VALIDER |
-| Souscription parts sociales | D Caisse / C 1021 Parts sociales libérées | ⚠️ À VALIDER |
+| Capitalisation des intérêts | D 319x / C 251111 | ⚠️ À VALIDER |
+| Souscription parts sociales | D Caisse / C 57111 Capital souscrit appelé versé | ⚠️ À VALIDER |
 | Frais de tenue de compte | D compte membre / C 7xxx Produits | ⚠️ À VALIDER |
 
 ## Rattachement produit d'épargne → compte du plan (Épargne, PROVISOIRE)
 
-Chaque produit d'épargne pointe vers le **compte de dette** (classe 3, sens crédit) crédité au
-dépôt. Rattachement livré **provisoire** (`epargne.products.compte_epargne_id`), à valider par
-l'expert-comptable SFD.
+Chaque produit d'épargne pointe vers le **compte de dette** (classe 2, sens crédit) crédité au
+dépôt. Rattachement livré **provisoire** (`epargne.products.compte_epargne_id` /
+`compte_epargne_client_id`), à valider par l'expert-comptable SFD. Éditable sans redéploiement
+via l'écran de rattachement (Bloc 5 du paramétrage comptable).
 
 | Produit | Compte MEMBRE (provisoire) | Compte CLIENT (PS3, provisoire) | Statut |
 |---------|----------------------------|--------------------------------|--------|
-| Épargne à vue (EAV) | **3111** | **3112** | ⚠️ À VALIDER |
-| Dépôt à terme (DAT) | **3121** | **3122** | ⚠️ À VALIDER |
-| Épargne programmée (EPR) | **3131** | **3132** | ⚠️ À VALIDER |
+| Épargne à vue (EAV) | **251111** | **251121** | ⚠️ À VALIDER |
+| Dépôt à terme (DAT) | **252111** | **252121** | ⚠️ À VALIDER |
+| Épargne programmée (EPR) | **253111** | **253121** | ⚠️ À VALIDER |
 
-**Routage membre/client (PS3) — ANCRÉ PAR COMPTE.** Le compte d'épargne FIGE son collectif à
-l'ouverture (`epargne.accounts.compte_collectif_id`) selon le statut du titulaire à ce moment-là :
-membre → compte membre (xxx1), client → compte client (xxx2, repli sur le compte membre si non
-rattaché — comportement historique). Toutes les écritures du compte (dépôt, retrait, clôture,
-intérêts) suivent ce même collectif : un compte ne s'éclate jamais entre 3111 et 3112.
+**Routage membre/client (PS3) — ANCRÉ PAR COMPTE, ACTIF.** Le compte d'épargne FIGE son
+collectif à l'ouverture (`epargne.accounts.compte_collectif_id`) selon le statut du titulaire à
+ce moment-là : membre actif (`tiers.tiers.is_member = TRUE`) → compte membre, client → compte
+client (repli sur le compte membre si non rattaché). Toutes les écritures du compte (dépôt,
+retrait, clôture, intérêts) suivent ce même collectif : un compte ne s'éclate jamais entre les
+deux. **Vérifié en réel après la bascule** (02/08/2026) : un dépôt/retrait client s'est posé sur
+251121, un dépôt/retrait membre (après souscription de parts sociales) sur 252111, rapprochement
+concordant sur les deux.
+
 **⚠️ À VALIDER (option B, provisoire)** : un client devenu membre garde ses comptes existants sur
-xxx2 — seuls les NOUVEAUX comptes suivent le nouveau statut ; AUCUN transfert automatique n'est
-codé (si l'expert exige un transfert xxx2 → xxx1 au passage membre, ce sera une opération
-explicite, jamais silencieuse). Les comptes d'avant PS3 sont ancrés là où leurs écritures sont
-déjà (le compte membre) : rien n'est réécrit. Rapprochement PAR GROUPE : Σ soldes ancrés
-xxx1 == solde xxx1 ET Σ soldes ancrés xxx2 == solde xxx2 (la vue de contrôle montre les deux).
-
-**Question ouverte — membre / client** : le plan distingue épargne à vue **membres (3111)** et
-**clients (3112)** (idem par nature de produit). Le compte de dette dépend donc de la **nature du
-tiers** (sociétaire vs simple usager). **Le marqueur existe désormais** sur le tiers
-(`tiers.tiers.is_member`, migration 0025 : FALSE = client par défaut, TRUE = membre). Le **routage
-comptable** qui l'exploite (membre → 3111, client → 3112) est le chantier **Parts sociales / PS3** ;
-provisoirement, tous les produits restent rattachés au compte **membre** (3111), rétrocompatible.
-
-**⚠️ À VALIDER — épargne existante au passage client → membre.** Quand un client devient membre,
-que deviennent ses comptes d'épargne DÉJÀ ouverts (routés 3112) ?
-- *Préférence provisoire (à confirmer par l'expert)* : **les comptes existants ne basculent PAS**
-  automatiquement ; seuls les **nouveaux** comptes suivent la nouvelle qualité. Plus simple, aucun
-  mouvement d'argent non sollicité. Contrainte technique associée : le routage doit être **ancré
-  par compte** (le compte mémorise son collectif à l'ouverture), sinon un même compte s'éclaterait
-  sur 3111 ET 3112 et casserait le rapprochement.
-- *Alternative* : **transfert** du solde `D 3112 / C 3111` au passage membre, pour que le bilan
-  reflète la qualité au jour J. Plus lourd (déplace des soldes), à auditer. **AUCUN transfert
-  automatique n'est codé** ; cette option n'existera que si l'expert la valide.
+le compte client — seuls les NOUVEAUX comptes suivent le nouveau statut ; AUCUN transfert
+automatique n'est codé (si l'expert exige un transfert au passage membre, ce sera une opération
+explicite, jamais silencieuse).
+- *Préférence provisoire (à confirmer par l'expert)* : pas de bascule automatique des comptes
+  existants. Plus simple, aucun mouvement d'argent non sollicité.
+- *Alternative* : **transfert** du solde (compte client → compte membre) au passage membre, pour
+  que le bilan reflète la qualité au jour J. Plus lourd (déplace des soldes), à auditer. **AUCUN
+  transfert automatique n'est codé** ; cette option n'existera que si l'expert la valide.
 
 ## Parts sociales (PS1, PROVISOIRES) — la mécanique accueille, l'expert/les statuts choisissent
 
@@ -172,32 +247,34 @@ Config d'institution `tiers.share_parameters` (une ligne, `is_provisional`), tou
 | `minimum_shares` | Nombre minimum de parts pour adhérer | 1 | ⚠️ À VALIDER |
 | `is_refundable` | Parts remboursables ou non | vrai | ⚠️ À VALIDER |
 | `membership_on` | Membre à la **souscription** ou à la **libération** | libération | ⚠️ À VALIDER |
-| `compte_parts_liberees_id` / `_non_liberees_id` | Rattachement 1021 / 1022 | 1021 / 1022 | ⚠️ À VALIDER |
+| `compte_parts_liberees_id` / `_non_liberees_id` | Rattachement 57111 / 57112 | 57111 / 57112 | ⚠️ À VALIDER |
 
 **Moment de l'adhésion** : défaut **libération** (on est membre quand le capital est réellement
 versé — parts libérées ≥ minimum), paramétrable en `souscription`. Le marqueur `tiers.is_member`
-bascule DANS la transaction de l'opération. Montants en **francs entiers** (le `NUMERIC(18,2)` des
-specs est transposé en BIGINT). Hypothèse provisoire : **valeur d'une part constante** (sinon
-historiser, comme la date de valeur d'épargne) — vaut pour la libération et le rapprochement.
+bascule DANS la transaction de l'opération — **vérifié en réel** après la bascule (souscription
+comptant → `is_member` passe à `TRUE` dans la même transaction, smoke test du 02/08/2026). Montants
+en **francs entiers** (le `NUMERIC(18,2)` des specs est transposé en BIGINT). Hypothèse
+provisoire : **valeur d'une part constante** (sinon historiser, comme la date de valeur
+d'épargne) — vaut pour la libération et le rapprochement.
 
-**Schémas d'écriture (provisoires, seed `seed-comptabilite`)**. 1022 sens D (souscrites non
-libérées, créance), 1021 sens C (libérées, capital). Souscription-engagement SANS caisse (journal
-OD) ; libération et comptant AVEC caisse (journal CA — argent qui entre, comme un dépôt).
+**Schémas d'écriture (provisoires, seed `seed-comptabilite`)**. 57112 sens D (souscrites non
+libérées, créance), 57111 sens C (libérées, capital) — ce mapping colle exactement à la
+nomenclature officielle (« Capital souscrit appelé versé » / « … non versé »). Souscription-
+engagement SANS caisse (journal OD) ; libération et comptant AVEC caisse (journal CA — argent qui
+entre, comme un dépôt).
 
 | Opération | Schéma | Journal | Statut |
 |-----------|--------|---------|--------|
-| Souscription (engagement) | **D 1022 / C 1021** | OD | ⚠️ À VALIDER |
-| Libération (paiement) | **D 5721 / C 1022** | CA | ⚠️ À VALIDER |
-| Souscription au comptant | **D 5721 / C 1021** | CA | ⚠️ À VALIDER |
-| Remboursement (départ, PS2) | **D 1021 / C 5721** | CA | ⚠️ À VALIDER |
+| Souscription (engagement) | **D 57112 / C 57111** | OD | ⚠️ À VALIDER |
+| Libération (paiement) | **D 1011 / C 57112** | CA | ⚠️ À VALIDER |
+| Souscription au comptant | **D 1011 / C 57111** | CA | ⚠️ À VALIDER |
+| Remboursement (départ, PS2) | **D 57111 / C 1011** | CA | ⚠️ À VALIDER |
 
 **Rapprochement du capital** (contrôle) : `Σ (parts libérées × valeur d'une part) == NET comptable
-1021 - 1022`. ⚠️ Le capital réellement libéré n'est PAS 1021 seul : la souscription-engagement
-crédite 1021 (montant souscrit) ET débite 1022 (part non libérée, une créance — motif « capital
-souscrit appelé / non appelé »). Le net `1021 - 1022` = `Σ(crédit - débit)` sur les deux comptes.
-La libération crédite 1022 (la créance s'éteint) → le net monte. Un écart = anomalie. *(Le libellé
-« 1021 = libérées » du plan est un raccourci : 1021 porte le souscrit, 1022 le contra non libéré —
-à confirmer par l'expert avec le reste des schémas de parts.)*
+57111 - 57112`. ⚠️ Le capital réellement libéré n'est PAS 57111 seul : la souscription-engagement
+crédite 57111 (montant souscrit) ET débite 57112 (part non libérée, une créance — motif « capital
+souscrit appelé / non appelé »). Le net `57111 - 57112` = `Σ(crédit - débit)` sur les deux
+comptes. La libération crédite 57112 (la créance s'éteint) → le net monte. Un écart = anomalie.
 
 ## Journaux et exercice (C1)
 
