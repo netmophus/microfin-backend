@@ -18,8 +18,13 @@
 **rattachements** restent à faire valider par un expert-comptable SFD avant mise en production.
 
 - [`reference/plan_comptable_rcsfd_officiel.csv`](reference/plan_comptable_rcsfd_officiel.csv) —
-  le référentiel officiel tel quel (372 comptes), extrait de la décision BCEAO n° 357-11-2016
-  instituant le plan comptable bancaire révisé de l'UMOA.
+  le référentiel officiel tel quel (372 comptes), extrait du *Référentiel comptable spécifique
+  des systèmes financiers décentralisés de l'UMOA* (RCSFD, 1re édition, ISBN 978-2-916140-11-7).
+  **Correction (02/08/2026)** : une version antérieure de ce document citait par erreur la
+  décision BCEAO n° 357-11-2016 (plan comptable **bancaire** révisé de l'UMOA — un référentiel
+  différent, pour les banques, pas pour les SFD). Cette citation était une erreur de
+  documentation ; les données du plan de comptes n'ont jamais été extraites de ce fichier
+  bancaire.
 - [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv) — le fichier
   réellement importé (380 lignes : les 372 + les 8 extensions), avec hiérarchie/nature/sens
   dérivés (méthodologie ci-dessous).
@@ -108,6 +113,56 @@ un compte peut légitimement porter un solde des deux sens selon l'usage réel d
 Tous les 380 comptes (372 officiels + 8 extensions) restent `is_system = TRUE` (numérotation
 officielle, protégée) et `is_provisional = TRUE` (sens à confirmer) — même discipline que le
 reste de ce document : aucune valeur n'est présentée comme définitive avant l'expert.
+
+## Concordance bilan / compte de résultat (Annexe 1 RCSFD) — décision provisoire
+
+Pour les rapports « à date » (grand livre, balance, et plus tard bilan/résultat provisoires —
+voir R1/R2/R3), la nomenclature officielle (Annexe 1 du RCSFD) fait correspondre chaque poste des
+états financiers à une liste de comptes. La quasi-totalité de cette concordance résout sans
+ambiguïté sur nos 380 comptes (un compte-parent chez nous se substitue par la somme de ses
+enfants de saisie). **6 postes de la classe 2 (comptes membres/clients) restent une hypothèse, pas
+une certitude**, et devront porter un badge « à confirmer » dans l'écran du bilan le jour où il
+existera (R3) — pas ailleurs sur le rapport.
+
+**Le problème** : la nomenclature marque `2511`/`2512` d'un préfixe « ex » (extrait) — ces comptes
+d'origine peuvent porter un solde débiteur (découvert accidentel) OU créditeur (dépôt normal),
+et apparaissent donc potentiellement à l'actif (portion débitrice) ET au passif (portion
+créditrice). Chez nous, `2511`/`2512` sont éclatés en comptes à 6 chiffres **exclusivement
+créditeurs** (`251111`/`251121`/`251211`/`251221`, sens C, sans variante débitrice).
+
+**Décision provisoire (02/08/2026, à valider par l'expert)** : traiter la portion débitrice
+(« ex ») comme **structurellement sans objet** dans notre système, parce que (a) un découvert
+éventuel est déjà comptabilisé séparément (compte `2023` Découverts, distinct de `2511`), et (b)
+nos comptes `251111`/`251121` n'ont **aucune** variante débitrice — le garde-fou
+`decouvert_autorise = 0` par défaut (voir plus bas) l'empêche déjà en pratique. Si cette politique
+changeait un jour (découvert autorisé directement sur un compte à vue), cette décision serait à
+revoir.
+
+**Mapping résultant, sous cette hypothèse** :
+
+| Poste | Formule RCSFD | Chez nous (sous l'hypothèse ci-dessus) |
+|---|---|---|
+| B01 (actif) | … + ex2511 + … | le terme `ex2511` vaut **0** (aucun compte débiteur chez nous) ; le reste du poste (2022+2023+20227+2031+2037+291..294-2991..2993) résout normalement |
+| B2N (actif) | + ex2511 | **0** chez nous par construction (poste entièrement composé de la portion débitrice, sans objet) |
+| G01 (passif) | … + ex2511 + ex2512 + 2521 + 2531 + … | substituer `ex2511+ex2512` par `251111+251121+251211+251221` ; `2521` et `2531` selon G15/G2A ci-dessous |
+| G10 (passif) | + ex2511 + ex2512 | **251111 + 251121 + 251211 + 251221** |
+
+**Asymétrie de parenté découverte (2 postes de plus, sans préfixe « ex » mais avec le même
+piège)** : `25116` (dettes rattachées de 2511) est un ENFANT de `2511` dans notre plan, donc déjà
+exclu ci-dessus par construction (G90 le compte séparément). Mais `25316` (dettes rattachées de
+2531) est de la même façon un enfant de `2531` chez nous, **alors que** `2526` (dettes rattachées
+de 2521) est un enfant de `252` (pas de `2521`) — asymétrie propre à notre plan, pas au
+référentiel :
+
+| Poste | Formule RCSFD | Chez nous |
+|---|---|---|
+| G15 (passif) | + 2521 | **252111 + 252121** (pas d'exclusion nécessaire : `2526` n'est pas un descendant de `2521` chez nous) |
+| G2A (passif) | + 2531 | **253111 + 253121** (EXCLURE `25316`, qui est un enfant direct de `2531` chez nous et déjà compté à part dans G90) |
+
+Ces 6 postes (B01, B2N, G01, G10, G15, G2A) sont les seuls de toute la nomenclature (240 postes
+vérifiés) à reposer sur une hypothèse plutôt qu'une correspondance mécanique directe. Le reste de
+l'extraction (classes 1, 3 à 7, Annexes 2 et 3) est disponible dans le dépôt de travail, sans point
+en suspens.
 
 ## Les schémas d'écriture (E1, paramétrables — POSÉS, provisoires)
 
