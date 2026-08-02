@@ -77,3 +77,33 @@ class ChangementSens(BaseModel):
 
 class DesactivationCompte(BaseModel):
     motif: str = Field(min_length=3, max_length=500)
+
+
+class DiffChampSchema(BaseModel):
+    champ: str
+    avant: str
+    apres: str
+
+
+class CompteApercuSchema(BaseModel):
+    account_number: str
+    name: str
+    diffs: list[DiffChampSchema] = []
+
+
+class ApercuImportComptes(BaseModel):
+    """Résultat de l'aperçu (Bloc 2) : soit des anomalies (rien d'autre n'est fourni, l'import
+    est bloqué), soit le diff — ce qui serait créé/modifié — accompagné d'une empreinte à
+    reprendre telle quelle à la confirmation."""
+
+    anomalies: list[str] = []
+    empreinte: str | None = None
+    a_creer: list[CompteApercuSchema] = []
+    a_modifier: list[CompteApercuSchema] = []
+    inchanges: int = 0
+
+
+class ConfirmationImportComptes(BaseModel):
+    crees: int
+    mis_a_jour: int
+    provisoire_leve: bool

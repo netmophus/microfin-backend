@@ -1,23 +1,39 @@
-"""Endpoints HTTP — Plan de comptes, Bloc 1 (consultation + gestion unitaire).
+"""Endpoints HTTP — Plan de comptes : Bloc 1 (consultation + gestion unitaire) + Bloc 2
+(import/export CSV en masse).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
   - compte inexistant                           -> 404
   - numéro déjà utilisé / classe-numéro incohérente / parent invalide -> 422, message humain
   - garde-fou (système, mouvementé, enfants actifs) -> 422, message humain (service.py)
+  - fichier CSV invalide / anomalies de validation -> 422, message humain (plan.py)
+  - fichier changé entre l'aperçu et la confirmation -> 422, empreintes différentes
 
-Lecture -> compta.plan.read. Écriture (créer, modifier, sens, désactiver) -> compta.plan.manage.
+Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
+en 2 temps) -> compta.plan.manage.
 """
 
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.comptabilite import comptes
+from app.modules.audit.service import ecrire_audit
+from app.modules.comptabilite import comptes, plan
 from app.modules.comptabilite.comptes import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
@@ -28,11 +44,15 @@ from app.modules.comptabilite.comptes import (
 )
 from app.modules.comptabilite.models import Account
 from app.modules.comptabilite.schemas import (
+    ApercuImportComptes,
     ChangementSens,
+    CompteApercuSchema,
     CompteDetail,
     CompteResume,
+    ConfirmationImportComptes,
     CreationCompte,
     DesactivationCompte,
+    DiffChampSchema,
     ModificationCompte,
     PageComptes,
 )
@@ -43,6 +63,9 @@ from app.modules.security.router import _contexte
 router = APIRouter(prefix="/comptabilite", tags=["comptabilite"])
 
 MESSAGE_INTROUVABLE = "Compte du plan introuvable."
+MESSAGE_FICHIER_CHANGE = (
+    "Le fichier a changé depuis l'aperçu. Relancez l'aperçu avant de confirmer."
+)
 
 
 def _vers_resume(compte: Account, parent_number: str | None) -> CompteResume:
@@ -106,6 +129,117 @@ def lister_comptes_endpoint(
         total=resultat.total,
         page=page,
         taille=taille,
+    )
+
+
+# --- Import / export CSV (Bloc 2) -------------------------------------------------------
+# AVANT /comptes/{compte_id} : sinon Starlette matcherait "export"/"import" comme un compte_id
+# (routes évaluées dans l'ordre de déclaration, la première forme qui matche gagne).
+
+
+def _vers_apercu(c: plan.CompteApercu) -> CompteApercuSchema:
+    return CompteApercuSchema(
+        account_number=c.account_number,
+        name=c.name,
+        diffs=[DiffChampSchema(champ=d.champ, avant=d.avant, apres=d.apres) for d in c.diffs],
+    )
+
+
+@router.post("/comptes/import/apercu", response_model=ApercuImportComptes)
+def apercu_import_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+    fichier: Annotated[UploadFile, File(description="CSV du plan de comptes (« ; », UTF-8).")],
+) -> ApercuImportComptes:
+    """Lit et valide le fichier, SANS RIEN ÉCRIRE. Anomalies -> import bloqué (liste complète).
+    Fichier propre -> diff compte par compte (créations, modifications avec avant/après) +
+    une empreinte à reprendre telle quelle pour confirmer."""
+    contenu = fichier.file.read()
+    try:
+        lignes = plan.lire_bytes(contenu)
+    except plan.FichierInvalideError as erreur:
+        raise _422(erreur) from None
+
+    anomalies = plan.valider(lignes)
+    if anomalies:
+        return ApercuImportComptes(anomalies=[str(a) for a in anomalies])
+
+    rapport = plan.previsualiser(db, lignes)
+    return ApercuImportComptes(
+        empreinte=plan.empreinte(contenu),
+        a_creer=[_vers_apercu(c) for c in rapport.a_creer],
+        a_modifier=[_vers_apercu(c) for c in rapport.a_modifier],
+        inchanges=rapport.inchanges,
+    )
+
+
+@router.post("/comptes/import/confirmer", response_model=ConfirmationImportComptes)
+def confirmer_import_endpoint(
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+    fichier: Annotated[UploadFile, File(description="LE MÊME fichier vu à l'aperçu.")],
+    empreinte: Annotated[str, Form()],
+    motif: Annotated[str, Form(min_length=3, max_length=500)],
+    lever_provisoire: Annotated[
+        bool, Form(description="Cette correction vaut validation définitive de l'expert.")
+    ] = False,
+) -> ConfirmationImportComptes:
+    """Réécrit — exige la MÊME empreinte que l'aperçu (sinon un fichier différent aurait pu se
+    substituer entre-temps) et un motif tracé. Tout ou rien, comme l'aperçu."""
+    contenu = fichier.file.read()
+    if plan.empreinte(contenu) != empreinte:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=MESSAGE_FICHIER_CHANGE
+        )
+
+    try:
+        lignes = plan.lire_bytes(contenu)
+        rapport = plan.importer_lignes(
+            db, lignes, courant.user_id, lever_provisoire=lever_provisoire
+        )
+    except plan.FichierInvalideError as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    except plan.ImportRefuseError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=" ; ".join(str(a) for a in erreur.anomalies),
+        ) from None
+
+    ecrire_audit(
+        db,
+        action="compta.plan.imported",
+        contexte=_contexte(request),
+        acteur_id=courant.user_id,
+        resource_type=comptes.RESSOURCE,
+        new_values={
+            "crees": rapport.crees,
+            "mis_a_jour": rapport.mis_a_jour,
+            "lever_provisoire": lever_provisoire,
+            "motif": motif,
+        },
+    )
+    db.commit()
+    return ConfirmationImportComptes(
+        crees=rapport.crees, mis_a_jour=rapport.mis_a_jour, provisoire_leve=lever_provisoire
+    )
+
+
+@router.get("/comptes/export")
+def exporter_comptes_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    inclure_inactifs: Annotated[
+        bool, Query(description="Inclure les comptes désactivés.")
+    ] = True,
+) -> Response:
+    contenu = plan.exporter_csv(db, inclure_inactifs=inclure_inactifs)
+    return Response(
+        content="\N{ZERO WIDTH NO-BREAK SPACE}" + contenu,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="plan_comptable.csv"'},
     )
 
 
@@ -219,3 +353,4 @@ def desactiver_compte_endpoint(
     ligne = comptes.lire(db, compte_id)
     assert ligne is not None
     return _vers_detail(*ligne)
+

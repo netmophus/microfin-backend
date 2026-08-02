@@ -15,11 +15,15 @@ un modèle, à faire valider par un expert-comptable SFD (voir docs/conformite-c
 """
 
 import csv
+import hashlib
+import io
 import uuid
 from dataclasses import dataclass, field
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+
+from app.modules.comptabilite.models import Account
 
 COLONNES_ATTENDUES = frozenset(
     {
@@ -88,32 +92,56 @@ class ImportRefuseError(Exception):
         super().__init__(f"{len(anomalies)} anomalie(s) — aucun compte écrit")
 
 
+def lire_lignes(source) -> list[LigneBrute]:
+    """Lit un CSV déjà ouvert (fichier ou flux en mémoire) en lignes brutes. Lève
+    FichierInvalideError si l'en-tête est mauvais. Cœur partagé par lire_csv (CLI, chemin
+    disque) et lire_bytes (web, fichier uploadé) : un seul endroit qui sait lire le format."""
+    lecteur = csv.DictReader(source, delimiter=";")
+    entete = set(lecteur.fieldnames or [])
+    manquantes = COLONNES_ATTENDUES - entete
+    if manquantes:
+        raise FichierInvalideError(f"colonnes manquantes : {', '.join(sorted(manquantes))}")
+
+    lignes: list[LigneBrute] = []
+    for index, brut in enumerate(lecteur, start=2):  # ligne 1 = en-tête
+        lignes.append(
+            LigneBrute(
+                ligne=index,
+                account_number=(brut.get("account_number") or "").strip(),
+                name=(brut.get("name") or "").strip(),
+                short_name=(brut.get("short_name") or "").strip(),
+                classe=(brut.get("class") or "").strip(),
+                parent_number=(brut.get("parent_number") or "").strip(),
+                normal_side=(brut.get("normal_side") or "").strip().upper(),
+                is_posting=(brut.get("is_posting") or "").strip().upper(),
+                is_system=(brut.get("is_system") or "").strip().upper(),
+                notes=(brut.get("notes") or "").strip(),
+            )
+        )
+    return lignes
+
+
 def lire_csv(chemin: str) -> list[LigneBrute]:
     """Lit le fichier en lignes brutes. Lève FichierInvalideError si l'en-tête est mauvais."""
     with open(chemin, encoding="utf-8-sig", newline="") as f:
-        lecteur = csv.DictReader(f, delimiter=";")
-        entete = set(lecteur.fieldnames or [])
-        manquantes = COLONNES_ATTENDUES - entete
-        if manquantes:
-            raise FichierInvalideError(f"colonnes manquantes : {', '.join(sorted(manquantes))}")
+        return lire_lignes(f)
 
-        lignes: list[LigneBrute] = []
-        for index, brut in enumerate(lecteur, start=2):  # ligne 1 = en-tête
-            lignes.append(
-                LigneBrute(
-                    ligne=index,
-                    account_number=(brut.get("account_number") or "").strip(),
-                    name=(brut.get("name") or "").strip(),
-                    short_name=(brut.get("short_name") or "").strip(),
-                    classe=(brut.get("class") or "").strip(),
-                    parent_number=(brut.get("parent_number") or "").strip(),
-                    normal_side=(brut.get("normal_side") or "").strip().upper(),
-                    is_posting=(brut.get("is_posting") or "").strip().upper(),
-                    is_system=(brut.get("is_system") or "").strip().upper(),
-                    notes=(brut.get("notes") or "").strip(),
-                )
-            )
-    return lignes
+
+def lire_bytes(contenu: bytes) -> list[LigneBrute]:
+    """Même lecture, depuis un fichier déjà en mémoire (upload web) plutôt qu'un chemin disque."""
+    try:
+        texte = contenu.decode("utf-8-sig")
+    except UnicodeDecodeError as erreur:
+        raise FichierInvalideError(
+            "le fichier n'est pas un texte lisible (encodage attendu : UTF-8)."
+        ) from erreur
+    return lire_lignes(io.StringIO(texte))
+
+
+def empreinte(contenu: bytes) -> str:
+    """Empreinte du fichier — garantit à la confirmation qu'aucun fichier différent ne s'est
+    substitué à celui vu à l'aperçu."""
+    return hashlib.sha256(contenu).hexdigest()
 
 
 def valider(lignes: list[LigneBrute]) -> list[Anomalie]:
@@ -215,19 +243,29 @@ _UPSERT = text(
 )
 
 
-def importer(db: Session, chemin: str, importe_par: uuid.UUID | None = None) -> RapportImport:
-    """Importe le plan. Refuse tout en bloc si une anomalie subsiste. Ne committe pas.
+def importer_lignes(
+    db: Session,
+    lignes: list[LigneBrute],
+    importe_par: uuid.UUID | None = None,
+    *,
+    lever_provisoire: bool = False,
+) -> RapportImport:
+    """Écrit des lignes DÉJÀ LUES. Refuse tout en bloc si une anomalie subsiste. Ne committe pas.
 
     Écrit les parents avant les enfants (tri par longueur de numéro) pour résoudre parent_id
     au fil de l'eau. En cas d'anomalie, lève ImportRefuseError SANS rien écrire.
+
+    lever_provisoire=True marque les comptes CRÉÉS OU MODIFIÉS par cet import comme définitifs
+    (is_provisional=FALSE) — réservé à l'import qui EST la validation de l'expert-comptable,
+    jamais le comportement par défaut d'une correction intermédiaire.
     """
-    lignes = lire_csv(chemin)
     anomalies = valider(lignes)
     if anomalies:
         raise ImportRefuseError(anomalies)
 
     rapport = RapportImport()
     ids: dict[str, uuid.UUID] = {}  # account_number -> id, alimenté au fur et à mesure
+    touches: list[str] = []
 
     # Parents avant enfants : le préfixe le plus court d'abord (validé, donc sûr).
     for li in sorted(lignes, key=lambda x: (len(x.account_number), x.account_number)):
@@ -251,9 +289,175 @@ def importer(db: Session, chemin: str, importe_par: uuid.UUID | None = None) -> 
             text("SELECT id FROM comptabilite.accounts WHERE account_number = :n"),
             {"n": li.account_number},
         ).scalar_one()
+        touches.append(li.account_number)
         if cree:
             rapport.crees += 1
         else:
             rapport.mis_a_jour += 1
 
+    if lever_provisoire and touches:
+        db.execute(
+            text(
+                "UPDATE comptabilite.accounts SET is_provisional = FALSE "
+                "WHERE account_number = ANY(:numeros)"
+            ),
+            {"numeros": touches},
+        )
+
     return rapport
+
+
+def importer(db: Session, chemin: str, importe_par: uuid.UUID | None = None) -> RapportImport:
+    """Importe le plan depuis un fichier disque (CLI). Voir importer_lignes."""
+    return importer_lignes(db, lire_csv(chemin), importe_par)
+
+
+_CHAMPS_APERCU = (
+    "name", "short_name", "account_class", "parent_number",
+    "normal_side", "is_posting", "is_system", "notes",
+)
+
+
+@dataclass(frozen=True)
+class DiffChamp:
+    """Un champ qui changerait, en langage lisible (pas les valeurs brutes du CSV)."""
+
+    champ: str
+    avant: str
+    apres: str
+
+
+@dataclass(frozen=True)
+class CompteApercu:
+    account_number: str
+    name: str
+    diffs: tuple[DiffChamp, ...] = ()
+
+
+@dataclass(frozen=True)
+class RapportApercu:
+    """Ce que l'import ferait, sans rien écrire — pour relecture avant confirmation."""
+
+    a_creer: list[CompteApercu]
+    a_modifier: list[CompteApercu]
+    inchanges: int
+
+
+def _texte(valeur: object) -> str:
+    if valeur is None or valeur == "":
+        return "(vide)"
+    if isinstance(valeur, bool):
+        return "Oui" if valeur else "Non"
+    return str(valeur)
+
+
+def previsualiser(db: Session, lignes: list[LigneBrute]) -> RapportApercu:
+    """Compare un CSV DÉJÀ VALIDÉ à l'état actuel de la base — ne modifie rien. Pour chaque
+    compte existant, ne retient que les champs qui changeraient réellement (pas de bruit sur
+    les lignes identiques)."""
+    numeros = [li.account_number for li in lignes]
+    existants = list(
+        db.execute(select(Account).where(Account.account_number.in_(numeros))).scalars()
+    )
+    par_numero = {c.account_number: c for c in existants}
+    ids_parents = {c.parent_id for c in existants if c.parent_id is not None}
+    numeros_parents: dict[uuid.UUID, str] = {}
+    if ids_parents:
+        numeros_parents = dict(
+            db.execute(
+                select(Account.id, Account.account_number).where(Account.id.in_(ids_parents))
+            ).all()
+        )
+
+    a_creer: list[CompteApercu] = []
+    a_modifier: list[CompteApercu] = []
+    inchanges = 0
+
+    for li in lignes:
+        existant = par_numero.get(li.account_number)
+        if existant is None:
+            a_creer.append(CompteApercu(li.account_number, li.name))
+            continue
+
+        parent_actuel = numeros_parents.get(existant.parent_id) if existant.parent_id else None
+        cible = {
+            "name": li.name,
+            "short_name": li.short_name or None,
+            "account_class": int(li.classe),
+            "parent_number": li.parent_number or None,
+            "normal_side": li.normal_side,
+            "is_posting": _BOOLEENS[li.is_posting],
+            "is_system": _BOOLEENS[li.is_system],
+            "notes": li.notes or None,
+        }
+        actuel = {
+            "name": existant.name,
+            "short_name": existant.short_name,
+            "account_class": existant.account_class,
+            "parent_number": parent_actuel,
+            "normal_side": existant.normal_side,
+            "is_posting": existant.is_posting,
+            "is_system": existant.is_system,
+            "notes": existant.notes,
+        }
+        diffs = tuple(
+            DiffChamp(champ, _texte(actuel[champ]), _texte(cible[champ]))
+            for champ in _CHAMPS_APERCU
+            if actuel[champ] != cible[champ]
+        )
+        if diffs:
+            a_modifier.append(CompteApercu(li.account_number, li.name, diffs))
+        else:
+            inchanges += 1
+
+    return RapportApercu(a_creer=a_creer, a_modifier=a_modifier, inchanges=inchanges)
+
+
+COLONNES_EXPORT = (
+    "account_number", "name", "short_name", "class", "parent_number", "normal_side",
+    "is_posting", "is_system", "notes", "is_provisional", "is_active",
+)
+
+
+def exporter_csv(db: Session, *, inclure_inactifs: bool = True) -> str:
+    """Exporte le plan de comptes — MÊMES colonnes que l'import (ré-importable telle quelle),
+    plus deux colonnes informatives (is_provisional, is_active) que l'import ignore à la
+    relecture (COLONNES_ATTENDUES ne les exige pas)."""
+    stmt = select(Account).order_by(Account.account_number)
+    if not inclure_inactifs:
+        stmt = stmt.where(Account.is_active)
+    comptes = list(db.execute(stmt).scalars())
+
+    numeros = {c.id: c.account_number for c in comptes}
+    ids_manquants = {
+        c.parent_id for c in comptes if c.parent_id is not None and c.parent_id not in numeros
+    }
+    if ids_manquants:  # parent hors du périmètre exporté (ex. désactivé, filtré) — résolu à part
+        numeros.update(
+            dict(
+                db.execute(
+                    select(Account.id, Account.account_number).where(Account.id.in_(ids_manquants))
+                ).all()
+            )
+        )
+
+    tampon = io.StringIO()
+    ecrivain = csv.DictWriter(tampon, fieldnames=COLONNES_EXPORT, delimiter=";")
+    ecrivain.writeheader()
+    for c in comptes:
+        ecrivain.writerow(
+            {
+                "account_number": c.account_number,
+                "name": c.name,
+                "short_name": c.short_name or "",
+                "class": c.account_class,
+                "parent_number": numeros.get(c.parent_id, "") if c.parent_id else "",
+                "normal_side": c.normal_side,
+                "is_posting": "TRUE" if c.is_posting else "FALSE",
+                "is_system": "TRUE" if c.is_system else "FALSE",
+                "notes": c.notes or "",
+                "is_provisional": "TRUE" if c.is_provisional else "FALSE",
+                "is_active": "TRUE" if c.is_active else "FALSE",
+            }
+        )
+    return tampon.getvalue()

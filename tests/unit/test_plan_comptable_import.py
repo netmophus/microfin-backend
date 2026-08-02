@@ -5,7 +5,15 @@ s'arrêter à la première), et refuser exactement les cas prévus. Un fichier p
 aucune anomalie ; un fichier fautif les liste toutes, chacune rattachée à sa ligne.
 """
 
-from app.modules.comptabilite.plan import LigneBrute, valider
+import pytest
+
+from app.modules.comptabilite.plan import (
+    FichierInvalideError,
+    LigneBrute,
+    empreinte,
+    lire_bytes,
+    valider,
+)
 
 
 def _ligne(
@@ -104,6 +112,48 @@ def test_libelle_vide_est_signale() -> None:
     anomalies = valider([_ligne(2, "3", name="", sens="C", posting="FALSE")])
 
     assert any("libellé" in a.probleme for a in anomalies)
+
+
+def _csv_bytes(*lignes: str, entete: bool = True) -> bytes:
+    corps = "\r\n".join(lignes)
+    if entete:
+        entete_ligne = (
+            "account_number;name;short_name;class;parent_number;normal_side;"
+            "is_posting;is_system;notes"
+        )
+        corps = f"{entete_ligne}\r\n{corps}"
+    return ("\N{ZERO WIDTH NO-BREAK SPACE}" + corps + "\r\n").encode("utf-8")
+
+
+def test_lire_bytes_lit_le_meme_format_que_lire_csv() -> None:
+    contenu = _csv_bytes("6033;Charges diverses;;6;;D;TRUE;FALSE;")
+
+    lignes = lire_bytes(contenu)
+
+    assert len(lignes) == 1
+    assert lignes[0].account_number == "6033"
+    assert lignes[0].name == "Charges diverses"
+
+
+def test_lire_bytes_colonnes_manquantes_leve_fichier_invalide() -> None:
+    contenu = "numero;libelle\r\n6033;Charges\r\n".encode("utf-8-sig")
+
+    with pytest.raises(FichierInvalideError):
+        lire_bytes(contenu)
+
+
+def test_lire_bytes_encodage_illisible_leve_fichier_invalide() -> None:
+    with pytest.raises(FichierInvalideError):
+        lire_bytes(b"\xff\xfe\x00\xff invalide")
+
+
+def test_empreinte_stable_pour_le_meme_contenu_differente_sinon() -> None:
+    a = _csv_bytes("6033;Charges diverses;;6;;D;TRUE;FALSE;")
+    b = _csv_bytes("6033;Charges diverses;;6;;D;TRUE;FALSE;")
+    c = _csv_bytes("6034;Autre compte;;6;;D;TRUE;FALSE;")
+
+    assert empreinte(a) == empreinte(b)
+    assert empreinte(a) != empreinte(c)
 
 
 def test_toutes_les_anomalies_sont_collectees_pas_seulement_la_premiere() -> None:
