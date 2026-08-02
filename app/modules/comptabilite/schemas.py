@@ -107,3 +107,12 @@ class ConfirmationImportComptes(BaseModel):
     crees: int
     mis_a_jour: int
     provisoire_leve: bool
+
+
+class CompteSelecteur(BaseModel):
+    """Un compte réduit à ce qu'un sélecteur de rattachement affiche — TOUJOURS de saisie et
+    actif (voir comptes.lister_pour_selecteur)."""
+
+    id: uuid.UUID
+    account_number: str
+    name: str

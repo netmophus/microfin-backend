@@ -283,3 +283,37 @@ def desactiver_compte(
         new_values={"is_active": False, "motif": motif},
     )
     return compte
+
+
+# --- Rattachements (Bloc 5) : le garde-fou est partagé par tous les écrans qui pointent un
+# paramètre d'un AUTRE module (produit d'épargne, agence, parts sociales) vers un compte. ------
+
+
+class CompteInvalideRattachementError(CompteError):
+    """Compte inexistant, de regroupement, ou désactivé — jamais utilisable comme rattachement."""
+
+
+def compte_saisie_actif(db: Session, account_number: str) -> Account:
+    """Le SEUL endroit qui décide si un compte peut servir de rattachement. Le sélecteur
+    (lister_pour_selecteur) filtre déjà à l'affichage — cette fonction revérifie à l'écriture,
+    pour le cas où un numéro serait soumis directement à l'API en contournant le sélecteur."""
+    compte = db.execute(
+        select(Account).where(Account.account_number == account_number)
+    ).scalar_one_or_none()
+    if compte is None:
+        raise CompteInvalideRattachementError(f"Le compte « {account_number} » n'existe pas.")
+    if not compte.is_posting or not compte.is_active:
+        raise CompteInvalideRattachementError(
+            f"Le compte « {account_number} » ne peut pas servir de rattachement : seul un "
+            "compte de saisie actif est autorisé (jamais un compte de regroupement ou désactivé)."
+        )
+    return compte
+
+
+def lister_pour_selecteur(db: Session, q: str | None = None) -> list[Account]:
+    """Comptes proposables dans un sélecteur de rattachement — TOUJOURS de saisie et actifs."""
+    stmt = select(Account).where(Account.is_posting, Account.is_active)
+    if q:
+        motif = f"%{q}%"
+        stmt = stmt.where(or_(Account.account_number.ilike(motif), Account.name.ilike(motif)))
+    return list(db.execute(stmt.order_by(Account.account_number)).scalars())

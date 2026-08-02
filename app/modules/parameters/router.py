@@ -8,17 +8,24 @@ devine pas d'avance.
 Tous ces référentiels sont en lecture, AUTHENTIFIÉ suffit : leur structure n'est pas
 confidentielle (tout employé sait dans quels pays opère son IMF, quelles devises elle tient).
 La vraie protection reste sur les écritures (POST /tiers revalide le périmètre du créateur).
+
+EXCEPTION scopée (Bloc 5 du paramétrage comptable) : le rattachement comptable de la caisse
+d'une agence (`compte_caisse_id`) se lit/s'écrit désormais ici, réservé à compta.plan.read/
+manage — écriture NARROW (un seul champ), pas le CRUD complet des agences.
 """
 
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.models import Account
+from app.modules.parameters import rattachements
 from app.modules.parameters.models import (
     Agency,
     Country,
@@ -26,7 +33,8 @@ from app.modules.parameters.models import (
     IdentityDocumentType,
     SecteurActivite,
 )
-from app.modules.security.autorisation import UtilisateurCourant, exige_authentification
+from app.modules.security.autorisation import UtilisateurCourant, exige, exige_authentification
+from app.modules.security.router import _contexte
 
 router = APIRouter(prefix="/agencies", tags=["agences"])
 router_countries = APIRouter(prefix="/countries", tags=["pays"])
@@ -66,6 +74,95 @@ def lister_agences(
         .order_by(Agency.name)
     )
     return [AgenceItem(id=ligne.id, code=ligne.code, name=ligne.name) for ligne in lignes]
+
+
+# --- Rattachement comptable de la caisse (Bloc 5 du paramétrage comptable) -----------------
+
+MESSAGE_AGENCE_INTROUVABLE = "Agence introuvable."
+
+
+class CompteRattachementAgence(BaseModel):
+    """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
+
+    account_number: str
+    name: str
+
+
+class AgenceRattachement(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    compte_caisse: CompteRattachementAgence | None
+
+
+class ModificationRattachementCaisse(BaseModel):
+    compte_caisse: str | None
+    motif: str = Field(min_length=3, max_length=500)
+
+
+def _compte_rattachement_agence(
+    db: Session, account_id: uuid.UUID | None
+) -> CompteRattachementAgence | None:
+    if account_id is None:
+        return None
+    compte = db.get(Account, account_id)
+    if compte is None:
+        return None
+    return CompteRattachementAgence(account_number=compte.account_number, name=compte.name)
+
+
+def _vers_rattachement_agence(db: Session, agence: Agency) -> AgenceRattachement:
+    return AgenceRattachement(
+        id=agence.id,
+        code=agence.code,
+        name=agence.name,
+        compte_caisse=_compte_rattachement_agence(db, agence.compte_caisse_id),
+    )
+
+
+@router.get("/rattachements", response_model=list[AgenceRattachement])
+def lister_rattachements_agences(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AgenceRattachement]:
+    """Rattachement caisse des agences ACTIVES (Bloc 5) — écran du comptable."""
+    agences = list(
+        db.execute(select(Agency).where(Agency.is_active).order_by(Agency.name)).scalars()
+    )
+    return [_vers_rattachement_agence(db, a) for a in agences]
+
+
+@router.patch("/{agence_id}/compte-caisse", response_model=AgenceRattachement)
+def modifier_compte_caisse_endpoint(
+    agence_id: uuid.UUID,
+    corps: ModificationRattachementCaisse,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> AgenceRattachement:
+    """Ce changement s'applique aux PROCHAINES opérations seulement — les écritures déjà
+    posées référencent directement un compte, jamais ce paramètre."""
+    agence = db.get(Agency, agence_id)
+    if agence is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_AGENCE_INTROUVABLE
+        )
+    try:
+        rattachements.modifier_compte_caisse(
+            db,
+            agence,
+            compte_caisse_number=corps.compte_caisse,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CompteInvalideRattachementError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_rattachement_agence(db, agence)
 
 
 class CountryItem(BaseModel):

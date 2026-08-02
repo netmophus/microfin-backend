@@ -49,6 +49,7 @@ from app.modules.comptabilite.schemas import (
     CompteApercuSchema,
     CompteDetail,
     CompteResume,
+    CompteSelecteur,
     ConfirmationImportComptes,
     CreationCompte,
     DesactivationCompte,
@@ -241,6 +242,20 @@ def exporter_comptes_endpoint(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="plan_comptable.csv"'},
     )
+
+
+@router.get("/comptes/selecteur", response_model=list[CompteSelecteur])
+def selecteur_comptes_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    q: Annotated[str | None, Query(description="Recherche — numéro ou libellé.")] = None,
+) -> list[CompteSelecteur]:
+    """Comptes proposables comme rattachement (Bloc 5, autres modules) — TOUJOURS de saisie et
+    actifs, jamais un compte de regroupement ni désactivé (comptes.lister_pour_selecteur)."""
+    return [
+        CompteSelecteur(id=c.id, account_number=c.account_number, name=c.name)
+        for c in comptes.lister_pour_selecteur(db, q)
+    ]
 
 
 @router.get("/comptes/{compte_id}", response_model=CompteDetail)

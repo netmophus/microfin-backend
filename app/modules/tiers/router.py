@@ -23,6 +23,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.engagements import engagements_bloquants
+from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.models import Account
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 from app.modules.tiers.consultation import (
@@ -72,6 +74,7 @@ from app.modules.tiers.models import (
     IdentityDocument,
     IndividualProfile,
     LegalEntityProfile,
+    ShareParameters,
     Tier,
 )
 from app.modules.tiers.parts import (
@@ -86,6 +89,9 @@ from app.modules.tiers.parts import (
     consulter as consulter_parts,
 )
 from app.modules.tiers.parts_operations import RattachementPartsManquantError
+from app.modules.tiers.parts_parametres import ParametrageManquantError
+from app.modules.tiers.parts_parametres import lire as lire_parametres_parts
+from app.modules.tiers.parts_parametres import modifier as modifier_parametres_parts
 from app.modules.tiers.pieces import (
     DonneesPiece,
     DoublonPieceError,
@@ -99,6 +105,7 @@ from app.modules.tiers.pieces import (
     verifier_piece,
 )
 from app.modules.tiers.schemas import (
+    CompteRattachementParts,
     ConditionActivationItem,
     ConditionsActivation,
     ContactItem,
@@ -118,8 +125,10 @@ from app.modules.tiers.schemas import (
     GroupementDetail,
     IndividuDetail,
     MajKyc,
+    ModificationParametresParts,
     MouvementPartsItem,
     PageTiers,
+    ParametresParts,
     PersonneMoraleDetail,
     PieceItem,
     ResultatParts,
@@ -146,6 +155,87 @@ PERMISSION_FICHE_COMPLETE = "tiers.read"
 # Voir les fiches DÉSACTIVÉES. La présence de cette permission — et RIEN d'autre — autorise
 # le déverrouillage du filtre `deleted_at IS NULL`. Un paramètre de requête ne suffit jamais.
 PERMISSION_VOIR_DESACTIVES = "tiers.read.deleted"
+
+
+# --- Paramètres d'institution des parts sociales (Bloc 5 du paramétrage comptable) --------
+
+
+def _compte_rattachement_parts(
+    db: Session, account_id: uuid.UUID | None
+) -> CompteRattachementParts | None:
+    if account_id is None:
+        return None
+    compte = db.get(Account, account_id)
+    if compte is None:
+        return None
+    return CompteRattachementParts(account_number=compte.account_number, name=compte.name)
+
+
+def _vers_parametres_parts(db: Session, config: ShareParameters) -> ParametresParts:
+    return ParametresParts(
+        unit_value=config.unit_value,
+        minimum_shares=config.minimum_shares,
+        is_refundable=config.is_refundable,
+        membership_on=config.membership_on,
+        compte_parts_liberees=_compte_rattachement_parts(db, config.compte_parts_liberees_id),
+        compte_parts_non_liberees=_compte_rattachement_parts(
+            db, config.compte_parts_non_liberees_id
+        ),
+        is_provisional=config.is_provisional,
+    )
+
+
+@router.get("/parts/parametres", response_model=ParametresParts)
+def lire_parametres_parts_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ParametresParts:
+    """Config d'institution des parts sociales (Bloc 5) — écran du comptable."""
+    try:
+        config = lire_parametres_parts(db)
+    except ParametrageManquantError as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(erreur)
+        ) from None
+    return _vers_parametres_parts(db, config)
+
+
+@router.patch("/parts/parametres", response_model=ParametresParts)
+def modifier_parametres_parts_endpoint(
+    corps: ModificationParametresParts,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ParametresParts:
+    """Ce changement s'applique aux PROCHAINES opérations seulement — les écritures déjà
+    posées référencent directement un compte, jamais ce paramètre."""
+    try:
+        config = lire_parametres_parts(db)
+    except ParametrageManquantError as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(erreur)
+        ) from None
+    try:
+        modifier_parametres_parts(
+            db,
+            config,
+            unit_value=corps.unit_value,
+            minimum_shares=corps.minimum_shares,
+            is_refundable=corps.is_refundable,
+            membership_on=corps.membership_on,
+            compte_parts_liberees_number=corps.compte_parts_liberees,
+            compte_parts_non_liberees_number=corps.compte_parts_non_liberees,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CompteInvalideRattachementError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_parametres_parts(db, config)
 
 
 def _vers_fiche(

@@ -464,7 +464,12 @@ class ShareParameters(Base):
     l'adhésion (souscription | libération), rattachements 1021/1022."""
 
     __tablename__ = "share_parameters"
-    __table_args__: tuple[Any, ...] = ({"schema": "tiers"},)
+    __table_args__: tuple[Any, ...] = (
+        # Garantit l'unicité de la ligne (migration 0029) : voir la colonne `singleton`.
+        sa.CheckConstraint("singleton", name="share_parameters_singleton_check"),
+        sa.UniqueConstraint("singleton", name="share_parameters_singleton_unique"),
+        {"schema": "tiers"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
     unit_value: Mapped[int] = mapped_column(
@@ -488,6 +493,9 @@ class ShareParameters(Base):
     is_provisional: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, server_default=sa.true()
     )
+    # Garantit l'UNICITÉ de la ligne (migration 0029) : toujours TRUE (CHECK) + UNIQUE — une
+    # deuxième ligne est impossible par construction. Jamais lu ni écrit depuis Python.
+    singleton: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.true())
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

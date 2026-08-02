@@ -9,7 +9,7 @@ encore validés) pour l'afficher à l'écran.
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ProduitEpargne(BaseModel):
@@ -128,6 +128,35 @@ class RapportInterets(BaseModel):
     credites: int
     ignores: int
     total: int
+
+
+# --- Rattachements comptables (Bloc 5 du paramétrage comptable) --------------------------
+
+
+class CompteRattachement(BaseModel):
+    """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
+
+    account_number: str
+    name: str
+
+
+class RattachementsProduit(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    compte_epargne: CompteRattachement | None
+    compte_epargne_client: CompteRattachement | None
+    compte_charge_interet: CompteRattachement | None
+
+
+class ModificationRattachementsProduit(BaseModel):
+    """Les 3 rattachements TOUJOURS fournis ensemble — l'écran soumet l'état complet de ses 3
+    sélecteurs à chaque enregistrement, pas un PATCH partiel comme la fiche du plan de comptes."""
+
+    compte_epargne: str | None
+    compte_epargne_client: str | None
+    compte_charge_interet: str | None
+    motif: str = Field(min_length=3, max_length=500)
 
 
 class LigneRapprochement(BaseModel):

@@ -396,3 +396,37 @@ class EvenementTimeline(BaseModel):
     new_status: str | None
     reason: str | None
     auteur_nom: str | None
+
+
+# --- Paramètres d'institution des parts sociales (Bloc 5 du paramétrage comptable) ----------
+
+
+class CompteRattachementParts(BaseModel):
+    """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
+
+    account_number: str
+    name: str
+
+
+class ParametresParts(BaseModel):
+    unit_value: int
+    minimum_shares: int
+    is_refundable: bool
+    membership_on: str  # souscription | liberation
+    compte_parts_liberees: CompteRattachementParts | None
+    compte_parts_non_liberees: CompteRattachementParts | None
+    is_provisional: bool
+
+
+class ModificationParametresParts(BaseModel):
+    """Tous les champs TOUJOURS fournis ensemble — l'écran soumet l'état complet du
+    formulaire à chaque enregistrement, pas un PATCH partiel comme la fiche du plan de comptes.
+    `is_provisional` n'est PAS modifiable ici : hors périmètre du Bloc 5."""
+
+    unit_value: int = Field(ge=0)
+    minimum_shares: int = Field(ge=1)
+    is_refundable: bool
+    membership_on: Literal["souscription", "liberation"]
+    compte_parts_liberees: str | None
+    compte_parts_non_liberees: str | None
+    motif: str = Field(min_length=3, max_length=500)

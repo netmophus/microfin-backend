@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.epargne import consultation
+from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.models import Account
+from app.modules.epargne import consultation, rattachements
 from app.modules.epargne.guichet import (
     CompteClotureError,
     CompteIntrouvableError,
@@ -31,6 +33,7 @@ from app.modules.epargne.guichet import (
     retirer,
 )
 from app.modules.epargne.interets import previsualiser_interets, verser_interets
+from app.modules.epargne.models import Product
 from app.modules.epargne.rapprochement import rapprocher_tout
 from app.modules.epargne.schemas import (
     ApercuInterets,
@@ -38,13 +41,16 @@ from app.modules.epargne.schemas import (
     CompteEpargneDetail,
     CompteEpargneResume,
     CompteGuichet,
+    CompteRattachement,
     DemandeInterets,
     LigneRapprochement,
+    ModificationRattachementsProduit,
     MouvementResume,
     OperationGuichet,
     OuvertureCompte,
     ProduitEpargne,
     RapportInterets,
+    RattachementsProduit,
     ResultatOperation,
 )
 from app.modules.epargne.service import (
@@ -62,6 +68,27 @@ router = APIRouter(tags=["epargne"])
 
 MESSAGE_COMPTE_INTROUVABLE = "Compte d'épargne introuvable."
 MESSAGE_MEMBRE_INTROUVABLE = "Membre introuvable."
+MESSAGE_PRODUIT_INTROUVABLE = "Produit d'épargne introuvable."
+
+
+def _compte_rattachement(db: Session, account_id: uuid.UUID | None) -> CompteRattachement | None:
+    if account_id is None:
+        return None
+    compte = db.get(Account, account_id)
+    if compte is None:
+        return None
+    return CompteRattachement(account_number=compte.account_number, name=compte.name)
+
+
+def _vers_rattachements(db: Session, produit: Product) -> RattachementsProduit:
+    return RattachementsProduit(
+        id=produit.id,
+        code=produit.code,
+        name=produit.name,
+        compte_epargne=_compte_rattachement(db, produit.compte_epargne_id),
+        compte_epargne_client=_compte_rattachement(db, produit.compte_epargne_client_id),
+        compte_charge_interet=_compte_rattachement(db, produit.compte_charge_interet_id),
+    )
 
 
 def _resume(compte: object, produit: object) -> CompteEpargneResume:
@@ -90,6 +117,52 @@ def lister_produits_endpoint(
         )
         for p in consultation.lister_produits(db)
     ]
+
+
+@router.get("/epargne/produits/rattachements", response_model=list[RattachementsProduit])
+def lister_rattachements_produits_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[RattachementsProduit]:
+    """Rattachements comptables des produits ACTIFS (Bloc 5) — écran du comptable."""
+    return [_vers_rattachements(db, p) for p in consultation.lister_produits(db)]
+
+
+@router.patch(
+    "/epargne/produits/{produit_id}/rattachements", response_model=RattachementsProduit
+)
+def modifier_rattachements_produit_endpoint(
+    produit_id: uuid.UUID,
+    corps: ModificationRattachementsProduit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RattachementsProduit:
+    """Ce changement s'applique aux PROCHAINES opérations seulement — les écritures déjà
+    posées référencent directement un compte, jamais ce paramètre."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    try:
+        rattachements.modifier_rattachements(
+            db,
+            produit,
+            compte_epargne_number=corps.compte_epargne,
+            compte_epargne_client_number=corps.compte_epargne_client,
+            compte_charge_interet_number=corps.compte_charge_interet,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CompteInvalideRattachementError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_rattachements(db, produit)
 
 
 @router.get("/tiers/{tier_id}/comptes-epargne", response_model=list[CompteEpargneResume])
