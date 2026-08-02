@@ -317,3 +317,14 @@ def lister_pour_selecteur(db: Session, q: str | None = None) -> list[Account]:
         motif = f"%{q}%"
         stmt = stmt.where(or_(Account.account_number.ilike(motif), Account.name.ilike(motif)))
     return list(db.execute(stmt.order_by(Account.account_number)).scalars())
+
+
+def lister_pour_rapport(db: Session, q: str | None = None) -> list[Account]:
+    """Comptes proposables pour un rapport (grand livre) — TOUJOURS de saisie, actifs OU
+    désactivés : un compte désactivé garde son historique consultable (à la différence du
+    sélecteur de rattachement, qui lui exclut les comptes désactivés)."""
+    stmt = select(Account).where(Account.is_posting)
+    if q:
+        motif = f"%{q}%"
+        stmt = stmt.where(or_(Account.account_number.ilike(motif), Account.name.ilike(motif)))
+    return list(db.execute(stmt.order_by(Account.account_number)).scalars())

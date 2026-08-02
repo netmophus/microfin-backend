@@ -14,6 +14,7 @@ en 2 temps) -> compta.plan.manage.
 """
 
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import (
@@ -33,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.audit.service import ecrire_audit
-from app.modules.comptabilite import comptes, plan
+from app.modules.comptabilite import comptes, plan, rapports
 from app.modules.comptabilite.comptes import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
@@ -43,19 +44,25 @@ from app.modules.comptabilite.comptes import (
     ParentIntrouvableError,
 )
 from app.modules.comptabilite.models import Account
+from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
     ApercuImportComptes,
+    Balance,
     ChangementSens,
     CompteApercuSchema,
     CompteDetail,
+    CompteRapport,
     CompteResume,
     CompteSelecteur,
     ConfirmationImportComptes,
     CreationCompte,
     DesactivationCompte,
     DiffChampSchema,
+    LigneBalance,
+    LigneGrandLivre,
     ModificationCompte,
     PageComptes,
+    PageGrandLivre,
 )
 from app.modules.comptabilite.service import ModificationInterditeError
 from app.modules.security.autorisation import UtilisateurCourant, exige
@@ -258,6 +265,21 @@ def selecteur_comptes_endpoint(
     ]
 
 
+@router.get("/comptes/selecteur-rapport", response_model=list[CompteSelecteur])
+def selecteur_rapport_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    q: Annotated[str | None, Query(description="Recherche — numéro ou libellé.")] = None,
+) -> list[CompteSelecteur]:
+    """Comptes proposables pour le grand livre — TOUJOURS de saisie, actifs OU désactivés
+    (comptes.lister_pour_rapport) : un compte désactivé garde son historique consultable,
+    à la différence du sélecteur de rattachement (/comptes/selecteur)."""
+    return [
+        CompteSelecteur(id=c.id, account_number=c.account_number, name=c.name)
+        for c in comptes.lister_pour_rapport(db, q)
+    ]
+
+
 @router.get("/comptes/{compte_id}", response_model=CompteDetail)
 def lire_compte_endpoint(
     compte_id: uuid.UUID,
@@ -368,4 +390,87 @@ def desactiver_compte_endpoint(
     ligne = comptes.lire(db, compte_id)
     assert ligne is not None
     return _vers_detail(*ligne)
+
+
+# --- Rapports (R1 grand livre, R2 balance) — lecture pure, compta.rapport.read --------------
+
+
+MESSAGE_COMPTE_RAPPORT_INTROUVABLE = "Compte introuvable."
+
+
+@router.get("/grand-livre", response_model=PageGrandLivre)
+def grand_livre_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    compte_id: uuid.UUID,
+    date_debut: Annotated[date | None, Query(description="Borne basse (incluse).")] = None,
+    date_fin: Annotated[date | None, Query(description="Borne haute (incluse).")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+) -> PageGrandLivre:
+    compte = db.get(Account, compte_id)
+    if compte is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_RAPPORT_INTROUVABLE
+        )
+    try:
+        resultat = rapports.grand_livre(
+            db, compte, date_debut=date_debut, date_fin=date_fin, page=page
+        )
+    except CompteNonSaisieError as erreur:
+        raise _422(erreur) from None
+    return PageGrandLivre(
+        compte=CompteRapport(account_number=compte.account_number, name=compte.name),
+        solde_ouverture=resultat.solde_ouverture,
+        lignes=[
+            LigneGrandLivre(
+                entry_date=ligne.entry_date,
+                entry_number=ligne.entry_number,
+                journal_code=ligne.journal_code,
+                label=ligne.label,
+                side=ligne.side,
+                amount=ligne.amount,
+                solde_cumule=ligne.solde_cumule,
+            )
+            for ligne in resultat.lignes
+        ],
+        total=resultat.total,
+        page=page,
+        taille=TAILLE_PAGE_GRAND_LIVRE,
+    )
+
+
+@router.get("/balance", response_model=Balance)
+def balance_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    date_debut: Annotated[date | None, Query(description="Borne basse (incluse).")] = None,
+    date_fin: Annotated[date | None, Query(description="Borne haute (incluse).")] = None,
+    inclure_sans_mouvement: Annotated[
+        bool, Query(description="Inclure les comptes sans mouvement sur la période.")
+    ] = False,
+) -> Balance:
+    resultat = rapports.balance(
+        db,
+        date_debut=date_debut,
+        date_fin=date_fin,
+        inclure_sans_mouvement=inclure_sans_mouvement,
+    )
+    return Balance(
+        date_debut=date_debut,
+        date_fin=date_fin,
+        lignes=[
+            LigneBalance(
+                account_number=ligne.compte.account_number,
+                name=ligne.compte.name,
+                solde_ouverture=ligne.solde_ouverture,
+                total_debit=ligne.total_debit,
+                total_credit=ligne.total_credit,
+                solde_cloture=ligne.solde_cloture,
+            )
+            for ligne in resultat.lignes
+        ],
+        total_debit=resultat.total_debit,
+        total_credit=resultat.total_credit,
+        equilibree=(resultat.total_debit == resultat.total_credit),
+    )
 

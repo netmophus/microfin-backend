@@ -208,6 +208,9 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("compta.ecriture.post", "compta", "Saisir un brouillon et valider une écriture"),
     Permission("compta.ecriture.reverse", "compta", "Contre-passer une écriture validée"),
     Permission("compta.exercice.manage", "compta", "Ouvrir/clôturer un exercice comptable"),
+    # --- Rapports (R1/R2) : grand livre et balance — lecture pure, aucune écriture. Même
+    # patron d'octroi que epargne.rapprochement.read (comptable + supervision).
+    Permission("compta.rapport.read", "compta", "Consulter les rapports comptables (grand livre, balance)"),
     # --- Module Épargne (E0/E2). open = ouvrir un compte (membre actif) ; close = clôturer ;
     # product.manage = gérer le référentiel des produits (config métier). Les opérations
     # (dépôt/retrait) auront leur permission au bloc E3.
@@ -305,6 +308,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.ecriture.post",
             "compta.ecriture.reverse",
             "compta.exercice.manage",
+            "compta.rapport.read",
             "epargne.account.read",
             "epargne.product.read",
             "epargne.rapprochement.read",
@@ -357,6 +361,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read.deleted",
             "epargne.account.read",
             "epargne.rapprochement.read",
+            "compta.rapport.read",
             "tiers.shares.read",
             "perimetre.reseau",
         }
@@ -391,6 +396,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read.deleted",
             "epargne.interet.executer",
             "epargne.rapprochement.read",
+            "compta.rapport.read",
             "tiers.shares.read",
             "perimetre.reseau",
         }

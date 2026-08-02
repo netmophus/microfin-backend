@@ -6,7 +6,7 @@ un identifiant opaque.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -116,3 +116,50 @@ class CompteSelecteur(BaseModel):
     id: uuid.UUID
     account_number: str
     name: str
+
+
+# --- Rapports (R1 grand livre, R2 balance) — lecture pure, aucune écriture -------------------
+
+
+class CompteRapport(BaseModel):
+    """Le compte concerné par un rapport — numéro + libellé, jamais l'UUID à l'écran."""
+
+    account_number: str
+    name: str
+
+
+class LigneGrandLivre(BaseModel):
+    entry_date: date
+    entry_number: str | None
+    journal_code: str
+    label: str
+    side: Literal["D", "C"]
+    amount: int
+    solde_cumule: int
+
+
+class PageGrandLivre(BaseModel):
+    compte: CompteRapport
+    solde_ouverture: int
+    lignes: list[LigneGrandLivre]
+    total: int
+    page: int
+    taille: int
+
+
+class LigneBalance(BaseModel):
+    account_number: str
+    name: str
+    solde_ouverture: int
+    total_debit: int
+    total_credit: int
+    solde_cloture: int
+
+
+class Balance(BaseModel):
+    date_debut: date | None
+    date_fin: date | None
+    lignes: list[LigneBalance]
+    total_debit: int
+    total_credit: int
+    equilibree: bool
