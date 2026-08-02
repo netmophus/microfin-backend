@@ -21,13 +21,18 @@ class ProduitStandard:
     compte_charge: str  # compte de charge d'intérêts (603/604), rattachement PROVISOIRE
 
 
-# Produits minimaux. PROVISOIRES. Le plan dédouble chaque nature : compte MEMBRE (xxx1) et compte
-# CLIENT (xxx2) ; le routage est ancré à l'ouverture selon le statut du tiers (PS3).
-# Le taux d'intérêt reste 0 (défaut) tant que l'expert ne l'a pas fixé.
+# Produits minimaux. PROVISOIRES. Comptes du plan RCSFD OFFICIEL (classe 2, "Comptes des
+# membres, bénéficiaires ou clients") + extensions membre/client à 6 chiffres (structure
+# proposée par le chantier paramétrage comptable, à valider par l'expert comme le reste) :
+# 2511 Comptes ordinaires -> EAV ; 2521 Dépôts à terme reçus -> DAT ;
+# 2531 Compte d'épargne sur livret (régime spécial) -> EPR. 2512 (Comptes ordinaires sur
+# livret) reste en réserve, sans produit rattaché pour l'instant.
+# Charge d'intérêts : feuilles déjà granulaires du plan officiel (602511/60252/60253), pas
+# d'extension nécessaire là.
 PRODUITS: tuple[ProduitStandard, ...] = (
-    ProduitStandard("EAV", "Épargne à vue", "a_vue", 0, "3111", "3112", "603"),
-    ProduitStandard("DAT", "Dépôt à terme", "terme", 0, "3121", "3122", "604"),
-    ProduitStandard("EPR", "Épargne programmée", "programmee", 0, "3131", "3132", "604"),
+    ProduitStandard("EAV", "Épargne à vue", "a_vue", 0, "251111", "251121", "602511"),
+    ProduitStandard("DAT", "Dépôt à terme", "terme", 0, "252111", "252121", "60252"),
+    ProduitStandard("EPR", "Épargne programmée", "programmee", 0, "253111", "253121", "60253"),
 )
 
 

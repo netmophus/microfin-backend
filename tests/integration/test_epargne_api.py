@@ -60,7 +60,7 @@ def _produit(db: Session) -> Product:
     produit = Product(
         code=f"PA{uuid.uuid4().hex[:4]}", name="Épargne à vue", type="a_vue",
         compte_epargne_id=db.execute(
-            text("SELECT id FROM comptabilite.accounts WHERE account_number='3111'")
+            text("SELECT id FROM comptabilite.accounts WHERE account_number='251111'")
         ).scalar_one(),
     )
     db.add(produit)

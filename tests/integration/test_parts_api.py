@@ -55,7 +55,7 @@ def _cid(db: Session, numero: str) -> uuid.UUID:
 
 
 def _cadre(db: Session, suffixe: str) -> tuple[Agency, uuid.UUID]:
-    agence = Agency(code=f"AGPA-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "5721"))
+    agence = Agency(code=f"AGPA-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "1011"))
     db.add(agence)
     db.flush()
     tier_id = db.execute(
@@ -72,8 +72,8 @@ def _cadre(db: Session, suffixe: str) -> tuple[Agency, uuid.UUID]:
             "(unit_value, minimum_shares, is_refundable, membership_on, "
             " compte_parts_liberees_id, compte_parts_non_liberees_id, is_provisional) "
             "VALUES (5000, 1, TRUE, 'liberation', "
-            " (SELECT id FROM comptabilite.accounts WHERE account_number='1021'), "
-            " (SELECT id FROM comptabilite.accounts WHERE account_number='1022'), TRUE)"
+            " (SELECT id FROM comptabilite.accounts WHERE account_number='57111'), "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number='57112'), TRUE)"
         )
     )
     return agence, tier_id

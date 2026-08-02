@@ -18,7 +18,7 @@ from app.core.database import engine
 pytestmark = pytest.mark.integration
 
 # Rattachement provisoire attendu : produit -> compte MEMBRE du plan.
-ATTENDU = {"EAV": "3111", "DAT": "3121", "EPR": "3131"}
+ATTENDU = {"EAV": "251111", "DAT": "252111", "EPR": "253111"}
 
 
 @pytest.fixture

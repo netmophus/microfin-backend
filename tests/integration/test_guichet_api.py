@@ -57,7 +57,7 @@ def _cid(db: Session, numero: str) -> uuid.UUID:
 
 
 def _agence(db: Session, code: str) -> Agency:
-    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=_cid(db, "5721"))
+    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=_cid(db, "1011"))
     db.add(agence)
     db.flush()
     return agence
@@ -86,7 +86,7 @@ def _membre_nomme(db: Session, agence: Agency, nom: str, prenom: str) -> uuid.UU
 def _compte(db: Session, agence: Agency) -> SavingsAccount:
     produit = Product(
         code=f"PG{uuid.uuid4().hex[:4]}", name="Épargne à vue", type="a_vue",
-        compte_epargne_id=_cid(db, "3111"),
+        compte_epargne_id=_cid(db, "251111"),
     )
     db.add(produit)
     db.flush()
@@ -270,7 +270,7 @@ def _compte_remunere(db: Session, agence: Agency) -> SavingsAccount:
     produit exactement 10 % — de quoi vérifier le détail de la prévisualisation."""
     produit = Product(
         code=f"PR{uuid.uuid4().hex[:4]}", name="Épargne rémunérée", type="a_vue",
-        compte_epargne_id=_cid(db, "3111"), compte_charge_interet_id=_cid(db, "603"),
+        compte_epargne_id=_cid(db, "251111"), compte_charge_interet_id=_cid(db, "602511"),
         taux_bp=1000, base_jours=365, methode_calcul_solde="fin_periode",
     )
     db.add(produit)
@@ -351,8 +351,8 @@ def test_rapprochement_concordant_apres_depot(client: TestClient, db: Session) -
 
     reponse = client.get("/epargne/rapprochement", headers=auditeur)
     assert reponse.status_code == 200
-    ligne = next(x for x in reponse.json() if x["compte_general"] == "3111")
-    # Σ soldes d'épargne == solde comptable de 3111 : concordant, écart nul.
+    ligne = next(x for x in reponse.json() if x["compte_general"] == "251111")
+    # Σ soldes d'épargne == solde comptable de 251111 : concordant, écart nul.
     assert ligne["concordant"] is True
     assert ligne["ecart"] == 0
 

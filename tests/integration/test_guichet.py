@@ -74,10 +74,10 @@ class Cadre:
 
 
 def _cadre(db: Session, suffixe: str, *, min_balance: int = 0, decouvert: int = 0) -> Cadre:
-    agence = Agency(code=f"AGG-{suffixe}", name="Agence", compte_caisse_id=_compte_id(db, "5721"))
+    agence = Agency(code=f"AGG-{suffixe}", name="Agence", compte_caisse_id=_compte_id(db, "1011"))
     produit = Product(
         code=f"PG{suffixe}", name="Épargne", type="a_vue",
-        compte_epargne_id=_compte_id(db, "3111"), min_balance=min_balance,
+        compte_epargne_id=_compte_id(db, "251111"), min_balance=min_balance,
         decouvert_autorise=decouvert,
     )
     db.add_all([agence, produit])
@@ -196,9 +196,9 @@ def test_compte_hors_perimetre_est_introuvable(db: Session) -> None:
 
 
 def test_rapprochement_concorde_apres_une_serie_doperations(db: Session) -> None:
-    c3111 = _compte_id(db, "3111")
+    c251111 = _compte_id(db, "251111")
     c1 = _cadre(db, "R1")
-    # deuxième compte dans la même agence, même produit (rattaché à 3111)
+    # deuxième compte dans la même agence, même produit (rattaché à 251111)
     tier2 = db.execute(
         text(
             "INSERT INTO tiers.tiers (tier_number, tier_type, primary_agency_id, status) "
@@ -209,14 +209,14 @@ def test_rapprochement_concorde_apres_une_serie_doperations(db: Session) -> None
     c2 = service.ouvrir_compte(
         db, tier_id=tier2, product_id=c1.produit.id, agency_id=c1.agence.id, par=None
     )
-    # Base AVANT nos opérations (la base de dev peut porter d'autres comptes rattachés à 3111).
-    base = rapprocher(db, c3111)
+    # Base AVANT nos opérations (la base de dev peut porter d'autres comptes rattachés à 251111).
+    base = rapprocher(db, c251111)
 
     deposer(db, c1.caissier, c1.compte.id, 1000)
     deposer(db, c1.caissier, c2.id, 500)
     retirer(db, c1.caissier, c1.compte.id, 300)
 
-    resultat = rapprocher(db, c3111)
+    resultat = rapprocher(db, c251111)
     assert resultat.concordant is True
     # Nos opérations font bouger auxiliaire ET général du MÊME montant (700 + 500).
     assert resultat.auxiliaire - base.auxiliaire == 1200

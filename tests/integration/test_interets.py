@@ -1,8 +1,8 @@
 """Intérêts d'épargne (E5) — calcul pur, versement = écriture, et surtout l'ANTI-DOUBLE.
 
   - calcul PUR : mêmes entrées -> même montant (Decimal, jamais de flottant), archivé ;
-  - versement = écriture équilibrée D 603 / C 3111, + mouvement + solde, une transaction ;
-  - rapprochement Σ soldes == 3111 toujours concordant après versement ;
+  - versement = écriture équilibrée D 602511 / C 251111, + mouvement + solde, une transaction ;
+  - rapprochement Σ soldes == 251111 toujours concordant après versement ;
   - LE garde-fou sacré : relancer sur une période déjà traitée ne verse RIEN (contrainte base) ;
   - reprise après interruption : pas de double versement au redémarrage ;
   - compte FERMÉ ignoré ; membre SUSPENDU crédité normalement.
@@ -116,11 +116,11 @@ def _caissier(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
 
 
 def _cadre(db: Session, suffixe: str, *, depot: int = 100000) -> Cadre:
-    agence = Agency(code=f"AGI-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "5721"))
+    agence = Agency(code=f"AGI-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "1011"))
     # 10 % l'an, base 365 : un dépôt gardé toute l'année produit exactement depot x 10 %.
     produit = Product(
         code=f"PI{suffixe}", name="Épargne", type="a_vue",
-        compte_epargne_id=_cid(db, "3111"), compte_charge_interet_id=_cid(db, "603"),
+        compte_epargne_id=_cid(db, "251111"), compte_charge_interet_id=_cid(db, "602511"),
         taux_bp=1000, base_jours=365, methode_calcul_solde="fin_periode",
     )
     db.add_all([agence, produit])
@@ -157,7 +157,7 @@ def test_versement_credite_pose_ecriture_et_archive(db: Session) -> None:
 
     db.refresh(c.compte)
     assert c.compte.balance == 110000  # 100 000 + 10 000 d'intérêts
-    # mouvement 'interet' credit 10 000 relié à une pièce D 603 / C 3111
+    # mouvement 'interet' credit 10 000 relié à une pièce D 602511 / C 251111
     mvt = db.execute(
         text(
             "SELECT sens, amount FROM epargne.movements "
@@ -178,7 +178,7 @@ def test_versement_credite_pose_ecriture_et_archive(db: Session) -> None:
             {"a": c.compte.id},
         )
     }
-    assert lignes == {("603", "D", 10000), ("3111", "C", 10000)}
+    assert lignes == {("602511", "D", 10000), ("251111", "C", 10000)}
     # archivé, rejouable
     assert _interet_calculs(db, c.compte.id) == [("2026", 10000)]
 
@@ -278,7 +278,7 @@ def test_anti_double_au_niveau_base(db: Session) -> None:
 def test_rapprochement_concorde_apres_interets(db: Session) -> None:
     _cadre(db, "RA")
     verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
-    resultat = rapprocher(db, _cid(db, "3111"))
+    resultat = rapprocher(db, _cid(db, "251111"))
     assert resultat.concordant is True
 
 

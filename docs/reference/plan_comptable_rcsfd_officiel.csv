@@ -1,0 +1,373 @@
+compte;intitule;classe
+10;VALEURS EN CAISSE;1
+101;Billets et monnaies;1
+1011;Billets et monnaies émis par la BCEAO;1
+11;COMPTES ORDINAIRES CHEZ LES INSTITUTIONS FINANCIERES;1
+113;Centre des Chèques postaux;1
+1131;Centre des Chèques postaux;1
+1136;Dettes rattachées;1
+1137;Créances rattachées;1
+114;Banques et correspondants;1
+1141;Banques et correspondants;1
+1146;Dettes rattachées;1
+1147;Créances rattachées;1
+116;Systèmes Financiers Décentralisés;1
+1161;Systèmes Financiers Décentralisés;1
+1166;Dettes rattachées;1
+1167;Créances rattachées;1
+117;Autres institutions financières;1
+1171;Autres institutions financières;1
+1176;Dettes rattachées;1
+1177;Créances rattachées;1
+12;AUTRES COMPTES DE DEPOTS CHEZ LES INSTITUTIONS FINANCIERES;1
+126;Dépôts à terme constitués;1
+1261;Dépôts à terme constitués;1
+1267;Créances rattachées;1
+127;Dépôts de garantie constitués;1
+1271;Dépôts de garantie constitués;1
+1277;Créances rattachées;1
+128;Autres dépôts constitués;1
+1281;Autres dépôts constitués;1
+1287;Créances rattachées;1
+13;COMPTES DE PRETS AUX INSTITUTIONS FINANCIERES;1
+131;Prêts à moins d’1 an;1
+1311;Prêts à moins d’1 an;1
+1317;Créances rattachées;1
+133;Prêts à terme;1
+1331;Prêts à terme;1
+1337;Créances rattachées;1
+15;COMPTES ORDINAIRES DES INSTITUTIONS FINANCIERES;1
+154;Banques et correspondants;1
+1541;Banques et correspondants;1
+1546;Dettes rattachées;1
+1547;Créances rattachées;1
+156;Systèmes Financiers Décentralisés;1
+1561;Systèmes Financiers Décentralisés;1
+1566;Dettes rattachées;1
+1567;Créances rattachées;1
+157;Autres institutions financières;1
+1571;Autres institutions financières;1
+1576;Dettes rattachées;1
+1577;Créances rattachées;1
+16;AUTRES COMPTES DE DEPOTS DES INSTITUTIONS FINANCIERES;1
+161;Dépôts à terme reçus;1
+1611;Dépôts à terme reçus;1
+1616;Dettes rattachées;1
+162;Dépôts de garantie reçus;1
+1621;Dépôts de garantie reçus;1
+1626;Dettes rattachées;1
+165;Autres dépôts reçus;1
+1651;Autres dépôts reçus;1
+1656;Dettes rattachées;1
+17;COMPTES D'EMPRUNTS ET AUTRES SOMMES DUES AUX INSTITUTIONS FINANCIERES;1
+175;Emprunts à moins d’un an;1
+1751;Emprunts à moins d’un an;1
+1756;Dettes rattachées;1
+178;Emprunts à terme;1
+1781;Emprunts à terme;1
+1786;Dettes rattachées;1
+179;Autres sommes dues aux institutions financières;1
+18;RESSOURCES AFFECTEES;1
+181;Ressources affectées à court terme;1
+182;Ressources affectées à moyen terme;1
+183;Ressources affectées à long terme;1
+184;Intérêts capitalisés;1
+19;COMPTES DE PRETS EN SOUFFRANCE ET IMMOBILISES;1
+191;Prêts immobilisés;1
+192;Prêts en souffrance de 6 mois au plus;1
+1921;Prêts en souffrance de 0 à 3 mois au plus;1
+1922;Prêts en souffrance de plus de 3 mois à 6 mois au plus;1
+193;Prêts en souffrance de plus de 6 mois à 12 mois au plus;1
+194;Prêts en souffrance de plus de 12 mois à 24 mois au plus;1
+199;Provisions sur prêts en souffrance;1
+1991;Provisions sur prêts en souffrance de 6 mois au plus;1
+1992;Provisions sur prêts en souffrance de plus de 6 mois à 12 mois au plus;1
+1993;Provisions sur prêts en souffrance de plus de 12 mois à 24 mois au plus;1
+20;CREDITS AUX MEMBRES, BENEFICIAIRES OU CLIENTS;2
+202;Crédits à court terme;2
+2022;Crédits ordinaires;2
+2023;Découverts;2
+20227;Créances rattachées;2
+203;Crédits à moyen terme;2
+2031;Crédits à moyen terme;2
+2037;Créances rattachées;2
+25;COMPTES DES MEMBRES, BENEFICIAIRES OU CLIENTS;2
+251;Comptes ordinaires;2
+2511;Comptes ordinaires;2
+25116;Dettes rattachées;2
+25117;Créances rattachées;2
+2512;Comptes ordinaires sur livret;2
+25126;Dettes rattachées;2
+252;Dépôts à terme reçus;2
+2521;Dépôts à terme reçus;2
+2526;Dettes rattachées;2
+253;Comptes d'épargne à régime spécial (livrets d'épargne, comptes d'épargne-logement, plan d'épargne-logement);2
+2531;Compte d’épargne sur livret;2
+25316;Dettes rattachées;2
+254;Dépôts de garantie reçus;2
+2545;Dépôts de garantie reçus;2
+2546;Dettes rattachées;2
+255;Autres dépôts reçus;2
+2551;Autres dépôts reçus;2
+2556;Dettes rattachées;2
+27;EMPRUNTS ET AUTRES SOMMES DUES AUX MEMBRES, BENEFICIAIRES OU CLIENTS;2
+271;Emprunts aux membres, bénéficiaires ou clients;2
+2711;Emprunts;2
+2716;Dettes rattachées;2
+272;Autres sommes dues aux membres, bénéficiaires ou clients;2
+2721;Dispositions à payer;2
+2722;Provisions pour chèques certifiés;2
+2725;Divers;2
+2726;Dettes rattachées;2
+29;COMPTES DE CREDITS EN SOUFFRANCE;2
+291;Crédits immobilisés;2
+292;Crédits en souffrance de 6 mois au plus;2
+293;Crédits en souffrance de plus de 6 mois à 12 mois au plus;2
+294;Crédits en souffrance de plus de 12 mois à 24 mois au plus;2
+299;Provisions sur crédits en souffrance;2
+2991;Provisions sur crédits en souffrance de 6 mois au plus;2
+2992;Provisions sur crédits en souffrance de plus de 6 mois à 12 mois au plus;2
+2993;Provisions sur crédits en souffrance de plus de 12 mois;2
+30;TITRES DE PLACEMENT;3
+305;Versements restant à effectuer;3
+307;Créances rattachées;3
+309;Provisions pour dépréciation;3
+32;COMPTES DE STOCKS ET EMPLOIS DIVERS;3
+321;Stocks de biens meubles;3
+3211;Stocks de biens meubles;3
+3219;Provisions pour dépréciation;3
+322;Stocks de marchandises;3
+3221;Stocks de marchandises;3
+3229;Provisions pour dépréciation;3
+323;Stocks de fournitures;3
+3231;Stocks de fournitures;3
+3239;Provisions pour dépréciation;3
+33;DEBITEURS ET CREDITEURS DIVERS;3
+331;Débiteurs divers;3
+3319;Autres créances en souffrance et provisions pour dépréciation;3
+332;Créditeurs divers;3
+37;COMPTES TRANSITOIRES ET D'ATTENTE;3
+378;Autres comptes transitoires;3
+379;Comptes d'attente;3
+3791;Comptes d'attente - actif;3
+3792;Comptes d'attente - passif;3
+38;COMPTES DE REGULARISATION;3
+381;Comptes de régularisation - actif;3
+3811;Charges à répartir sur plusieurs exercices;3
+3812;Charges constatées d'avance;3
+3814;Comptes d'abonnement de produits;3
+3815;Produits à recevoir;3
+382;Comptes de régularisation - passif;3
+3822;Produits constatés d'avance;3
+3824;Comptes d'abonnement de charges;3
+3825;Charges à payer;3
+41;IMMOBILISATIONS FINANCIERES;4
+412;Titres de participation;4
+4126;Versements restant à effectuer;4
+4127;Créances rattachées;4
+4129;Provisions pour dépréciation;4
+42;DEPOTS ET CAUTIONNEMENTS;4
+421;Dépôts et cautionnements;4
+427;Créances rattachées;4
+429;Provisions pour dépréciation des dépôts et cautionnements;4
+43;IMMOBILISATIONS EN COURS;4
+431;Immobilisations incorporelles en cours;4
+4311;Immobilisations incorporelles en cours;4
+4319;Provisions pour dépréciation;4
+432;Immobilisations corporelles en cours;4
+4321;Immobilisations corporelles en cours;4
+4329;Provisions pour dépréciation;4
+44;IMMOBILISATIONS D'EXPLOITATION;4
+441;Immobilisations incorporelles;4
+4418;Amortissements;4
+4419;Provisions pour dépréciation;4
+442;Immobilisations corporelles;4
+4428;Amortissements des immobilisations corporelles;4
+4429;Provisions pour dépréciation des immobilisations corporelles;4
+50;SUBVENTIONS ET AUTRES FONDS RECUS;5
+501;Subventions d'investissement;5
+5011;Subventions d'investissement;5
+5012;Subventions d'investissement virées au compte de résultat;5
+502;Fonds affectés (Fonds de garantie, fonds d'assurance, fonds de bonification, fonds de sécurité);5
+503;Fonds de crédit;5
+51;PROVISIONS POUR RISQUES ET CHARGES;5
+511;Provisions pour charges de retraite;5
+519;Autres provisions pour risques et charges;5
+52;PROVISIONS REGLEMENTEES;5
+521;Provisions pour risques afférents aux opérations de crédits à moyen et long termes;5
+53;EMPRUNTS ET TITRES EMIS SUBORDONNES;5
+532;Emprunts et titres émis subordonnés;5
+536;Dettes rattachées;5
+54;FONDS POUR RISQUES FINANCIERS GENERAUX;5
+55;PRIMES LIEES AU CAPITAL ET RESERVES;5
+551;Primes liées au capital;5
+552;Réserves;5
+5521;Réserve générale;5
+5522;Réserves facultatives;5
+5523;Autres réserves;5
+56;FONDS DE DOTATION;5
+57;CAPITAL SOCIAL;5
+571;Capital;5
+5711;Capital souscrit appelé;5
+57111;Capital souscrit appelé versé;5
+57112;Capital souscrit appelé non versé;5
+5712;Capital non appelé;5
+573;Actionnaires, associés ou membres;5
+5731;Actionnaires, associés ou membres, capital souscrit non appelé;5
+5732;Actionnaires, associés ou membres, capital souscrit appelé non versé;5
+58;REPORT A NOUVEAU;5
+59;RESULTAT;5
+591;Excédent ou déficit en instance d'approbation;5
+592;Excédent ou déficit de l'exercice;5
+593;Marge;5
+594;Produit financier net ou charge financière nette;5
+595;Excédent ou déficit d’exploitation;5
+596;Excédent ou déficit exceptionnel;5
+60;CHARGES D'EXPLOITATION FINANCIERE;6
+601;Charges sur opérations avec les institutions financières;6
+6011;Intérêts sur comptes ordinaires chez les institutions financières;6
+6015;Intérêts sur comptes ordinaires des institutions financières;6
+6016;Intérêts sur autres comptes de dépôts des institutions financières;6
+6017;Intérêts sur comptes d'emprunts;6
+6018;Autres intérêts;6
+6019;Commissions;6
+602;Charges sur opérations avec les membres, bénéficiaires ou clients;6
+6025;Intérêts sur comptes des membres, bénéficiaires ou clients;6
+60251;Intérêts sur comptes ordinaires créditeurs;6
+602511;Intérêts sur comptes ordinaires créditeurs;6
+602512;Intérêts sur comptes ordinaires sur livrets créditeurs;6
+60252;Intérêts sur dépôts à terme reçus;6
+60253;Intérêts sur comptes d’épargne à régime spécial;6
+60254;Intérêts sur dépôts de garantie reçus;6
+60255;Intérêts sur autres dépôts reçus;6
+6027;Intérêts sur emprunts et autres sommes dues aux membres, bénéficiaires ou clients;6
+6028;Autres intérêts;6
+6029;Commissions;6
+603;Charges sur opérations sur titres et sur opérations diverses;6
+6031;Charges et pertes sur titres de placement;6
+6038;Charges sur opérations diverses;6
+6039;Commissions;6
+604;Charges sur valeurs immobilisées;6
+6041;Charges sur immobilisations financières;6
+605;Charges sur fonds propres et assimilés;6
+6053;Charges sur emprunts et titres émis subordonnés;6
+608;Charges sur prestations de services financiers;6
+609;Autres charges d'exploitation financière;6
+6091;Moins-values sur cession d'éléments d'actif;6
+6098;Transferts de produits d'exploitation financière;6
+6099;Diverses charges d'exploitation financière;6
+61;ACHATS ET VARIATIONS DE STOCKS;6
+611;Achats;6
+6112;Stocks vendus;6
+6116;Achats non stockés de matières et fournitures;6
+6117;Achats de marchandises;6
+6118;Frais accessoires d'achat;6
+6119;Rabais, remises et ristournes obtenus sur achats de marchandises;6
+612;Variations de stocks;6
+62;AUTRES CHARGES EXTERNES ET CHARGES DIVERSES D'EXPLOITATION;6
+621;Services extérieurs;6
+6211;Redevances de crédit-bail;6
+6212;Loyers;6
+6213;Charges locatives et de co-propriété;6
+6214;Entretien et réparations;6
+6215;Primes d'assurance;6
+6216;Etudes et recherches;6
+6217;Frais de formation;6
+6218;Divers;6
+6219;Rabais, remises et ristournes obtenus sur services extérieurs;6
+622;Autres services extérieurs;6
+6221;Personnel extérieur à l'institution;6
+6222;Rémunérations d'intermédiaires et honoraires;6
+6223;Publicité, publications et relations publiques;6
+6224;Transports de biens;6
+6225;Transports collectifs du personnel;6
+6226;Déplacements, missions et réceptions;6
+6227;Frais postaux et frais de communication;6
+6228;Divers;6
+6229;Rabais, remises et ristournes obtenus sur autres services extérieurs;6
+623;Charges diverses d'exploitation;6
+6231;Redevances pour concessions, brevets, licences, procédés, droits et valeurs similaires;6
+6232;Indemnités de fonction versées;6
+6233;Frais de tenue des réunions des organes et des assemblées;6
+6235;Moins-values de cession sur immobilisations;6
+6238;Transferts de produits d'exploitation non financière;6
+6239;Autres charges diverses d'exploitation non financière;6
+63;IMPOTS, TAXES ET VERSEMENTS ASSIMILES;6
+631;Impôts, taxes et versements assimilés sur rémunérations;6
+632;Autres impôts, taxes et prélèvements assimilés versés à l'Administration des impôts;6
+633;Autres impôts, taxes et prélèvements assimilés versés aux autres organismes;6
+64;CHARGES DE PERSONNEL;6
+641;Salaires et traitements;6
+642;Charges sociales;6
+643;Rémunérations versées aux stagiaires;6
+65;DOTATION AU FONDS POUR RISQUES FINANCIERS GENERAUX;6
+66;DOTATIONS AUX AMORTISSEMENTS, AUX PROVISIONS ET PERTES SUR CREANCES IRRECOUVRABLES;6
+661;Dotations aux amortissements des immobilisations;6
+662;Dotations aux amortissements des charges à répartir;6
+663;Dotations aux provisions pour dépréciation des immobilisations;6
+664;Dotations aux provisions sur créances en souffrance;6
+6641;Dotations aux provisions sur créances en souffrance de 6 mois au plus;6
+66411;Dotations aux provisions sur créances en souffrance de 0 à 3 mois au plus;6
+66412;Dotations aux provisions sur créances en souffrance de plus de 3 mois à 6 mois au plus;6
+6642;Dotations aux provisions sur créances en souffrance de plus de 6 mois à 12 mois au plus;6
+6643;Dotations aux provisions sur créances en souffrance de plus de 12 mois à 24 mois au plus;6
+666;Dotations aux provisions pour dépréciation des autres éléments d'actif;6
+667;Dotations aux provisions pour risques et charges;6
+668;Dotations aux provisions réglementées;6
+669;Pertes sur créances irrécouvrables;6
+67;CHARGES EXCEPTIONNELLES ET PERTES SUR EXERCICES ANTERIEURS;6
+671;Charges exceptionnelles;6
+672;Pertes sur exercices antérieurs;6
+69;IMPOTS SUR LES EXCEDENTS;6
+691;Impôts sur les excédents liés à l’activité d’épargne et de crédit;6
+692;Impôts sur les excédents liés aux activités autres que l’épargne et le crédit;6
+70;PRODUITS D'EXPLOITATION FINANCIERE;7
+701;Produits sur opérations avec les institutions financières;7
+7011;Intérêts sur comptes ordinaires chez les institutions financières;7
+7012;Intérêts sur autres comptes de dépôts chez les institutions financières;7
+7013;Intérêts sur comptes de prêts aux institutions financières;7
+7015;Intérêts sur comptes ordinaires des institutions financières;7
+7018;Autres intérêts;7
+7019;Commissions (Cotisations et droits d'adhésion, commissions);7
+702;Produits sur opérations avec les membres, bénéficiaires ou clients;7
+7021;Intérêts sur crédits aux membres, bénéficiaires ou clients;7
+7025;Intérêts sur comptes des membres, bénéficiaires ou clients;7
+7028;Autres intérêts;7
+7029;Commissions (Cotisations et droits d'adhésion, commissions);7
+703;Produits sur opérations sur titres et sur opérations diverses;7
+7038;Produits sur opérations diverses;7
+7039;Commissions;7
+704;Produits sur valeurs immobilisées;7
+708;Produits sur prestations de services financiers;7
+709;Autres produits d'exploitation financière;7
+7091;Plus - values sur cession d'éléments d'actif;7
+7098;Transferts de charges d'exploitation;7
+7099;Divers produits d'exploitation;7
+71;VENTES;7
+711;Ventes;7
+7111;Ventes de marchandises;7
+7118;Produits accessoires d'achat;7
+7119;Rabais, remises et ristournes accordés sur ventes de marchandises;7
+72;PRODUITS DIVERS D'EXPLOITATION;7
+722;Indemnités de fonction et rémunérations d'administrateurs, de gérants reçues;7
+725;Plus-values de cession;7
+7251;sur immobilisations incorporelles et corporelles;7
+7252;sur immobilisations financières;7
+728;Transferts de charges d'exploitation non financière;7
+7281;Charges refacturées;7
+7282;Charges à répartir sur plusieurs exercices;7
+7289;Autres transferts de charges;7
+729;Autres produits divers d'exploitation;7
+74;SUBVENTIONS D'EXPLOITATION;7
+75;REPRISES DU FONDS POUR RISQUES FINANCIERS GENERAUX;7
+76;REPRISES D'AMORTISSEMENTS, DE PROVISIONS ET RECUPERATIONS SUR CREANCES IRRECOUVRABLES;7
+761;Reprises d'amortissements des immobilisations;7
+763;Reprises de provisions pour dépréciation des immobilisations;7
+764;Reprises de provisions sur créances en souffrance;7
+766;Reprises de provisions pour dépréciation des autres éléments d'actif;7
+767;Reprises de provisions pour risques et charges;7
+768;Reprises de provisions réglementées;7
+769;Récupération sur créances amorties;7
+77;PRODUITS EXCEPTIONNELS ET PROFITS SUR EXERCICES ANTERIEURS;7
+771;Produits exceptionnels;7
+772;Profits sur exercices antérieurs;7

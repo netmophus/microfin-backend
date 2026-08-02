@@ -28,10 +28,10 @@ def donnees() -> Generator[dict[str, uuid.UUID], None, None]:
     """Compte d'épargne à solde 1000, committé (deux connexions doivent le voir). Nettoyé après."""
     s = SessionLocal()
     caisse = s.execute(
-        text("SELECT id FROM comptabilite.accounts WHERE account_number = '5721'")
+        text("SELECT id FROM comptabilite.accounts WHERE account_number = '1011'")
     ).scalar_one()
     epargne = s.execute(
-        text("SELECT id FROM comptabilite.accounts WHERE account_number = '3111'")
+        text("SELECT id FROM comptabilite.accounts WHERE account_number = '251111'")
     ).scalar_one()
     ag = s.execute(
         text(

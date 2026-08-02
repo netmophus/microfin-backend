@@ -1,6 +1,6 @@
 """Le moteur du pont comptable (E1) : poser une opération d'épargne en écriture équilibrée.
 
-  - dépôt  -> D 5721 Caisse / C 3111 Épargne (pièce validée, équilibrée) ;
+  - dépôt  -> D 1011 Caisse / C 251111 Épargne (pièce validée, équilibrée) ;
   - retrait -> l'inverse ;
   - REFUS PROPRE si un rattachement manque (produit sans compte d'épargne, agence sans caisse) :
     rien n'est écrit, message clair.
@@ -101,31 +101,31 @@ def _lignes(db: Session, entry_id: uuid.UUID) -> set[tuple[str, str, int]]:
 
 
 def test_un_depot_pose_debit_caisse_credit_epargne(db: Session) -> None:
-    agence = _agence(db, "D1", _compte_id(db, "5721"))
-    produit = _produit(db, "D1", _compte_id(db, "3111"))
+    agence = _agence(db, "D1", _compte_id(db, "1011"))
+    produit = _produit(db, "D1", _compte_id(db, "251111"))
     compte = _ouvrir(db, agence, produit)
 
     piece = poser_ecriture_operation(db, compte, TYPE_DEPOT, 10000, par=None)
 
     assert piece.status == "validee"
-    assert _lignes(db, piece.id) == {("5721", "D", 10000), ("3111", "C", 10000)}
+    assert _lignes(db, piece.id) == {("1011", "D", 10000), ("251111", "C", 10000)}
 
 
 def test_un_retrait_pose_debit_epargne_credit_caisse(db: Session) -> None:
-    agence = _agence(db, "R1", _compte_id(db, "5721"))
-    produit = _produit(db, "R1", _compte_id(db, "3111"))
+    agence = _agence(db, "R1", _compte_id(db, "1011"))
+    produit = _produit(db, "R1", _compte_id(db, "251111"))
     compte = _ouvrir(db, agence, produit)
 
     piece = poser_ecriture_operation(db, compte, TYPE_RETRAIT, 2500, par=None)
 
-    assert _lignes(db, piece.id) == {("3111", "D", 2500), ("5721", "C", 2500)}
+    assert _lignes(db, piece.id) == {("251111", "D", 2500), ("1011", "C", 2500)}
 
 
 # --- Le refus propre si un rattachement manque --------------------------------------
 
 
 def test_refus_propre_si_produit_sans_compte_epargne(db: Session) -> None:
-    agence = _agence(db, "X1", _compte_id(db, "5721"))
+    agence = _agence(db, "X1", _compte_id(db, "1011"))
     produit = _produit(db, "X1", None)  # pas de compte d'épargne rattaché
     compte = _ouvrir(db, agence, produit)
     avant = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
@@ -140,7 +140,7 @@ def test_refus_propre_si_produit_sans_compte_epargne(db: Session) -> None:
 
 def test_refus_propre_si_agence_sans_caisse(db: Session) -> None:
     agence = _agence(db, "X2", None)  # pas de caisse rattachée
-    produit = _produit(db, "X2", _compte_id(db, "3111"))
+    produit = _produit(db, "X2", _compte_id(db, "251111"))
     compte = _ouvrir(db, agence, produit)
     avant = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
 

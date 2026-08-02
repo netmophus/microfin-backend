@@ -101,7 +101,7 @@ def _rendre_mouvemente(db: Session, compte: Account) -> None:
         text("SELECT id FROM comptabilite.journals WHERE code = 'OD'")
     ).scalar_one()
     caisse_id = db.execute(
-        text("SELECT id FROM comptabilite.accounts WHERE account_number = '5721'")
+        text("SELECT id FROM comptabilite.accounts WHERE account_number = '1011'")
     ).scalar_one()
     entry = ecritures.creer_brouillon(
         db,
