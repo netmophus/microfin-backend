@@ -165,7 +165,8 @@ def test_selecteur_rapport_inclut_les_comptes_desactives(client: TestClient, db:
         "/comptabilite/comptes/selecteur-rapport", params={"q": "6T910"}, headers=comptable
     )
     assert reponse.status_code == 200
-    assert any(c["account_number"] == "6T910" for c in reponse.json())
+    ligne = next(c for c in reponse.json() if c["account_number"] == "6T910")
+    assert ligne["is_active"] is False
 
     # Le sélecteur de RATTACHEMENT, lui, l'exclut toujours (comportement inchangé).
     rattachement = client.get(
@@ -209,9 +210,27 @@ def test_grand_livre_solde_cumule_correct(client: TestClient, db: Session) -> No
     reponse = client.get(
         "/comptabilite/grand-livre", params={"compte_id": str(compte.id)}, headers=comptable
     )
-    lignes = reponse.json()["lignes"]
+    corps = reponse.json()
+    assert corps["compte"]["is_active"] is True
+    lignes = corps["lignes"]
     # Sens normal D : +1000 -> 600 -> 850. Calculé à la main, indépendamment du code testé.
     assert [ligne["solde_cumule"] for ligne in lignes] == [1000, 600, 850]
+
+
+def test_grand_livre_signale_un_compte_desactive(client: TestClient, db: Session) -> None:
+    """Le compte désactivé reste consultable (historique), et l'écran doit pouvoir le savoir
+    même sans repasser par le sélecteur — is_active porté par la réponse elle-même."""
+    compte = _compte(db, "6T931")
+    _mouvement(db, compte, "D", 100, date(2026, 7, 1))
+    compte.is_active = False
+    db.flush()
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.get(
+        "/comptabilite/grand-livre", params={"compte_id": str(compte.id)}, headers=comptable
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["compte"]["is_active"] is False
 
 
 # --- Grand livre — LE POINT SENSIBLE : solde cumulé stable à travers la pagination -----------

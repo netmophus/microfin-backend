@@ -121,11 +121,21 @@ class CompteSelecteur(BaseModel):
 # --- Rapports (R1 grand livre, R2 balance) — lecture pure, aucune écriture -------------------
 
 
+class CompteSelecteurRapport(CompteSelecteur):
+    """Comme CompteSelecteur, + is_active : ce sélecteur propose AUSSI les comptes désactivés
+    (l'historique doit rester consultable), il faut donc pouvoir les distinguer à l'écran."""
+
+    is_active: bool
+
+
 class CompteRapport(BaseModel):
-    """Le compte concerné par un rapport — numéro + libellé, jamais l'UUID à l'écran."""
+    """Le compte concerné par un rapport — numéro + libellé, jamais l'UUID à l'écran.
+    is_active : un grand livre peut porter sur un compte désactivé (historique consultable) —
+    l'écran doit pouvoir le signaler même une fois le sélecteur refermé."""
 
     account_number: str
     name: str
+    is_active: bool
 
 
 class LigneGrandLivre(BaseModel):

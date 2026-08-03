@@ -54,6 +54,7 @@ from app.modules.comptabilite.schemas import (
     CompteRapport,
     CompteResume,
     CompteSelecteur,
+    CompteSelecteurRapport,
     ConfirmationImportComptes,
     CreationCompte,
     DesactivationCompte,
@@ -265,17 +266,20 @@ def selecteur_comptes_endpoint(
     ]
 
 
-@router.get("/comptes/selecteur-rapport", response_model=list[CompteSelecteur])
+@router.get("/comptes/selecteur-rapport", response_model=list[CompteSelecteurRapport])
 def selecteur_rapport_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
     db: Annotated[Session, Depends(get_db)],
     q: Annotated[str | None, Query(description="Recherche — numéro ou libellé.")] = None,
-) -> list[CompteSelecteur]:
+) -> list[CompteSelecteurRapport]:
     """Comptes proposables pour le grand livre — TOUJOURS de saisie, actifs OU désactivés
     (comptes.lister_pour_rapport) : un compte désactivé garde son historique consultable,
-    à la différence du sélecteur de rattachement (/comptes/selecteur)."""
+    à la différence du sélecteur de rattachement (/comptes/selecteur). is_active exposé pour
+    que l'écran le signale clairement, y compris une fois le sélecteur refermé."""
     return [
-        CompteSelecteur(id=c.id, account_number=c.account_number, name=c.name)
+        CompteSelecteurRapport(
+            id=c.id, account_number=c.account_number, name=c.name, is_active=c.is_active
+        )
         for c in comptes.lister_pour_rapport(db, q)
     ]
 
@@ -419,7 +423,9 @@ def grand_livre_endpoint(
     except CompteNonSaisieError as erreur:
         raise _422(erreur) from None
     return PageGrandLivre(
-        compte=CompteRapport(account_number=compte.account_number, name=compte.name),
+        compte=CompteRapport(
+            account_number=compte.account_number, name=compte.name, is_active=compte.is_active
+        ),
         solde_ouverture=resultat.solde_ouverture,
         lignes=[
             LigneGrandLivre(
