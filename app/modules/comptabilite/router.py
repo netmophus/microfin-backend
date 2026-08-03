@@ -64,6 +64,7 @@ from app.modules.comptabilite.schemas import (
     ModificationCompte,
     PageComptes,
     PageGrandLivre,
+    VerrouillageSaisie,
 )
 from app.modules.comptabilite.service import ModificationInterditeError
 from app.modules.security.autorisation import UtilisateurCourant, exige
@@ -387,6 +388,28 @@ def desactiver_compte_endpoint(
     compte = _charger(db, compte_id)
     try:
         comptes.desactiver_compte(db, compte, corps.motif, courant.user_id, _contexte(request))
+        db.commit()
+    except ModificationInterditeError as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    ligne = comptes.lire(db, compte_id)
+    assert ligne is not None
+    return _vers_detail(*ligne)
+
+
+@router.post("/comptes/{compte_id}/verrouiller-saisie", response_model=CompteDetail)
+def verrouiller_saisie_endpoint(
+    compte_id: uuid.UUID,
+    corps: VerrouillageSaisie,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> CompteDetail:
+    """Ferme la saisie d'un compte (is_posting -> FALSE), MÊME s'il est système ou mouvementé —
+    voir comptes.verrouiller_saisie. Jamais l'inverse : pas d'endpoint pour rouvrir."""
+    compte = _charger(db, compte_id)
+    try:
+        comptes.verrouiller_saisie(db, compte, corps.motif, courant.user_id, _contexte(request))
         db.commit()
     except ModificationInterditeError as erreur:
         db.rollback()

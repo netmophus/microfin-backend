@@ -18,6 +18,7 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.comptabilite.models import Account, Journal, JournalEntry, JournalLine
+from app.modules.comptabilite.service import compte_a_des_ecritures
 
 TAILLE_PAGE_GRAND_LIVRE = 50
 
@@ -104,8 +105,13 @@ def grand_livre(
     TOUTES les lignes filtrées qui précèdent cette page (une requête bornée par le même décalage,
     sans limite de taille de page) avant d'accumuler les lignes de la page elle-même — jamais une
     somme fausse d'un cran à la frontière entre deux pages.
+
+    Un compte de regroupement N'EST PAS systématiquement refusé : un compte verrouillé après
+    coup (`verrouiller_saisie`, ex. un officiel remplacé par une extension à 6 chiffres) garde
+    des écritures historiques bien réelles — seul un compte de regroupement qui n'a JAMAIS
+    reçu d'écriture est refusé (rien à montrer, par construction).
     """
-    if not compte.is_posting:
+    if not compte.is_posting and not compte_a_des_ecritures(db, compte.id):
         raise CompteNonSaisieError(
             f"Le compte « {compte.account_number} » est un compte de regroupement : pas de "
             "grand livre (aucune écriture n'y est jamais passée)."

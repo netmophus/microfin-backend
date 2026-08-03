@@ -550,3 +550,28 @@ class ShareSubscription(Base):
     certificate_number: Mapped[str | None] = mapped_column(sa.String(30))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+
+class ShareAccountRole(Base):
+    """Historique des comptes qui ont joué le rôle 'liberees'/'non_liberees' pour les parts
+    sociales — JAMAIS purgé. Même principe que compte_collectif_id côté épargne (ancrage
+    permanent), mais au niveau du RÔLE plutôt que du compte auxiliaire : share_parameters est
+    une ligne unique, écrasée en place à chaque rattachement, donc sans cette table le
+    rapprochement du capital perdrait la mémoire d'un compte dès qu'on le change."""
+
+    __tablename__ = "share_account_roles"
+    __table_args__: tuple[Any, ...] = (
+        sa.CheckConstraint(
+            "role IN ('liberees', 'non_liberees')", name="share_account_roles_role_check"
+        ),
+        sa.UniqueConstraint("role", "account_id", name="uq_share_account_roles"),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    role: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))

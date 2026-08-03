@@ -11,11 +11,18 @@ GARDE-FOU sur les comptes : chaque numéro soumis passe par `comptes.compte_sais
 La ligne est UNIQUE par construction (migration 0029, colonne `singleton` CHECK+UNIQUE) : ce
 module ne crée JAMAIS de ligne, il lit/modifie la seule qui existe (posée par le seed
 `seed-comptabilite`, idempotent).
+
+HISTORIQUE DES RÔLES (migration 0030) : `share_parameters` écrase le rattachement EN PLACE à
+chaque modification — sans mémoire, le rapprochement du capital (`parts_rapprochement.py`)
+perdrait tout l'historique posté sur un ancien compte dès qu'on le change. Chaque compte
+soumis ici est donc aussi enregistré, une fois pour toutes, dans `tiers.share_account_roles`
+(jamais réécrit ni purgé) — même principe que `compte_collectif_id` côté épargne, mais ancré
+au niveau du RÔLE plutôt que du compte auxiliaire.
 """
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
@@ -24,6 +31,20 @@ from app.modules.comptabilite.models import Account
 from app.modules.tiers.models import ShareParameters
 
 RESSOURCE = "tiers.share_parameters"
+
+
+def _enregistrer_role(db: Session, role: str, account_id: uuid.UUID | None) -> None:
+    """Mémorise qu'un compte a joué ce rôle — APPEND-ONLY, idempotent (ON CONFLICT DO NOTHING).
+    Jamais appelé avec None : un rattachement vidé ne fait pas oublier ce qu'il a été."""
+    if account_id is None:
+        return
+    db.execute(
+        text(
+            "INSERT INTO tiers.share_account_roles (role, account_id) "
+            "VALUES (:role, :account_id) ON CONFLICT (role, account_id) DO NOTHING"
+        ),
+        {"role": role, "account_id": account_id},
+    )
 
 
 class ParametrageManquantError(Exception):
@@ -90,6 +111,8 @@ def modifier(
     config.compte_parts_non_liberees_id = (
         nouveau_non_liberees.id if nouveau_non_liberees else None
     )
+    _enregistrer_role(db, "liberees", config.compte_parts_liberees_id)
+    _enregistrer_role(db, "non_liberees", config.compte_parts_non_liberees_id)
     config.updated_by = par
     db.flush()
 

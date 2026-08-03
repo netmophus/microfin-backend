@@ -45,6 +45,10 @@ class CompteAvecEnfantsActifsError(ModificationInterditeError):
     """Tentative de désactiver un compte qui a encore des enfants actifs."""
 
 
+class CompteDejaRegroupementError(ModificationInterditeError):
+    """Tentative de verrouiller la saisie d'un compte déjà en regroupement."""
+
+
 def compte_a_des_ecritures(db: Session, account_id: uuid.UUID) -> bool:
     """Vrai si le compte porte au moins une ligne d'écriture.
 
@@ -111,5 +115,24 @@ def desactiver(
             f"compte {compte.account_number} : des enfants actifs, désactivation refusée"
         )
     compte.is_active = False
+    compte.updated_by = par
+    db.flush()
+
+
+def verrouiller_saisie(db: Session, compte: Account, par: uuid.UUID | None) -> None:
+    """Bascule un compte de SAISIE vers REGROUPEMENT (is_posting=False) — jamais l'inverse (pas
+    d'endpoint pour rouvrir : une fois fermé, c'est fermé).
+
+    Contrairement à modifier_sens, DÉLIBÉRÉMENT PAS bloqué par is_system ni par « mouvementé » :
+    fermer la saisie ne déforme AUCUNE écriture déjà passée, elle ferme seulement la porte aux
+    futures — à la différence d'un changement de sens, qui romprait l'interprétation d'un solde
+    déjà posé. C'est précisément fait pour un compte officiel qu'une extension a remplacé
+    (ex. un compte à 6 chiffres qui reprend le rôle), système ET mouvementé par construction.
+    """
+    if not compte.is_posting:
+        raise CompteDejaRegroupementError(
+            f"compte {compte.account_number} : déjà un compte de regroupement"
+        )
+    compte.is_posting = False
     compte.updated_by = par
     db.flush()

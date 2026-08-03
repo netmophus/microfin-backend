@@ -11,6 +11,13 @@ sans mouvement). Deux tables distinctes -> vrai contrôle croisé, à lancer pé
 
 HYPOTHÈSE (provisoire) : valeur d'une part CONSTANTE. Si l'IMF la change, l'auxiliaire calculé sur
 les comptes x valeur COURANTE divergerait du capital historique -> il faudrait historiser la valeur.
+
+HISTORIQUE DES RÔLES (migration 0030) : le côté général ne lit PAS le rattachement courant seul
+(`share_parameters.compte_parts_liberees_id`) — il somme sur TOUS les comptes qui ont un jour
+joué ce rôle (`tiers.share_account_roles`, jamais purgé). Sans ça, un changement de rattachement
+(ex. bascule vers un compte d'extension à 6 chiffres) ferait disparaître silencieusement tout
+l'historique posté sur l'ancien compte, et créerait un faux écart sur chaque membre déjà
+existant — le rapprochement lui-même deviendrait un faux témoin.
 """
 
 from dataclasses import dataclass
@@ -37,6 +44,13 @@ def rapprocher_capital_libere(db: Session) -> RapprochementCapital:
     souscrit) et débite 1022 (part non libérée, une créance). Le capital RÉELLEMENT libéré n'est
     donc pas 1021 seul mais le NET 1021 - 1022 = Σ(C-D) sur les DEUX comptes. À la libération, on
     crédite 1022 (la créance s'éteint) : le net monte. Invariant : Σ libérées x valeur == net.
+
+    Le NET est sommé sur TOUS les comptes ayant un jour joué le rôle « liberees » ou
+    « non_liberees » (tiers.share_account_roles), pas seulement le rattachement courant — sinon
+    un changement de rattachement ferait disparaître l'historique de l'ancien compte. Le
+    rattachement COURANT est aussi inclus explicitement (union, pas dépendance exclusive à la
+    table d'historique) : si `share_parameters` a été posé directement (seed, script), sans
+    passer par `parts_parametres.modifier()`, le compte courant reste comptabilisé quand même.
     """
     config = _config(db)
     if config.compte_parts_liberees_id is None:
@@ -47,11 +61,22 @@ def rapprocher_capital_libere(db: Session) -> RapprochementCapital:
     ).scalar_one()
     auxiliaire = int(parts_liberees) * config.unit_value
 
-    comptes = [config.compte_parts_liberees_id]
-    if config.compte_parts_non_liberees_id is not None:
-        comptes.append(config.compte_parts_non_liberees_id)
-    # NET libéré = Σ(crédit - débit) sur 1021 ET 1022 : le débit 1022 (non libéré) retranche
-    # ce qui n'a pas encore été payé.
+    comptes = {
+        c
+        for c in (config.compte_parts_liberees_id, config.compte_parts_non_liberees_id)
+        if c is not None
+    }
+    comptes.update(
+        db.execute(
+            text(
+                "SELECT DISTINCT account_id FROM tiers.share_account_roles "
+                "WHERE role IN ('liberees', 'non_liberees')"
+            )
+        ).scalars()
+    )
+    comptes = list(comptes)
+    # NET libéré = Σ(crédit - débit) sur TOUS les comptes historiques des deux rôles : le débit
+    # côté « non libéré » retranche ce qui n'a pas encore été payé, quel que soit le compte.
     general = db.execute(
         text(
             "SELECT COALESCE(SUM(CASE WHEN l.side = 'C' THEN l.amount ELSE -l.amount END), 0) "

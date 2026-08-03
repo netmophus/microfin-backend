@@ -30,6 +30,7 @@ from app.modules.comptabilite.models import Account
 from app.modules.comptabilite.service import compte_a_des_ecritures
 from app.modules.comptabilite.service import desactiver as _desactiver_service
 from app.modules.comptabilite.service import modifier_sens as _modifier_sens_service
+from app.modules.comptabilite.service import verrouiller_saisie as _verrouiller_saisie_service
 
 TAILLE_PAGE_DEFAUT = 25
 TAILLE_PAGE_MAX = 100
@@ -281,6 +282,31 @@ def desactiver_compte(
         resource_id=compte.id,
         old_values={"is_active": True},
         new_values={"is_active": False, "motif": motif},
+    )
+    return compte
+
+
+def verrouiller_saisie(
+    db: Session,
+    compte: Account,
+    motif: str,
+    par: uuid.UUID | None,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> Account:
+    """Verrouille la saisie d'un compte — MOTIF obligatoire, tracé. Fonctionne MÊME sur un
+    compte système ou mouvementé (voir service.verrouiller_saisie) : action réservée à fermer
+    un compte officiel qu'une extension a remplacé, sans jamais toucher au passé."""
+    avant = compte.is_posting
+    _verrouiller_saisie_service(db, compte, par)
+    ecrire_audit(
+        db,
+        action="compta.plan.saisie_verrouillee",
+        contexte=contexte,
+        acteur_id=par,
+        resource_type=RESSOURCE,
+        resource_id=compte.id,
+        old_values={"is_posting": avant},
+        new_values={"is_posting": False, "motif": motif},
     )
     return compte
 

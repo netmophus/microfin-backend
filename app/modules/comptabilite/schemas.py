@@ -79,6 +79,12 @@ class DesactivationCompte(BaseModel):
     motif: str = Field(min_length=3, max_length=500)
 
 
+class VerrouillageSaisie(BaseModel):
+    """Motif OBLIGATOIRE : ferme la saisie d'un compte (is_posting -> FALSE), jamais l'inverse."""
+
+    motif: str = Field(min_length=3, max_length=500)
+
+
 class DiffChampSchema(BaseModel):
     champ: str
     avant: str
