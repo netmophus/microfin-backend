@@ -148,7 +148,7 @@ def executer_seed_schemas(db: Session) -> int:
     return len(MODELES)
 
 
-def rattacher_caisse_agences(db: Session, numero: str = "1011") -> int:
+def rattacher_caisse_agences(db: Session, numero: str = "101111") -> int:
     """Rattache PROVISOIREMENT le compte de caisse `numero` aux agences qui n'en ont pas.
 
     Ne remplace jamais un rattachement déjà posé (la vraie config caisse sera propre à l'IMF).
@@ -170,12 +170,27 @@ def rattacher_caisse_agences(db: Session, numero: str = "1011") -> int:
 
 
 def seed_parametres_parts(db: Session) -> int:
-    """Installe la config PROVISOIRE des parts sociales (une ligne) + rattache 1021/1022.
+    """Installe la config PROVISOIRE des parts sociales (une ligne) + rattache les comptes
+    d'extension à 6 chiffres (571111/571121 — jamais les officiels 57111/57112 directement,
+    voir docs/conformite-comptable.md).
 
     Idempotent et non destructif : crée la ligne si aucune n'existe (valeurs neutres — l'IMF fixe
     la valeur d'une part et le minimum) ; sinon complète seulement les rattachements comptables
     laissés à NULL. Renvoie 1 si la ligne a été créée, 0 sinon.
     """
+    # Historique des rôles (tiers.share_account_roles) : peuplé ici aussi (pas seulement par
+    # parts_parametres.modifier()), pour qu'une installation FRAÎCHE ait, dès le seed, la mémoire
+    # nécessaire au rapprochement du capital — jamais dépendant d'un premier changement manuel.
+    db.execute(
+        text(
+            "INSERT INTO tiers.share_account_roles (role, account_id) "
+            "SELECT 'liberees', id FROM comptabilite.accounts WHERE account_number = '571111' "
+            "UNION ALL "
+            "SELECT 'non_liberees', id FROM comptabilite.accounts WHERE account_number = '571121' "
+            "ON CONFLICT (role, account_id) DO NOTHING"
+        )
+    )
+
     existe = db.execute(text("SELECT count(*) FROM tiers.share_parameters")).scalar_one()
     if existe:
         # Complète les rattachements manquants sans écraser la config d'une IMF.
@@ -183,9 +198,9 @@ def seed_parametres_parts(db: Session) -> int:
             text(
                 "UPDATE tiers.share_parameters SET "
                 "compte_parts_liberees_id = COALESCE(compte_parts_liberees_id, "
-                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '57111')), "
+                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '571111')), "
                 "compte_parts_non_liberees_id = COALESCE(compte_parts_non_liberees_id, "
-                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '57112')), "
+                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '571121')), "
                 "updated_at = NOW()"
             )
         )
@@ -196,8 +211,8 @@ def seed_parametres_parts(db: Session) -> int:
             "(unit_value, minimum_shares, is_refundable, membership_on, "
             " compte_parts_liberees_id, compte_parts_non_liberees_id, is_provisional) "
             "VALUES (0, 1, TRUE, 'liberation', "
-            " (SELECT id FROM comptabilite.accounts WHERE account_number = '57111'), "
-            " (SELECT id FROM comptabilite.accounts WHERE account_number = '57112'), TRUE)"
+            " (SELECT id FROM comptabilite.accounts WHERE account_number = '571111'), "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number = '571121'), TRUE)"
         )
     )
     return 1

@@ -2,6 +2,7 @@
 10;VALEURS EN CAISSE;;1;;D;FALSE;TRUE;
 101;Billets et monnaies;;1;10;D;FALSE;TRUE;
 1011;Billets et monnaies émis par la BCEAO;;1;101;D;TRUE;TRUE;
+101111;Caisse (agence);;1;1011;D;TRUE;FALSE;
 11;COMPTES ORDINAIRES CHEZ LES INSTITUTIONS FINANCIERES;;1;;D;FALSE;TRUE;
 113;Centre des Chèques postaux;;1;11;D;FALSE;TRUE;
 1131;Centre des Chèques postaux;;1;113;D;TRUE;TRUE;
@@ -218,7 +219,9 @@
 571;Capital;;5;57;C;FALSE;TRUE;
 5711;Capital souscrit appelé;;5;571;C;FALSE;TRUE;
 57111;Capital souscrit appelé versé;;5;5711;C;TRUE;TRUE;
+571111;Parts sociales libérées;;5;57111;C;TRUE;FALSE;
 57112;Capital souscrit appelé non versé;;5;5711;D;TRUE;TRUE;
+571121;Parts sociales non libérées;;5;57112;D;TRUE;FALSE;
 5712;Capital non appelé;;5;571;D;TRUE;TRUE;
 573;Actionnaires, associés ou membres;;5;57;C;FALSE;TRUE;
 5731;Actionnaires, associés ou membres, capital souscrit non appelé;;5;573;D;TRUE;TRUE;
