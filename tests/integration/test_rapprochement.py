@@ -1,7 +1,7 @@
 """Rapprochement collectif (251111) ↔ auxiliaire (soldes épargne) — vu concorder ET DÉTECTER.
 
 Fondations posées en E1 : la fonction existe et le compte général est identifiable. On la prouve
-ici avec des opérations réelles côté COMPTABILITÉ (le moteur pose D 1011 / C 251111) et le solde
+ici avec des opérations réelles côté COMPTABILITÉ (le moteur pose D 101111 / C 251111) et le solde
 auxiliaire tenu en regard :
   - les deux concordent au franc ;
   - si on FAUSSE un solde à la main, le rapprochement CRIE (écart non nul).
@@ -78,7 +78,7 @@ def cadre(db: Session) -> tuple[uuid.UUID, SavingsAccount, SavingsAccount]:
 
     Rend (251111, c1, c2)."""
     compte_251111 = _compte_id(db, "251111")
-    agence = Agency(code="AGE-RAP", name="Agence rappro", compte_caisse_id=_compte_id(db, "1011"))
+    agence = Agency(code="AGE-RAP", name="Agence rappro", compte_caisse_id=_compte_id(db, "101111"))
     produit = Product(code="PRAP", name="Épargne", type="a_vue", compte_epargne_id=compte_251111)
     db.add_all([agence, produit])
     db.flush()

@@ -79,7 +79,7 @@ def _tier(db: Session, agency_id: uuid.UUID, suffixe: str, *, membre: bool) -> u
 
 def _cadre(db: Session, suffixe: str, *, avec_client: bool = True, taux_bp: int = 0):
     """Agence + produit rattaché 251111 (membre) et, si demandé, 251121 (client)."""
-    agence = Agency(code=f"AGR-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "1011"))
+    agence = Agency(code=f"AGR-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "101111"))
     produit = Product(
         code=f"PR{suffixe}", name="Épargne", type="a_vue",
         compte_epargne_id=_cid(db, "251111"),

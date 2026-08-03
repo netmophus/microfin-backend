@@ -74,7 +74,7 @@ class Cadre:
 
 
 def _cadre(db: Session, suffixe: str, *, min_balance: int = 0, decouvert: int = 0) -> Cadre:
-    agence = Agency(code=f"AGG-{suffixe}", name="Agence", compte_caisse_id=_compte_id(db, "1011"))
+    agence = Agency(code=f"AGG-{suffixe}", name="Agence", compte_caisse_id=_compte_id(db, "101111"))
     produit = Product(
         code=f"PG{suffixe}", name="Épargne", type="a_vue",
         compte_epargne_id=_compte_id(db, "251111"), min_balance=min_balance,

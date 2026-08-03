@@ -116,7 +116,7 @@ def _caissier(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
 
 
 def _cadre(db: Session, suffixe: str, *, depot: int = 100000) -> Cadre:
-    agence = Agency(code=f"AGI-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "1011"))
+    agence = Agency(code=f"AGI-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "101111"))
     # 10 % l'an, base 365 : un dépôt gardé toute l'année produit exactement depot x 10 %.
     produit = Product(
         code=f"PI{suffixe}", name="Épargne", type="a_vue",

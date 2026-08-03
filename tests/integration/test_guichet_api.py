@@ -57,7 +57,7 @@ def _cid(db: Session, numero: str) -> uuid.UUID:
 
 
 def _agence(db: Session, code: str) -> Agency:
-    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=_cid(db, "1011"))
+    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=_cid(db, "101111"))
     db.add(agence)
     db.flush()
     return agence

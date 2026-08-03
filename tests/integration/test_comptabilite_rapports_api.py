@@ -95,9 +95,15 @@ def _compte(db: Session, numero: str, **overrides: object) -> Account:
 
 
 def _caisse_id(db: Session) -> uuid.UUID:
-    return db.execute(
-        text("SELECT id FROM comptabilite.accounts WHERE account_number = '1011'")
-    ).scalar_one()
+    """Contrepartie JETABLE pour équilibrer les pièces de test — jamais un compte système réel
+    (1011 peut légitimement être verrouillé par verrouiller_saisie sans casser ces tests).
+    Idempotent : une seule créée par transaction de test, quel que soit le nombre d'appels."""
+    existant = db.execute(
+        text("SELECT id FROM comptabilite.accounts WHERE account_number = '6TCAIS'")
+    ).scalar_one_or_none()
+    if existant is not None:
+        return existant
+    return _compte(db, "6TCAIS").id
 
 
 def _mouvement(db: Session, compte: Account, side: str, amount: int, jour: date) -> None:
@@ -195,6 +201,25 @@ def test_grand_livre_compte_de_regroupement_422(client: TestClient, db: Session)
         headers=comptable,
     )
     assert reponse.status_code == 422
+
+
+def test_grand_livre_reste_accessible_apres_verrouillage_avec_historique(
+    client: TestClient, db: Session
+) -> None:
+    """Un compte verrouillé APRÈS COUP (verrouiller_saisie, ex. un officiel remplacé par une
+    extension à 6 chiffres) garde des écritures réelles — son grand livre doit rester
+    consultable, contrairement à un compte de regroupement qui n'en a JAMAIS eu."""
+    compte = _compte(db, "6T921")  # sens D
+    _mouvement(db, compte, "D", 1000, date(2026, 7, 1))
+    compte.is_posting = False
+    db.flush()
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.get(
+        "/comptabilite/grand-livre", params={"compte_id": str(compte.id)}, headers=comptable
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["lignes"][0]["solde_cumule"] == 1000
 
 
 # --- Grand livre — solde cumulé (correction de base) ------------------------------------------

@@ -1,6 +1,6 @@
 """Fermeture de compte (E4) — chaque garde-fou VU MORDRE, et LA BOUCLE complète Épargne↔Tiers.
 
-  - solde > 0 : restitution (D 251111 / C 1011) + état fermé, en une transaction ;
+  - solde > 0 : restitution (D 251111 / C 101111) + état fermé, en une transaction ;
   - solde = 0 : fermeture directe, aucune écriture ;
   - solde < 0 : refusée (débiteur) ;
   - compte fermé : aucune opération (garde-fou de E3 réutilisé) ;
@@ -102,7 +102,7 @@ def _cadre(db: Session, suffixe: str) -> tuple[SavingsAccount, UtilisateurCouran
             "INSERT INTO parameters.agencies (code, name, compte_caisse_id) "
             "VALUES (:c, 'Agence', :caisse) RETURNING id"
         ),
-        {"c": f"AGF-{suffixe}", "caisse": _cid(db, "1011")},
+        {"c": f"AGF-{suffixe}", "caisse": _cid(db, "101111")},
     ).scalar_one()
     produit = Product(
         code=f"PF{suffixe}", name="Épargne", type="a_vue", compte_epargne_id=_cid(db, "251111")
@@ -128,7 +128,7 @@ def test_fermeture_avec_solde_restitue_et_ferme(db: Session) -> None:
     db.refresh(compte)
     assert compte.status == "cloture"
     assert compte.balance == 0
-    # un mouvement de clôture (debit) relié à une pièce de restitution D 251111 / C 1011
+    # un mouvement de clôture (debit) relié à une pièce de restitution D 251111 / C 101111
     mvt = db.execute(
         text(
             "SELECT operation_type, sens, amount FROM epargne.movements "
@@ -217,7 +217,7 @@ def test_boucle_complete_compte_ouvert_bloque_puis_fermeture_libere(db: Session)
 def test_fermeture_interrompue_ne_laisse_rien(monkeypatch: pytest.MonkeyPatch) -> None:
     s = SessionLocal()
     caisse = s.execute(
-        text("SELECT id FROM comptabilite.accounts WHERE account_number = '1011'")
+        text("SELECT id FROM comptabilite.accounts WHERE account_number = '101111'")
     ).scalar_one()
     epargne_c = s.execute(
         text("SELECT id FROM comptabilite.accounts WHERE account_number = '251111'")

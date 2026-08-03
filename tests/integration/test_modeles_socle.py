@@ -72,6 +72,7 @@ from app.modules.tiers.models import (
     MemberShares,
     NumberingSequence,
     RiskAssessment,
+    ShareAccountRole,
     ShareParameters,
     ShareSubscription,
     Tier,
@@ -138,6 +139,9 @@ TABLES_ATTENDUES = frozenset(
         "tiers.share_parameters",
         "tiers.member_shares",
         "tiers.share_subscriptions",
+        # Historique des rôles de compte des parts sociales, pour le rapprochement du capital
+        # après un changement de rattachement (migration 0030).
+        "tiers.share_account_roles",
     }
 )
 
@@ -187,6 +191,7 @@ MODELES = [
     ShareParameters,
     MemberShares,
     ShareSubscription,
+    ShareAccountRole,
 ]
 
 

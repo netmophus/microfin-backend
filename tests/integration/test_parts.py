@@ -1,11 +1,11 @@
 """Parts sociales (PS1) — souscription / libération, la transaction unique, le marqueur.
 
-  - souscription au comptant : D CAISSE / C 57111, parts libérées, is_member bascule ;
-  - souscription engagement (D 57112 / C 57111) puis libération (D CAISSE / C 57112) : équilibrées ;
+  - souscription au comptant : D CAISSE / C 571111, parts libérées, is_member bascule ;
+  - souscription engagement (D 571121 / C 571111) puis libération (D CAISSE / C 571121) : équilibrées ;
   - is_member bascule au BON moment selon le paramètre d'institution (libération vs souscription) ;
   - nombre de parts <= 0 / valeur d'une part nulle / libération excessive -> refusés ;
   - opération interrompue -> RIEN à moitié (pas de parts sans écriture, ni membre sans paiement) ;
-  - rapprochement du capital : Σ parts libérées x valeur == solde comptable 57111 ;
+  - rapprochement du capital : Σ parts libérées x valeur == solde comptable 571111 ;
   - détenir des parts bloque la désactivation (registre d'engagements).
 """
 
@@ -21,7 +21,7 @@ from app.core.engagements import verificateurs_enregistres
 from app.modules.audit.service import CONTEXTE_VIDE
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.tiers import parts
+from app.modules.tiers import parts, parts_parametres
 from app.modules.tiers.cycle_de_vie import EngagementsOuvertsError, executer_transition
 from app.modules.tiers.parts_engagements import verifier_engagements_parts
 from app.modules.tiers.parts_rapprochement import rapprocher_capital_libere
@@ -72,7 +72,7 @@ def _cadre(
 ) -> tuple[UtilisateurCourant, uuid.UUID]:
     """Agence + tier ACTIF + config de parts (provisoire, valeurs de test). Committé (au savepoint)
     pour que le test d'interruption puisse rollback la SEULE opération, pas le décor."""
-    agence = Agency(code=f"AGP-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "1011"))
+    agence = Agency(code=f"AGP-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "101111"))
     db.add(agence)
     db.flush()
     tier_id = db.execute(
@@ -99,8 +99,8 @@ def _cadre(
             "(unit_value, minimum_shares, is_refundable, membership_on, "
             " compte_parts_liberees_id, compte_parts_non_liberees_id, is_provisional) "
             "VALUES (:u, :m, TRUE, :mo, "
-            " (SELECT id FROM comptabilite.accounts WHERE account_number='57111'), "
-            " (SELECT id FROM comptabilite.accounts WHERE account_number='57112'), TRUE)"
+            " (SELECT id FROM comptabilite.accounts WHERE account_number='571111'), "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number='571121'), TRUE)"
         ),
         {"u": unit_value, "m": minimum, "mo": membership_on},
     )
@@ -137,10 +137,10 @@ def test_souscription_comptant_credite_57111_et_bascule_membre(db: Session) -> N
 
     assert r.shares_liberees == 10
     assert r.is_member is True
-    # Argent qui entre en caisse, capital libéré qui monte : D 1011 / C 57111.
+    # Argent qui entre en caisse, capital libéré qui monte : D 101111 / C 571111.
     assert _lignes(db, tier_id, "souscription_comptant") == {
-        ("1011", "D", 50000),
-        ("57111", "C", 50000),
+        ("101111", "D", 50000),
+        ("571111", "C", 50000),
     }
     assert _est_membre(db, tier_id) is True
 
@@ -151,12 +151,12 @@ def test_engagement_puis_liberation_ecritures_equilibrees(db: Session) -> None:
     r1 = parts.souscrire(db, courant, tier_id, 4, comptant=False)  # engagement, sans caisse
     assert (r1.shares_non_liberees, r1.shares_liberees) == (4, 0)
     assert r1.is_member is False  # rien de libéré -> pas encore membre
-    assert _lignes(db, tier_id, "souscription") == {("57112", "D", 20000), ("57111", "C", 20000)}
+    assert _lignes(db, tier_id, "souscription") == {("571121", "D", 20000), ("571111", "C", 20000)}
 
     r2 = parts.liberer(db, courant, tier_id, 4)  # paiement en caisse
     assert (r2.shares_liberees, r2.shares_non_liberees) == (4, 0)
     assert r2.is_member is True  # membre à la LIBÉRATION (capital réel)
-    assert _lignes(db, tier_id, "liberation") == {("1011", "D", 20000), ("57112", "C", 20000)}
+    assert _lignes(db, tier_id, "liberation") == {("101111", "D", 20000), ("571121", "C", 20000)}
 
 
 def test_membre_a_la_souscription_si_le_parametre_le_dit(db: Session) -> None:
@@ -214,10 +214,60 @@ def test_operation_interrompue_ne_laisse_rien(
 
 def test_rapprochement_capital_concorde_apres_liberation(db: Session) -> None:
     courant, tier_id = _cadre(db, "RA")
-    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # 50 000 en 57111
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # 50 000 en 571111
 
     resultat = rapprocher_capital_libere(db)
-    assert resultat.compte_general == "57111"
+    assert resultat.compte_general == "571111"
+    assert resultat.concordant is True
+    assert resultat.ecart == 0
+
+
+def test_rapprochement_tient_apres_un_changement_de_rattachement(db: Session) -> None:
+    """LE point sensible (Finding 3) : après un reroutage vers d'autres comptes, le
+    rapprochement doit continuer à compter l'historique posté sur les ANCIENS comptes — pas
+    seulement ce qui se pose désormais sur les nouveaux. Sans tiers.share_account_roles, ce
+    test échouerait (le NET ne compterait plus que la seconde souscription)."""
+    # Référence AVANT toute action de ce test : l'auxiliaire est une somme GLOBALE (tous les
+    # tiers), pas scopée à un seul — la base de dev partagée peut déjà porter d'autres parts
+    # réelles. On mesure donc un DELTA, pas un total absolu.
+    avant = rapprocher_capital_libere(db)
+    assert avant.concordant is True  # la base est déjà cohérente avant qu'on y touche
+
+    courant, tier_id = _cadre(db, "H1")
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # 50 000 sur 571111 (génération 1)
+
+    # Deux comptes de saisie de test, jouant le rôle de la « génération 2 » (comme le VRAI
+    # chantier a introduit 571111/571121 par-dessus 57111/57112), même sens que les comptes
+    # qu'ils remplacent.
+    db.execute(
+        text(
+            "INSERT INTO comptabilite.accounts "
+            "(account_number, name, account_class, normal_side, is_posting) "
+            "VALUES ('6T720', 'Parts libérées (test)', 6, 'C', TRUE), "
+            "('6T721', 'Parts non libérées (test)', 6, 'D', TRUE)"
+        )
+    )
+    config = parts_parametres.lire(db)
+    parts_parametres.modifier(
+        db,
+        config,
+        unit_value=config.unit_value,
+        minimum_shares=config.minimum_shares,
+        is_refundable=config.is_refundable,
+        membership_on=config.membership_on,
+        compte_parts_liberees_number="6T720",
+        compte_parts_non_liberees_number="6T721",
+        motif="Bascule vers les comptes d'extension (test)",
+        par=None,
+    )
+
+    parts.souscrire(db, courant, tier_id, 5, comptant=True)  # 25 000 sur 6T720 (génération 2)
+
+    resultat = rapprocher_capital_libere(db)
+    # Delta = 15 parts x valeur, quel que soit ce que la base portait déjà avant ce test.
+    assert resultat.auxiliaire - avant.auxiliaire == 15 * config.unit_value
+    # Général : +50 000 (ancien compte, jamais oublié) +25 000 (nouveau compte) = +75 000.
+    assert resultat.general - avant.general == 75000
     assert resultat.concordant is True
     assert resultat.ecart == 0
 
@@ -277,14 +327,14 @@ def _responsable(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
 
 def test_remboursement_total_rend_le_capital_et_repasse_client(db: Session) -> None:
     courant, tier_id = _cadre(db, "RB")
-    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # membre, 50 000 en 57111
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # membre, 50 000 en 571111
     assert _est_membre(db, tier_id) is True
 
     r = parts.rembourser(db, courant, tier_id, 10)  # 10 x 5000 = 50 000
     assert r.shares_liberees == 0
     assert r.is_member is False  # redevient client, DANS la txn du remboursement
-    # Le capital sort : D 57111 / C 1011 (l'argent quitte la caisse).
-    assert _lignes(db, tier_id, "remboursement") == {("57111", "D", 50000), ("1011", "C", 50000)}
+    # Le capital sort : D 571111 / C 101111 (l'argent quitte la caisse).
+    assert _lignes(db, tier_id, "remboursement") == {("571111", "D", 50000), ("101111", "C", 50000)}
     assert _est_membre(db, tier_id) is False
 
 
@@ -340,8 +390,8 @@ def test_annulation_non_liberees_solde_lengagement_sans_caisse(db: Session) -> N
     parts.souscrire(db, courant, tier_id, 6, comptant=False)  # 6 non libérées
     r = parts.annuler_souscription(db, courant, tier_id, 6)
     assert r.shares_non_liberees == 0
-    # D 57111 / C 57112, sans caisse (inverse de la souscription-engagement).
-    assert _lignes(db, tier_id, "annulation") == {("57111", "D", 30000), ("57112", "C", 30000)}
+    # D 571111 / C 571121, sans caisse (inverse de la souscription-engagement).
+    assert _lignes(db, tier_id, "annulation") == {("571111", "D", 30000), ("571121", "C", 30000)}
 
 
 def test_rapprochement_capital_tient_apres_remboursement(db: Session) -> None:

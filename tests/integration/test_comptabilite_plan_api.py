@@ -96,13 +96,13 @@ def _compte(db: Session, numero: str, **overrides: object) -> Account:
 
 def _rendre_mouvemente(db: Session, compte: Account) -> None:
     """Pose une VRAIE pièce équilibrée sur le compte — le garde-fou doit mordre pour de vrai,
-    pas sur un stub (leçon « un mécanisme vert peut ne rien protéger »)."""
+    pas sur un stub (leçon « un mécanisme vert peut ne rien protéger »). Contrepartie : un
+    compte de saisie JETABLE créé ici, jamais un compte système réel — celui-ci peut légitimement
+    être verrouillé (verrouiller_saisie) sans faire échouer ce garde-fou."""
     journal_id = db.execute(
         text("SELECT id FROM comptabilite.journals WHERE code = 'OD'")
     ).scalar_one()
-    caisse_id = db.execute(
-        text("SELECT id FROM comptabilite.accounts WHERE account_number = '1011'")
-    ).scalar_one()
+    contrepartie = _compte(db, f"6T{uuid.uuid4().hex[:6]}")
     entry = ecritures.creer_brouillon(
         db,
         journal_id=journal_id,
@@ -110,7 +110,7 @@ def _rendre_mouvemente(db: Session, compte: Account) -> None:
         description="Mouvement de test (garde-fou)",
         lignes=[
             LigneSaisie(account_id=compte.id, side="D", amount=1000),
-            LigneSaisie(account_id=caisse_id, side="C", amount=1000),
+            LigneSaisie(account_id=contrepartie.id, side="C", amount=1000),
         ],
         par=None,
     )
@@ -353,6 +353,85 @@ def test_changer_sens_compte_mouvemente_refuse_via_vrai_mouvement(
     )
     assert reponse.status_code == 422
     assert "mouvement" in reponse.json()["detail"].lower()
+
+
+# --- Verrouiller la saisie : DÉLIBÉRÉMENT PAS bloqué par système ni mouvementé -------------
+#
+# Contrairement à changer_sens/désactiver : fermer la saisie ne déforme aucune écriture déjà
+# passée, donc système et mouvementé ne sont PAS des garde-fous ici (c'est même le cas d'usage
+# — fermer un compte officiel qu'une extension à 6 chiffres a remplacé).
+
+
+def test_verrouiller_saisie_reussit_meme_systeme_et_mouvemente(
+    client: TestClient, db: Session
+) -> None:
+    compte = _compte(db, "6T600", is_system=True)
+    _rendre_mouvemente(db, compte)
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.post(
+        f"/comptabilite/comptes/{compte.id}/verrouiller-saisie",
+        json={"motif": "Remplacé par une extension à 6 chiffres"},
+        headers=comptable,
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["is_posting"] is False
+
+
+def test_verrouiller_saisie_sans_motif_refuse(client: TestClient, db: Session) -> None:
+    compte = _compte(db, "6T601")
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.post(
+        f"/comptabilite/comptes/{compte.id}/verrouiller-saisie", json={}, headers=comptable
+    )
+    assert reponse.status_code == 422
+
+
+def test_verrouiller_saisie_deja_regroupement_refuse(client: TestClient, db: Session) -> None:
+    compte = _compte(db, "6T602", is_posting=False)
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.post(
+        f"/comptabilite/comptes/{compte.id}/verrouiller-saisie",
+        json={"motif": "Tentative"},
+        headers=comptable,
+    )
+    assert reponse.status_code == 422
+    assert "regroupement" in reponse.json()["detail"].lower()
+
+
+def test_verrouiller_saisie_sans_permission_403(client: TestClient, db: Session) -> None:
+    compte = _compte(db, "6T603")
+    caissier = _entete(db, "CAISSIER")
+
+    reponse = client.post(
+        f"/comptabilite/comptes/{compte.id}/verrouiller-saisie",
+        json={"motif": "Tentative"},
+        headers=caissier,
+    )
+    assert reponse.status_code == 403
+
+
+def test_verrouiller_saisie_trace_en_audit(client: TestClient, db: Session) -> None:
+    compte = _compte(db, "6T604")
+    comptable = _entete(db, "COMPTABLE")
+
+    client.post(
+        f"/comptabilite/comptes/{compte.id}/verrouiller-saisie",
+        json={"motif": "Remplacé par 6T604X"},
+        headers=comptable,
+    )
+
+    ligne = db.execute(
+        text(
+            "SELECT action, new_values FROM audit.audit_logs "
+            "WHERE resource_id = :id AND action = 'compta.plan.saisie_verrouillee'"
+        ),
+        {"id": str(compte.id)},
+    ).mappings().one()
+    assert ligne["new_values"]["motif"] == "Remplacé par 6T604X"
+    assert ligne["new_values"]["is_posting"] is False
 
 
 # --- Désactiver : motif obligatoire, garde-fous VUS MORDRE --------------------------------
