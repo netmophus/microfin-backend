@@ -1,11 +1,11 @@
-"""Modèles ORM du schéma « credit » — référentiel produit (migration 0031, CR0).
+"""Modèles ORM du schéma « credit » — référentiel produit (migration 0031) + demandes et
+décision (migration 0032).
 
-Mappe la table créée par la migration ; cette classe ne crée rien. FK et CHECK reflètent
-EXACTEMENT 0031 (exigence d'alembic check pour les FK — les CHECK ne sont pas comparés, la
-base les impose).
+Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT les migrations (exigence
+d'alembic check pour les FK — les CHECK/triggers ne sont pas comparés, la base les impose).
 
-Premier bloc du module Crédit (individuel simple, échéances fixes, membres ET clients).
-Demandes, décision, décaissement, échéancier : blocs suivants (CR1+), pas encore de modèles ici.
+Module Crédit (individuel simple, échéances fixes, membres ET clients). Décaissement,
+échéancier, remboursements : blocs suivants (CR2+), pas encore de modèles ici.
 """
 
 import uuid
@@ -24,6 +24,9 @@ NOW = sa.text("NOW()")
 GEN_UUID = sa.text("gen_random_uuid()")
 FK_USER = "security.users.id"
 FK_ACCOUNT = "comptabilite.accounts.id"
+FK_TIER = "tiers.tiers.id"
+FK_AGENCY = "parameters.agencies.id"
+FK_PRODUCT = "credit.products.id"
 
 
 class Product(Base):
@@ -68,3 +71,52 @@ class Product(Base):
 
     def __repr__(self) -> str:
         return f"<Product {self.code} {self.name!r}>"
+
+
+class NumberingSequence(Base):
+    """Compteur atomique du numéro de dossier, par (prefix, year) — patron épargne/tiers."""
+
+    __tablename__ = "numbering_sequences"
+    __table_args__: tuple[Any, ...] = ({"schema": "credit"},)
+
+    prefix: Mapped[str] = mapped_column(sa.String(10), primary_key=True)
+    year: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
+    last_value: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+
+
+class Application(Base):
+    """Une demande de crédit — de la création à la décision. États : en_instruction ->
+    approuve | refuse. La décision est UNIQUE et définitive (voir service.decider)."""
+
+    __tablename__ = "applications"
+    __table_args__: tuple[Any, ...] = (
+        sa.Index("ix_credit_applications_tier", "tier_id"),
+        sa.Index("ix_credit_applications_agency", "agency_id"),
+        {"schema": "credit"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    application_number: Mapped[str] = mapped_column(sa.String(30), nullable=False, unique=True)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    agency_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_AGENCY), nullable=False)
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_PRODUCT), nullable=False)
+    montant_demande: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    duree_echeances: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    objet: Mapped[str | None] = mapped_column(sa.Text)
+    status: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'en_instruction'")
+    )
+    montant_decide: Mapped[int | None] = mapped_column(sa.BigInteger)
+    decided_at: Mapped[datetime | None] = mapped_column(TS)
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    motif_decision: Mapped[str | None] = mapped_column(sa.Text)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<Application {self.application_number} {self.status}>"

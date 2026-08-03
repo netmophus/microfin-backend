@@ -248,6 +248,14 @@ PERMISSIONS: tuple[Permission, ...] = (
     # Demande/décision/décaissement (CR1+) auront leurs propres permissions.
     Permission("credit.product.read", "credit", "Consulter les produits de crédit"),
     Permission("credit.product.manage", "credit", "Gérer les produits de crédit"),
+    # --- CR1 : demande et décision. create = monter un dossier (chargé de prêt) ; decide =
+    # approuver/refuser (comité de crédit — comité formel différé, une seule permission pour
+    # l'instant) ; read = consulter.
+    Permission("credit.demande.create", "credit", "Créer une demande de crédit"),
+    Permission("credit.demande.read", "credit", "Consulter une demande de crédit"),
+    Permission(
+        "credit.demande.decide", "credit", "Décider (approuver/refuser) une demande de crédit"
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -301,8 +309,18 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.read",
         }
     ),
-    "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic", "credit.product.read"}),
-    "MEMBRE_COMITE_CREDIT": frozenset(),
+    "CHARGE_PRET": frozenset(
+        {
+            "tiers.read",
+            "tiers.read.basic",
+            "credit.product.read",
+            "credit.demande.create",
+            "credit.demande.read",
+        }
+    ),
+    # Enfin non-vide : sa seule raison d'être est de décider (approuver/refuser). Comité formel
+    # (quorum, plusieurs signataires) différé — une permission unique pour l'instant.
+    "MEMBRE_COMITE_CREDIT": frozenset({"credit.demande.read", "credit.demande.decide"}),
     # Le comptable tient le plan de comptes ET la comptabilité : plan, écritures (saisie +
     # validation + contre-passation) et exercices. Les états/balance/clôture viendront plus tard.
     "COMPTABLE": frozenset(
@@ -351,6 +369,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.pay",
             "tiers.shares.read",
             "tiers.shares.refund",
+            "credit.product.read",
+            "credit.demande.read",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

@@ -30,6 +30,8 @@ from app.modules.comptabilite.models import (
 from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
+from app.modules.credit.models import Application as CreditApplication
+from app.modules.credit.models import NumberingSequence as CreditNumberingSequence
 from app.modules.credit.models import Product as CreditProduct
 from app.modules.epargne.models import (
     InteretCalcul,
@@ -145,6 +147,9 @@ TABLES_ATTENDUES = frozenset(
         "tiers.share_account_roles",
         # Crédit CR0 — référentiel produit (migration 0031).
         "credit.products",
+        # Crédit CR1 — demande et décision (migration 0032).
+        "credit.numbering_sequences",
+        "credit.applications",
     }
 )
 
@@ -196,6 +201,8 @@ MODELES = [
     ShareSubscription,
     ShareAccountRole,
     CreditProduct,
+    CreditNumberingSequence,
+    CreditApplication,
 ]
 
 
