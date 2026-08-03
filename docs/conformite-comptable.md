@@ -114,6 +114,46 @@ Tous les 380 comptes (372 officiels + 8 extensions) restent `is_system = TRUE` (
 officielle, protégée) et `is_provisional = TRUE` (sens à confirmer) — même discipline que le
 reste de ce document : aucune valeur n'est présentée comme définitive avant l'expert.
 
+## Caisse et parts sociales — extension à 6 chiffres (03/08/2026)
+
+Même discipline qu'à l'épargne : **aucun compte officiel (4-5 chiffres) ne doit recevoir
+d'écriture directement**, seulement des comptes d'extension à 6 chiffres. 3 comptes ajoutés,
+diffèrent des 8 extensions épargne sur UN point (`is_system`) — décision explicite, pas un oubli :
+
+| Compte | Libellé | Parent | Sens | `is_system` | `is_provisional` |
+|---|---|---|---|---|---|
+| 101111 | Caisse (agence) | 1011 | D | **FALSE** | TRUE |
+| 571111 | Parts sociales libérées | 57111 | C | **FALSE** | TRUE |
+| 571121 | Parts sociales non libérées | 57112 | D | **FALSE** | TRUE |
+
+`is_system = FALSE` (contrairement aux 8 extensions épargne, qui sont TRUE) : ces 3 comptes ne
+prétendent pas venir du référentiel officiel — ce sont des extensions purement internes, créées
+via le Bloc 2 (import CSV, comme les 8 extensions épargne — le SEUL chemin qui pose
+`is_provisional = TRUE` ; la création unitaire du Bloc 1 pose `is_provisional = FALSE`, ce qui
+aurait été un sens différent de « provisoire » : validé humainement à la saisie ≠ confirmé par un
+expert contre le référentiel). Ajoutés à demeure dans
+[`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv) (383 lignes
+désormais), pas seulement importés une fois — une réinstallation fraîche les recrée.
+
+**1011 / 57111 / 57112 sont VERROUILLÉS** (`is_posting = FALSE` depuis le 03/08/2026, action
+`compta.plan.manage` → « verrouiller la saisie », motif tracé) : ils ne peuvent plus recevoir
+aucune écriture, ni automatisée ni manuelle. Contrairement à `changer_sens`, ce verrouillage
+fonctionne délibérément MÊME sur un compte système et mouvementé — il ne déforme aucune écriture
+passée, il ferme seulement la porte aux futures. **Aucun endpoint ne permet de le rouvrir.**
+⚠️ Piège : réimporter le CSV officiel tel quel repose `is_posting = TRUE` sur ces 3 comptes (le
+chemin d'import ne connaît pas cette distinction) — après tout réimport du plan de référence,
+revérifier et reverrouiller si besoin.
+
+**Historique des rattachements (`tiers.share_account_roles`, migration 0030)** : les parts
+sociales n'ont qu'UNE ligne de configuration (`tiers.share_parameters`), écrasée en place à
+chaque changement de rattachement — sans mémoire, le rapprochement du capital
+(`rapprocher_capital_libere`) oublierait tout l'historique posté sur l'ancien compte dès qu'on le
+change. Cette table mémorise, une fois pour toutes, quel compte a joué le rôle « liberees »/
+« non_liberees » — jamais réécrite ni purgée, même principe que `compte_collectif_id` côté
+épargne (mais ancrée au rôle, pas au compte auxiliaire, faute d'équivalent ici). Vérifié en réel :
+une souscription sur l'ancien 57111 et une nouvelle sur 571111 restent toutes deux comptées,
+rapprochement concordant.
+
 ## Concordance bilan / compte de résultat (Annexe 1 RCSFD) — décision provisoire
 
 Pour les rapports « à date » (grand livre, balance, et plus tard bilan/résultat provisoires —
@@ -173,9 +213,10 @@ l'opération : `epargne.depot` = D **CAISSE** / C **EPARGNE** ; `epargne.retrait
 **provisoires**, à valider avant mise en production.
 
 **La caisse (face argent)** : le rôle CAISSE se résout via `parameters.agencies.compte_caisse_id`
-— **un compte de caisse par agence** (provisoire : toutes les agences → **1011** Billets et
-monnaies émis par la BCEAO). C'est la face COMPTABLE seulement ; le vrai module Caisse
-(guichets, arrêtés, dénombrement, écarts) est reporté.
+— **un compte de caisse par agence** (provisoire : toutes les agences → **101111** Caisse
+(agence), l'extension à 6 chiffres — voir « Caisse et parts sociales » ci-dessus ; l'officiel
+1011 est verrouillé, il ne reçoit plus d'écriture directe depuis le 03/08/2026). C'est la face
+COMPTABLE seulement ; le vrai module Caisse (guichets, arrêtés, dénombrement, écarts) est reporté.
 
 **Collectif ↔ auxiliaire (loi de rapprochement)** : le rôle EPARGNE se résout via
 `epargne.products.compte_epargne_id` — le compte **général** (ex. **251111** pour l'épargne à
@@ -251,12 +292,12 @@ argent). Compte fermé : plus d'intérêts.
 
 | Opération | Schéma provisoire (à valider) | Statut |
 |-----------|-------------------------------|--------|
-| Dépôt épargne à vue (membre) | D 1011 Caisse / C 251111 Épargne à vue membres | ⚠️ À VALIDER |
-| Retrait épargne à vue | D 251111 / C 1011 Caisse | ⚠️ À VALIDER |
+| Dépôt épargne à vue (membre) | D 101111 Caisse / C 251111 Épargne à vue membres | ⚠️ À VALIDER |
+| Retrait épargne à vue | D 251111 / C 101111 Caisse | ⚠️ À VALIDER |
 | Ouverture dépôt à terme | D 251111 (ou caisse) / C 252111 DAT | ⚠️ À VALIDER |
 | Intérêts créditeurs (charge) | D 6xxx Charges d'intérêts / C 319x Intérêts courus | ⚠️ À VALIDER |
 | Capitalisation des intérêts | D 319x / C 251111 | ⚠️ À VALIDER |
-| Souscription parts sociales | D Caisse / C 57111 Capital souscrit appelé versé | ⚠️ À VALIDER |
+| Souscription parts sociales | D Caisse / C 571111 Parts sociales libérées | ⚠️ À VALIDER |
 | Frais de tenue de compte | D compte membre / C 7xxx Produits | ⚠️ À VALIDER |
 
 ## Rattachement produit d'épargne → compte du plan (Épargne, PROVISOIRE)
@@ -302,7 +343,7 @@ Config d'institution `tiers.share_parameters` (une ligne, `is_provisional`), tou
 | `minimum_shares` | Nombre minimum de parts pour adhérer | 1 | ⚠️ À VALIDER |
 | `is_refundable` | Parts remboursables ou non | vrai | ⚠️ À VALIDER |
 | `membership_on` | Membre à la **souscription** ou à la **libération** | libération | ⚠️ À VALIDER |
-| `compte_parts_liberees_id` / `_non_liberees_id` | Rattachement 57111 / 57112 | 57111 / 57112 | ⚠️ À VALIDER |
+| `compte_parts_liberees_id` / `_non_liberees_id` | Rattachement 571111 / 571121 (extensions ; les officiels 57111/57112 sont verrouillés) | 571111 / 571121 | ⚠️ À VALIDER |
 
 **Moment de l'adhésion** : défaut **libération** (on est membre quand le capital est réellement
 versé — parts libérées ≥ minimum), paramétrable en `souscription`. Le marqueur `tiers.is_member`
@@ -312,24 +353,28 @@ en **francs entiers** (le `NUMERIC(18,2)` des specs est transposé en BIGINT). H
 provisoire : **valeur d'une part constante** (sinon historiser, comme la date de valeur
 d'épargne) — vaut pour la libération et le rapprochement.
 
-**Schémas d'écriture (provisoires, seed `seed-comptabilite`)**. 57112 sens D (souscrites non
-libérées, créance), 57111 sens C (libérées, capital) — ce mapping colle exactement à la
+**Schémas d'écriture (provisoires, seed `seed-comptabilite`)**. 571121 sens D (souscrites non
+libérées, créance), 571111 sens C (libérées, capital) — ce mapping colle exactement à la
 nomenclature officielle (« Capital souscrit appelé versé » / « … non versé »). Souscription-
 engagement SANS caisse (journal OD) ; libération et comptant AVEC caisse (journal CA — argent qui
-entre, comme un dépôt).
+entre, comme un dépôt). Comptes d'extension (571111/571121/101111) depuis le 03/08/2026 — voir
+« Caisse et parts sociales » plus haut ; les officiels 57111/57112/1011 restent dans l'historique
+(écritures d'avant cette date), jamais réécrits, mais ne reçoivent plus rien de nouveau.
 
 | Opération | Schéma | Journal | Statut |
 |-----------|--------|---------|--------|
-| Souscription (engagement) | **D 57112 / C 57111** | OD | ⚠️ À VALIDER |
-| Libération (paiement) | **D 1011 / C 57112** | CA | ⚠️ À VALIDER |
-| Souscription au comptant | **D 1011 / C 57111** | CA | ⚠️ À VALIDER |
-| Remboursement (départ, PS2) | **D 57111 / C 1011** | CA | ⚠️ À VALIDER |
+| Souscription (engagement) | **D 571121 / C 571111** | OD | ⚠️ À VALIDER |
+| Libération (paiement) | **D 101111 / C 571121** | CA | ⚠️ À VALIDER |
+| Souscription au comptant | **D 101111 / C 571111** | CA | ⚠️ À VALIDER |
+| Remboursement (départ, PS2) | **D 571111 / C 101111** | CA | ⚠️ À VALIDER |
 
 **Rapprochement du capital** (contrôle) : `Σ (parts libérées × valeur d'une part) == NET comptable
-57111 - 57112`. ⚠️ Le capital réellement libéré n'est PAS 57111 seul : la souscription-engagement
-crédite 57111 (montant souscrit) ET débite 57112 (part non libérée, une créance — motif « capital
-souscrit appelé / non appelé »). Le net `57111 - 57112` = `Σ(crédit - débit)` sur les deux
-comptes. La libération crédite 57112 (la créance s'éteint) → le net monte. Un écart = anomalie.
+571111 - 571121` (et 57111 - 57112 pour l'historique — sommé automatiquement,
+voir `tiers.share_account_roles` plus haut). ⚠️ Le capital réellement libéré n'est PAS 571111
+seul : la souscription-engagement crédite 571111 (montant souscrit) ET débite 571121 (part non
+libérée, une créance — motif « capital souscrit appelé / non appelé »). Le net
+`571111 - 571121` = `Σ(crédit - débit)` sur les deux comptes (et, pour l'historique, `57111 -
+57112`). La libération crédite 571121 (la créance s'éteint) → le net monte. Un écart = anomalie.
 
 ## Journaux et exercice (C1)
 
