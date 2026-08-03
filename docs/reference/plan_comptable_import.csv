@@ -1,7 +1,7 @@
 ﻿account_number;name;short_name;class;parent_number;normal_side;is_posting;is_system;notes
 10;VALEURS EN CAISSE;;1;;D;FALSE;TRUE;
 101;Billets et monnaies;;1;10;D;FALSE;TRUE;
-1011;Billets et monnaies émis par la BCEAO;;1;101;D;TRUE;TRUE;
+1011;Billets et monnaies émis par la BCEAO;;1;101;D;FALSE;TRUE;
 101111;Caisse (agence);;1;1011;D;TRUE;FALSE;
 11;COMPTES ORDINAIRES CHEZ LES INSTITUTIONS FINANCIERES;;1;;D;FALSE;TRUE;
 113;Centre des Chèques postaux;;1;11;D;FALSE;TRUE;
@@ -87,10 +87,14 @@
 20;CREDITS AUX MEMBRES, BENEFICIAIRES OU CLIENTS;;2;;D;FALSE;TRUE;
 202;Crédits à court terme;;2;20;D;FALSE;TRUE;
 2022;Crédits ordinaires;;2;202;D;FALSE;TRUE;
+202211;Crédits ordinaires court terme — membres;;2;2022;D;TRUE;TRUE;
+202221;Crédits ordinaires court terme — clients;;2;2022;D;TRUE;TRUE;
 20227;Créances rattachées;;2;2022;D;TRUE;TRUE;
 2023;Découverts;;2;202;D;TRUE;TRUE;
 203;Crédits à moyen terme;;2;20;D;FALSE;TRUE;
-2031;Crédits à moyen terme;;2;203;D;TRUE;TRUE;
+2031;Crédits à moyen terme;;2;203;D;FALSE;TRUE;
+203111;Crédits moyen terme — membres;;2;2031;D;TRUE;TRUE;
+203121;Crédits moyen terme — clients;;2;2031;D;TRUE;TRUE;
 2037;Créances rattachées;;2;203;D;TRUE;TRUE;
 25;COMPTES DES MEMBRES, BENEFICIAIRES OU CLIENTS;;2;;C;FALSE;TRUE;
 251;Comptes ordinaires;;2;25;C;FALSE;TRUE;
@@ -218,9 +222,9 @@
 57;CAPITAL SOCIAL;;5;;C;FALSE;TRUE;
 571;Capital;;5;57;C;FALSE;TRUE;
 5711;Capital souscrit appelé;;5;571;C;FALSE;TRUE;
-57111;Capital souscrit appelé versé;;5;5711;C;TRUE;TRUE;
+57111;Capital souscrit appelé versé;;5;5711;C;FALSE;TRUE;
 571111;Parts sociales libérées;;5;57111;C;TRUE;FALSE;
-57112;Capital souscrit appelé non versé;;5;5711;D;TRUE;TRUE;
+57112;Capital souscrit appelé non versé;;5;5711;D;FALSE;TRUE;
 571121;Parts sociales non libérées;;5;57112;D;TRUE;FALSE;
 5712;Capital non appelé;;5;571;D;TRUE;TRUE;
 573;Actionnaires, associés ou membres;;5;57;C;FALSE;TRUE;

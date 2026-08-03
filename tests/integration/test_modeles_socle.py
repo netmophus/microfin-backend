@@ -30,6 +30,7 @@ from app.modules.comptabilite.models import (
 from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
+from app.modules.credit.models import Product as CreditProduct
 from app.modules.epargne.models import (
     InteretCalcul,
     Product,
@@ -142,6 +143,8 @@ TABLES_ATTENDUES = frozenset(
         # Historique des rôles de compte des parts sociales, pour le rapprochement du capital
         # après un changement de rattachement (migration 0030).
         "tiers.share_account_roles",
+        # Crédit CR0 — référentiel produit (migration 0031).
+        "credit.products",
     }
 )
 
@@ -192,6 +195,7 @@ MODELES = [
     MemberShares,
     ShareSubscription,
     ShareAccountRole,
+    CreditProduct,
 ]
 
 

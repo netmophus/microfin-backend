@@ -243,6 +243,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     # Remboursement / annulation (PS2, sortie du sociétariat) : rendre le capital est un acte de
     # GESTION sensible -> réservé au responsable (comme la fermeture d'un compte d'épargne).
     Permission("tiers.shares.refund", "tiers", "Rembourser / annuler des parts sociales"),
+    # --- Module Crédit (CR0) : référentiel produit seulement. manage = définir un produit
+    # (décision fonctionnelle, comme epargne.product.manage) -> ADMIN_FONCTIONNEL, pas COMPTABLE.
+    # Demande/décision/décaissement (CR1+) auront leurs propres permissions.
+    Permission("credit.product.read", "credit", "Consulter les produits de crédit"),
+    Permission("credit.product.manage", "credit", "Gérer les produits de crédit"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -296,7 +301,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.read",
         }
     ),
-    "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic"}),
+    "CHARGE_PRET": frozenset({"tiers.read", "tiers.read.basic", "credit.product.read"}),
     "MEMBRE_COMITE_CREDIT": frozenset(),
     # Le comptable tient le plan de comptes ET la comptabilité : plan, écritures (saisie +
     # validation + contre-passation) et exercices. Les états/balance/clôture viendront plus tard.
@@ -313,6 +318,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.product.read",
             "epargne.rapprochement.read",
             "tiers.shares.read",
+            "credit.product.read",
         }
     ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
@@ -417,6 +423,8 @@ MATRICE: dict[str, frozenset[str]] = {
             "sessions.revoke",
             "epargne.product.read",
             "epargne.product.manage",
+            "credit.product.read",
+            "credit.product.manage",
             "perimetre.reseau",
         }
     ),
