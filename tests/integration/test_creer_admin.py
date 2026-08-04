@@ -170,6 +170,12 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     db.execute(text("DELETE FROM epargne.movements"))
     db.execute(text("ALTER TABLE epargne.movements ENABLE TRIGGER trg_mouvement_immuable"))
     db.execute(text("DELETE FROM epargne.accounts"))
+    # Crédit : repayments/installments référencent applications, applications référence tiers ET
+    # agences -> purger les trois avant elles (aucun trigger d'immuabilité ici, contrairement à
+    # l'épargne/aux parts).
+    db.execute(text("DELETE FROM credit.repayments"))
+    db.execute(text("DELETE FROM credit.installments"))
+    db.execute(text("DELETE FROM credit.applications"))
     # Parts sociales : share_subscriptions est APPEND-ONLY (trigger) et référence tiers.tiers +
     # agencies -> purge avant les tiers, trigger désactivé le temps de la suppression simulée.
     db.execute(

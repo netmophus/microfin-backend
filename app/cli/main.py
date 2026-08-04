@@ -17,6 +17,7 @@ from app.cli.seed_comptabilite import (
     rattacher_caisse_agences,
     seed_parametres_parts,
 )
+from app.cli.seed_credit import executer_seed_produits_credit
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
     AgenceManquanteError,
@@ -201,6 +202,21 @@ def seed_epargne() -> None:
     typer.secho(f"  Produits d'épargne en place : {nb}.", fg=typer.colors.GREEN, bold=True)
     typer.secho(
         "  PROVISOIRES — à valider/compléter par l'IMF (taux, règles).", fg=typer.colors.YELLOW
+    )
+    typer.echo("")
+
+
+@app.command("seed-credit")
+def seed_credit() -> None:
+    """Installe le produit de crédit de démonstration (PROVISOIRE, taux non nul). Idempotente."""
+    with SessionLocal() as db:
+        nb = executer_seed_produits_credit(db)
+        db.commit()
+    typer.echo("")
+    typer.secho(f"  Produit(s) de crédit en place : {nb}.", fg=typer.colors.GREEN, bold=True)
+    typer.secho(
+        "  PROVISOIRE — taux de démonstration, à valider/remplacer par l'IMF.",
+        fg=typer.colors.YELLOW,
     )
     typer.echo("")
 

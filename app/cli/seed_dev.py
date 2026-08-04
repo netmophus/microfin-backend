@@ -44,6 +44,8 @@ COMPTES: tuple[CompteDev, ...] = (
     CompteDev("auditeur", "AUDITEUR_INTERNE", "DEV-AUD", "Auditeur", "Interne"),
     CompteDev("charge", "CHARGE_CLIENTELE", "DEV-CHG", "Charge", "Clientele"),
     CompteDev("caissier", "CAISSIER", "DEV-CAI", "Caissier", "Guichet"),
+    CompteDev("pret", "CHARGE_PRET", "DEV-PRT", "Charge", "Pret"),
+    CompteDev("comite", "MEMBRE_COMITE_CREDIT", "DEV-CMT", "Membre", "ComiteCredit"),
 )
 
 

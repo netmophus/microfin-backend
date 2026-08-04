@@ -10,6 +10,9 @@ c'est une commodité de test, pas un secret.
 python -m app.cli seed-security      # rôles + permissions
 python -m app.cli creer-admin        # agence siège + admin (mot de passe généré, affiché une fois)
 python -m app.cli seed-dev           # les comptes ci-dessous
+python -m app.cli seed-comptabilite  # journaux, modèles d'écriture, caisse par agence
+python -m app.cli seed-epargne       # produits d'épargne (PROVISOIRES)
+python -m app.cli seed-credit        # produit de crédit de démonstration (PROVISOIRE, taux non nul)
 ```
 
 La commande est **idempotente** : rejouable sans dupliquer ni écraser un mot de passe changé.
@@ -25,7 +28,9 @@ Tous rattachés à l'agence **siège** (AG-001).
 | `lbcft`     | RESPONSABLE_LBC_FT   | Vigilance LBC/FT réseau, **valider** l'activation, vérifier une pièce, voir les désactivés du réseau |
 | `auditeur`  | AUDITEUR_INTERNE     | Lecture réseau (fiches, journal d'audit), voir les désactivés |
 | `charge`    | CHARGE_CLIENTELE     | Enrôler un tiers, saisir coordonnées et pièces, suspendre — **ne voit pas** les désactivés |
-| `caissier`  | CAISSIER             | Vue guichet limitée (read.basic), identification sans données KYC |
+| `caissier`  | CAISSIER             | Vue guichet limitée (read.basic), identification sans données KYC, remboursement de crédit |
+| `pret`      | CHARGE_PRET          | Monter un dossier de crédit (créer une demande), consulter |
+| `comite`    | MEMBRE_COMITE_CREDIT | Décider une demande de crédit (approuver/refuser) |
 
 Le compte **admin** (ADMIN_FONCTIONNEL) vient de `creer-admin`, séparément (mot de passe généré).
 
