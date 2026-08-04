@@ -408,6 +408,7 @@ def test_me_renvoie_l_identite_et_les_permissions(
             "tiers.read.basic",
             "tiers.shares.pay",
             "tiers.shares.read",
+            "credit.remboursement.create",
         ]
     )
     assert corps["must_change_password"] is False

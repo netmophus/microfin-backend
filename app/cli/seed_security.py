@@ -261,6 +261,12 @@ PERMISSIONS: tuple[Permission, ...] = (
     # responsable, jamais au chargé de prêt qui a monté le dossier (séparation des tâches,
     # même principe que la fermeture d'un compte d'épargne ou le remboursement de parts).
     Permission("credit.decaissement.create", "credit", "Décaisser une demande de crédit approuvée"),
+    # --- CR4 : remboursement. Opération de GUICHET (encaisser une échéance) : même patron que
+    # epargne.operation.deposit/withdraw -> caissier ET responsable, jamais de gate KYC (l'argent
+    # qui rentre ne présente aucun risque, contrairement au décaissement).
+    Permission(
+        "credit.remboursement.create", "credit", "Encaisser le remboursement d'une échéance"
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -297,6 +303,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.operation.withdraw",
             "tiers.shares.pay",  # le caissier ENCAISSE la libération / le comptant (l'argent entre)
             "tiers.shares.read",
+            "credit.remboursement.create",  # même logique : encaisser une échéance, l'argent entre
         }
     ),
     # Le chargé de clientèle enrôle ET ouvre les comptes d'épargne des membres.
@@ -377,6 +384,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "credit.product.read",
             "credit.demande.read",
             "credit.decaissement.create",
+            "credit.remboursement.create",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

@@ -1,10 +1,10 @@
 """Vérificateur d'engagements du module Crédit — ce qui empêche de désactiver un tiers.
 
 Branché DÈS CR3 (décaissement), pas attendu jusqu'aux remboursements (CR4) : un garde-fou vert
-mais inerte ne protège rien (leçon déjà tirée avec l'Épargne). Condition pour l'instant : toute
-demande DÉCAISSÉE bloque, point — pas encore de notion de « soldé », les remboursements
-n'existent pas. CR4 affinera avec le capital restant dû réel (comme l'Épargne distingue solde
-nul vs compte fermé, voir epargne/engagements.py)."""
+mais inerte ne protège rien (leçon déjà tirée avec l'Épargne). Condition (affinée en CR4,
+annoncée dès CR3) : un crédit DÉCAISSÉ bloque tant qu'il lui reste au moins une échéance
+'a_echoir' — dès que toutes ses échéances sont 'paye', il ne bloque plus. Miroir exact de
+l'Épargne, qui distingue solde nul vs compte fermé (voir epargne/engagements.py)."""
 
 import uuid
 
@@ -15,11 +15,16 @@ from app.core.engagements import Engagement, enregistrer_verificateur
 
 
 def verifier_engagements_credit(db: Session, tier_id: uuid.UUID) -> list[Engagement]:
-    """Rend un engagement par crédit DÉCAISSÉ (status='decaisse') du tiers."""
+    """Rend un engagement par crédit DÉCAISSÉ du tiers ayant encore une échéance 'a_echoir'."""
     demandes = db.execute(
         text(
-            "SELECT application_number, montant_decide FROM credit.applications "
-            "WHERE tier_id = :t AND status = 'decaisse'"
+            "SELECT a.application_number, a.montant_decide "
+            "FROM credit.applications a "
+            "WHERE a.tier_id = :t AND a.status = 'decaisse' "
+            "AND EXISTS ("
+            "  SELECT 1 FROM credit.installments i "
+            "  WHERE i.application_id = a.id AND i.status = 'a_echoir'"
+            ")"
         ),
         {"t": tier_id},
     ).all()
@@ -27,8 +32,8 @@ def verifier_engagements_credit(db: Session, tier_id: uuid.UUID) -> list[Engagem
     engagements: list[Engagement] = []
     for numero, montant in demandes:
         libelle = (
-            f"Ce tiers a un crédit décaissé {numero} ({montant} F) en cours : "
-            "il doit être soldé avant de désactiver ce tiers."
+            f"Ce tiers a un crédit décaissé {numero} ({montant} F) non soldé : "
+            "il doit être entièrement remboursé avant de désactiver ce tiers."
         )
         engagements.append(Engagement(domaine="credit", reference=numero, libelle=libelle))
     return engagements

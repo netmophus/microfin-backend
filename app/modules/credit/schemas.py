@@ -60,3 +60,17 @@ class EcheanceLigne(BaseModel):
     total: int
     capital_restant_du: int
     status: str
+
+
+class Remboursement(BaseModel):
+    montant: int = Field(gt=0)
+
+
+class RemboursementRecu(BaseModel):
+    numero: int
+    due_date: date
+    capital: int
+    interets: int
+    montant_total: int
+    paid_at: datetime
+    echeances_restantes: int

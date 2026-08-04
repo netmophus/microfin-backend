@@ -1,9 +1,11 @@
 """Endpoints HTTP du module Crédit — CR1 : produits (lecture), demande, décision.
 CR3 : décaissement (pièce comptable + échéancier persisté) et lecture de l'échéancier.
+CR4 : remboursement (une échéance à la fois, montant exact).
 
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
 credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
-décaisser -> credit.decaissement.create (séparée de decide — voir seed_security).
+décaisser -> credit.decaissement.create (séparée de decide) ; rembourser ->
+credit.remboursement.create (voir seed_security).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                    -> 403 (exige(), en amont)
@@ -12,13 +14,14 @@ TABLE DES ERREURS (un seul endroit) :
   - produit inexistant/inactif             -> 422
   - demande déjà décidée / montant décidé invalide -> 422
   - demande non approuvée, rattachement comptable manquant, échéancier impossible -> 422
+  - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
 """
 
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -38,7 +41,12 @@ from app.modules.credit.demandes import (
     decider,
 )
 from app.modules.credit.echeancier import EcheancierImpossibleError
-from app.modules.credit.models import Application
+from app.modules.credit.models import Application, Installment
+from app.modules.credit.remboursement import (
+    AucuneEcheanceAReglerError,
+    MontantIncorrectError,
+    rembourser,
+)
 from app.modules.credit.schemas import (
     CreationDemande,
     Decision,
@@ -46,6 +54,8 @@ from app.modules.credit.schemas import (
     DemandeDetail,
     DemandeResume,
     EcheanceLigne,
+    Remboursement,
+    RemboursementRecu,
 )
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
@@ -295,3 +305,54 @@ def lire_echeancier_endpoint(
         )
         for e in consultation.lire_echeancier(db, courant, application_id)
     ]
+
+
+@router.post(
+    "/credit/demandes/{application_id}/remboursement", response_model=RemboursementRecu
+)
+def rembourser_endpoint(
+    application_id: uuid.UUID,
+    corps: Remboursement,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.remboursement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RemboursementRecu:
+    """Règle la prochaine échéance impayée, pour son montant EXACT. Aucun gate KYC (encaisser
+    de l'argent qui rentre ne présente aucun risque)."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    demande = db.get(Application, application_id)
+    assert demande is not None
+
+    try:
+        echeance = rembourser(
+            db, demande, montant=corps.montant, par=courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except (
+        AucuneEcheanceAReglerError,
+        MontantIncorrectError,
+        RattachementManquantError,
+    ) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+
+    restantes = db.execute(
+        select(func.count())
+        .select_from(Installment)
+        .where(Installment.application_id == application_id, Installment.status == "a_echoir")
+    ).scalar_one()
+    return RemboursementRecu(
+        numero=echeance.numero,
+        due_date=echeance.due_date,
+        capital=echeance.capital,
+        interets=echeance.interets,
+        montant_total=echeance.total,
+        paid_at=echeance.paid_at,
+        echeances_restantes=restantes,
+    )

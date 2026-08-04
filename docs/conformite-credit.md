@@ -10,9 +10,9 @@
 > bannière à l'écran quand le frontend crédit existera). Aucune n'est présentée comme définitive.
 
 **Périmètre couvert (au 04/08/2026)** : CR0 (référentiel produit), CR1 (demande et décision),
-CR2 (échéancier, calcul pur), CR3 (décaissement, première écriture comptable). CR4
-(remboursements) et CR5 (retards/provisionnement) ne sont pas encore construits — leurs points
-ouverts viendront s'ajouter ici au fur et à mesure.
+CR2 (échéancier, calcul pur), CR3 (décaissement, première écriture comptable), CR4
+(remboursements). CR5 (retards/provisionnement) n'est pas encore construit, bloqué en attendant
+les règles de l'expert-comptable (voir §2) — ses points ouverts viendront s'ajouter ici.
 
 ## 1. Rattachement comptable (CR0) — comptes d'extension classe 20
 
@@ -86,15 +86,50 @@ plancher) — tous `is_provisional = TRUE`, tous à 0/valeur neutre par défaut.
   premier périmètre (crédit individuel simple à échéances fixes). Une demande approuvée se
   décaisse pour la totalité de `montant_decide`, une seule fois (`credit.applications.status`
   ne repasse jamais de `decaisse` à un état antérieur).
-- **`credit.installments.status`** : colonne posée dès CR3 (`server_default = 'a_echoir'`) mais
-  **sans contrainte CHECK** — le vocabulaire complet des états d'une échéance (payée, en
-  retard, etc.) appartient à CR4 (remboursements), pas encore décidé. La contrainte sera
-  ajoutée quand ce vocabulaire existera, plutôt que d'être devinée maintenant.
+- **`credit.installments.status`** : au moment de CR3, colonne posée sans contrainte CHECK,
+  vocabulaire encore inconnu. **Tranché en CR4** (voir §5) : `('a_echoir', 'paye')`.
 
-## 5. Séparation des tâches (organisationnel, pas comptable — mentionné pour traçabilité)
+## 5. Les remboursements (CR4) — décisions mécaniques, une extension comptable directe
 
-`credit.demande.decide` (comité de crédit) et `credit.decaissement.create` (responsable
-d'agence) sont deux permissions **séparées**, jamais accordées à `CHARGE_PRET` (qui monte le
-dossier). Choix organisationnel du projet, aligné sur le même principe déjà appliqué à la
-fermeture d'un compte d'épargne et au remboursement de parts sociales — pas une exigence
+- **Compte produits d'intérêts** : `7021` (Intérêts sur crédits aux membres, bénéficiaires ou
+  clients) — compte **officiel direct**, **PAS d'extension à 6 chiffres**, contrairement au
+  capital (202211/202221, 203111/203121). La distinction membre/client n'a de sens que pour les
+  comptes de **dette** (envers qui l'institution doit quelque chose — épargne, capital de
+  crédit) ; les intérêts perçus sont un produit de l'institution elle-même, rien à distinguer.
+  Un seul compte, `credit.products.compte_produits_interets_id`, partagé par tous les tiers d'un
+  même produit.
+- **Vocabulaire de `credit.installments.status`**, maintenant CHECK : `'a_echoir' → 'paye'`.
+  Toujours **rien pour « en retard »** — reste une condition calculée à la lecture
+  (`due_date < aujourd'hui AND status='a_echoir'`), jamais un état stocké : le vocabulaire de
+  pénalité appartient à CR5 (§2), pas anticipé ici.
+- **Pièce comptable construite en code applicatif**, pas via le moteur générique
+  `poser_depuis_schema` (Épargne/Parts/CR3) : un remboursement a des montants différents par
+  ligne (capital ≠ intérêts) et un nombre de lignes variable (la ligne PRODUITS_INTERETS est
+  OMISE quand l'échéance ne porte aucun intérêt) — deux propriétés que le moteur générique, conçu
+  pour un montant unique et un nombre de lignes fixe, ne couvre pas. Décision : ne pas
+  complexifier un moteur partagé par 3 modules pour un cas structurellement différent (voir
+  migration 0034 et `credit/remboursement.py`). Choix d'architecture, pas une donnée
+  réglementaire.
+- **Périmètre v1** : un remboursement règle **une seule échéance à la fois**, pour son montant
+  **exact** — pas de paiement partiel, pas de paiement groupé sur plusieurs échéances, pas de
+  surpaiement. Cohérent avec le calibrage volontairement simple retenu depuis CR0 pour ce
+  premier périmètre (crédit individuel simple à échéances fixes). Un guichet plus souple
+  (allocation automatique d'une somme sur plusieurs échéances) resterait à concevoir séparément
+  si le besoin se confirme.
+- **Aucun gate KYC au remboursement** : encaisser de l'argent qui rentre ne présente aucun
+  risque — un tiers suspendu peut rembourser (même raisonnement que le refus toujours possible
+  en CR1). Décision organisationnelle, pas réglementaire.
+- **« Crédit soldé »** : pas de nouveau statut sur `credit.applications` (qui reste `'decaisse'`
+  indéfiniment) — cohérent avec la décision archi déjà prise pour l'Épargne (« vérité = Σ
+  mouvements »). Un crédit est soldé quand aucune de ses `installments` n'est plus `'a_echoir'` ;
+  c'est ce que vérifie `verifier_engagements_credit` avant d'autoriser la désactivation d'un
+  tiers.
+
+## 6. Séparation des tâches (organisationnel, pas comptable — mentionné pour traçabilité)
+
+`credit.demande.decide` (comité de crédit), `credit.decaissement.create` (responsable d'agence)
+et `credit.remboursement.create` (caissier/responsable, opération de guichet) sont des
+permissions **séparées** — `CHARGE_PRET` (qui monte le dossier) n'a jamais ni l'une ni l'autre
+des deux premières. Choix organisationnel du projet, aligné sur le même principe déjà appliqué à
+la fermeture d'un compte d'épargne et au remboursement de parts sociales — pas une exigence
 extraite d'un texte, mais une pratique de contrôle interne standard en microfinance.

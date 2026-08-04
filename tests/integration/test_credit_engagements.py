@@ -1,15 +1,17 @@
-"""Désactivation d'un tiers bloquée par un crédit décaissé — garde-fou vu mordre (CR3).
+"""Désactivation d'un tiers bloquée par un crédit décaissé — garde-fou vu mordre (CR3+CR4).
 
-Branché DÈS le décaissement (pas attendu jusqu'aux remboursements, CR4) : tant qu'un crédit
-est 'decaisse', le tiers ne peut pas être désactivé. Et le méta-test qui prouve que le
-vérificateur de crédit est bien ENREGISTRÉ à l'assemblage de l'app (sinon le garde-fou serait
-vert mais inerte) — même patron que test_desactivation_engagements.py (Épargne)."""
+Branché DÈS le décaissement (pas attendu jusqu'aux remboursements) : tant qu'un crédit
+'decaisse' a au moins une échéance 'a_echoir', le tiers ne peut pas être désactivé. Une fois
+TOUTES les échéances payées (CR4), le blocage tombe — la boucle complète, comme Épargne et
+Parts. Et le méta-test qui prouve que le vérificateur de crédit est bien ENREGISTRÉ à
+l'assemblage de l'app (sinon le garde-fou serait vert mais inerte) — même patron que
+test_desactivation_engagements.py (Épargne)."""
 
 import uuid
 from collections.abc import Generator
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
@@ -18,7 +20,8 @@ from app.modules.audit.service import CONTEXTE_VIDE
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.engagements import enregistrer, verifier_engagements_credit
-from app.modules.credit.models import Product
+from app.modules.credit.models import Installment, Product
+from app.modules.credit.remboursement import rembourser
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.cycle_de_vie import EngagementsOuvertsError, executer_transition
 
@@ -74,6 +77,7 @@ def _cadre(db: Session, suffixe: str) -> tuple[uuid.UUID, Product, uuid.UUID]:
         name="Crédit test engagement",
         compte_credit_membre_id=_cid(db, "202211"),
         compte_credit_client_id=_cid(db, "202221"),
+        compte_produits_interets_id=_cid(db, "7021"),
         taux_bp=1200,
     )
     db.add(produit)
@@ -115,6 +119,20 @@ def _desactiver(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID):
     return executer_transition(db, courant, tier_id, "deactivate", CONTEXTE_VIDE, motif="test")
 
 
+def _solder_toutes_les_echeances(db: Session, demande) -> None:
+    while True:
+        echeance = db.execute(
+            select(Installment)
+            .where(Installment.application_id == demande.id, Installment.status == "a_echoir")
+            .order_by(Installment.numero)
+            .limit(1)
+        ).scalar_one_or_none()
+        if echeance is None:
+            return
+        rembourser(db, demande, montant=echeance.total, par=None, contexte=CONTEXTE_VIDE)
+        db.flush()
+
+
 # --- Le crédit décaissé bloque -----------------------------------------------------------
 
 
@@ -129,6 +147,21 @@ def test_desactivation_refusee_si_credit_decaisse(db: Session) -> None:
     assert demande.application_number in engagement.libelle
     assert "décaissé" in engagement.libelle.lower() or "crédit" in engagement.libelle.lower()
     assert engagement.domaine == "credit"
+
+
+def test_desactivation_autorisee_une_fois_le_credit_solde(db: Session) -> None:
+    """La boucle complète : décaissé -> NON désactivable -> toutes les échéances payées ->
+    désactivable. Comme Épargne (compte fermé) et Parts (capital remboursé)."""
+    agency_id, produit, tier_id = _cadre(db, "E")
+    demande = _decaisser_credit(db, agency_id, produit, tier_id)
+
+    with pytest.raises(EngagementsOuvertsError):
+        _desactiver(db, _acteur(db, agency_id), tier_id)
+
+    _solder_toutes_les_echeances(db, demande)
+
+    tier = _desactiver(db, _acteur(db, agency_id), tier_id)
+    assert tier.status == "desactive"
 
 
 def test_desactivation_autorisee_si_aucun_credit_decaisse(db: Session) -> None:

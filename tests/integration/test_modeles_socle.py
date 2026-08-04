@@ -34,6 +34,7 @@ from app.modules.credit.models import Application as CreditApplication
 from app.modules.credit.models import Installment as CreditInstallment
 from app.modules.credit.models import NumberingSequence as CreditNumberingSequence
 from app.modules.credit.models import Product as CreditProduct
+from app.modules.credit.models import Repayment as CreditRepayment
 from app.modules.epargne.models import (
     InteretCalcul,
     Product,
@@ -153,6 +154,8 @@ TABLES_ATTENDUES = frozenset(
         "credit.applications",
         # Crédit CR3 — décaissement, échéancier persisté (migration 0033).
         "credit.installments",
+        # Crédit CR4 — remboursements (migration 0034).
+        "credit.repayments",
     }
 )
 
@@ -207,6 +210,7 @@ MODELES = [
     CreditNumberingSequence,
     CreditApplication,
     CreditInstallment,
+    CreditRepayment,
 ]
 
 

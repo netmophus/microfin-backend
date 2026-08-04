@@ -1,11 +1,12 @@
 """Modèles ORM du schéma « credit » — référentiel produit (migration 0031), demandes et
-décision (migration 0032), décaissement et échéancier persisté (migration 0033).
+décision (migration 0032), décaissement et échéancier persisté (migration 0033), remboursements
+(migration 0034).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT les migrations (exigence
 d'alembic check pour les FK — les CHECK/triggers ne sont pas comparés, la base les impose).
 
-Module Crédit (individuel simple, échéances fixes, membres ET clients). Remboursements
-(retards/provisionnement) : blocs suivants (CR4+).
+Module Crédit (individuel simple, échéances fixes, membres ET clients). Retards/
+provisionnement : bloc suivant (CR5), bloqué en attendant les règles de l'expert-comptable.
 """
 
 import uuid
@@ -49,6 +50,12 @@ class Product(Base):
     )
     # Rattachement CLIENT (ex. 202221/203121). NULL = pas encore configuré.
     compte_credit_client_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey(FK_ACCOUNT)
+    )
+    # Produit d'intérêts (CR4) — UN SEUL compte, PAS de split membre/client : les intérêts
+    # perçus sont un produit de l'institution, pas une dette envers le tiers (7021, officiel
+    # direct, contrairement au capital qui a un vrai trou membre/client à combler).
+    compte_produits_interets_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey(FK_ACCOUNT)
     )
     # Taux/échéancier (PROVISOIRES) — taux en POINTS DE BASE entiers, jamais de flottant.
@@ -133,17 +140,21 @@ class Application(Base):
 
 class Installment(Base):
     """Une échéance PERSISTÉE d'un crédit décaissé — résultat figé de generer_echeancier()
-    (CR2, pur) au moment du décaissement. due_date : date calendaire, calculée par pas de
-    période depuis la date de décaissement (stdlib, voir decaissement._ajouter_periode).
+    (CR2, pur) au moment du décaissement. Reste le PLAN prévisionnel, immuable après coup
+    (voir Repayment pour le registre de ce qui a réellement été encaissé).
 
-    status sans CHECK pour l'instant : le vocabulaire des états (payé/en retard/...) est
-    celui de CR4 (remboursements), pas encore décidé — colonne posée en avance pour éviter
-    une migration disruptive plus tard, sa contrainte attend les règles réelles."""
+    due_date : date calendaire, calculée par pas de période depuis la date de décaissement
+    (stdlib, voir decaissement._ajouter_periode).
+
+    status : 'a_echoir' -> 'paye' (CR4). Toujours RIEN pour « en retard » — condition calculée
+    à la lecture (due_date < aujourd'hui AND status='a_echoir'), pas un état stocké : le
+    vocabulaire de pénalité appartient à CR5, pas deviné ici."""
 
     __tablename__ = "installments"
     __table_args__: tuple[Any, ...] = (
         sa.UniqueConstraint("application_id", "numero"),
         sa.Index("ix_credit_installments_application", "application_id"),
+        sa.CheckConstraint("status IN ('a_echoir', 'paye')", name="status"),
         {"schema": "credit"},
     )
 
@@ -160,7 +171,46 @@ class Installment(Base):
     status: Mapped[str] = mapped_column(
         sa.String(20), nullable=False, server_default=sa.text("'a_echoir'")
     )
+    paid_at: Mapped[datetime | None] = mapped_column(TS)
+    paid_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
 
     def __repr__(self) -> str:
         return f"<Installment {self.application_id} #{self.numero}>"
+
+
+class Repayment(Base):
+    """Un paiement RÉELLEMENT encaissé — registre append-only (miroir epargne.movements).
+
+    installment_id est UNIQUE : périmètre v1, un remboursement règle UNE échéance en entier,
+    jamais de paiement partiel ni groupé (voir credit/remboursement.py). entry_id référence la
+    pièce comptable qui l'a posé (D CAISSE / C CREDIT / C PRODUITS_INTERETS)."""
+
+    __tablename__ = "repayments"
+    __table_args__: tuple[Any, ...] = (
+        sa.Index("ix_credit_repayments_application", "application_id"),
+        {"schema": "credit"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    installment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID,
+        sa.ForeignKey("credit.installments.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey(FK_APPLICATION), nullable=False
+    )
+    montant_capital: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    montant_interets: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    montant_total: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id"), nullable=False
+    )
+    paid_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    paid_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+
+    def __repr__(self) -> str:
+        return f"<Repayment {self.installment_id} {self.montant_total}>"
