@@ -56,6 +56,20 @@ def lister_demandes(db: Session, courant: UtilisateurCourant) -> Sequence[Any]:
     ).all()
 
 
+def lister_demandes_tier(
+    db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID
+) -> Sequence[Any]:
+    """Les demandes de crédit d'UN tiers, dans le périmètre de l'acteur, les plus récentes
+    d'abord — pour l'onglet Crédit de sa fiche. Le router vérifie séparément que le tiers
+    lui-même est dans le périmètre (404 sinon) ; le filtre agency_id ici est une seconde
+    barrière, pas la seule."""
+    return db.execute(
+        _requete_demandes(courant)
+        .where(Application.tier_id == tier_id)
+        .order_by(Application.created_at.desc())
+    ).all()
+
+
 def lire_demande(db: Session, courant: UtilisateurCourant, application_id: uuid.UUID) -> Any | None:
     """Une demande + son produit + le nom du tiers, dans le périmètre, ou None (-> 404)."""
     return db.execute(

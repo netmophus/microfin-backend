@@ -418,3 +418,49 @@ def test_demande_hors_agence_404(client: TestClient, db: Session) -> None:
 
     reponse = client.get(f"/credit/demandes/{demande_id}", headers=charge_autre)
     assert reponse.status_code == 404
+
+
+# --- Lecture par tiers (onglet Crédit de la fiche) --------------------------------------------
+
+
+def test_lister_demandes_dun_tiers_ne_retourne_que_les_siennes(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "CRT1")
+    produit = _produit(db)
+    tier_a = _tier(db, agence)
+    tier_b = _tier(db, agence)
+    demande_a = _demande(db, agence, tier_a, produit)
+    _demande(db, agence, tier_b, produit)  # d'un AUTRE tiers : ne doit pas apparaître
+    charge = _entete(db, agence, "CHARGE_PRET")
+
+    reponse = client.get(f"/tiers/{tier_a}/demandes-credit", headers=charge)
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert [d["id"] for d in corps] == [str(demande_a)]
+
+
+def test_lister_demandes_tier_hors_agence_404(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "CRT2")
+    autre_agence = _agence(db, "CRT3")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    _demande(db, agence, tier_id, produit)
+    charge_autre = _entete(db, autre_agence, "CHARGE_PRET")
+
+    reponse = client.get(f"/tiers/{tier_id}/demandes-credit", headers=charge_autre)
+
+    assert reponse.status_code == 404
+
+
+def test_lister_demandes_tier_sans_permission_403(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "CRT4")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    _demande(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")  # n'a pas credit.demande.read
+
+    reponse = client.get(f"/tiers/{tier_id}/demandes-credit", headers=caissier)
+
+    assert reponse.status_code == 403

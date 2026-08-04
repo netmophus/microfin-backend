@@ -126,6 +126,29 @@ def lire_demande_endpoint(
     )
 
 
+@router.get("/tiers/{tier_id}/demandes-credit", response_model=list[DemandeResume])
+def lister_demandes_tier_endpoint(
+    tier_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.demande.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DemandeResume]:
+    """Les demandes de crédit d'UN tiers, dans le périmètre de l'acteur — pour l'onglet Crédit
+    de sa fiche. Un tiers hors périmètre est INTROUVABLE (404), jamais 403."""
+    agency_id = db.execute(
+        select(Tier.primary_agency_id).where(
+            Tier.id == tier_id,
+            Tier.deleted_at.is_(None),
+            courant.condition_perimetre(Tier.primary_agency_id),
+        )
+    ).scalar_one_or_none()
+    if agency_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_TIER_INTROUVABLE
+        )
+
+    return [_resume(ligne) for ligne in consultation.lister_demandes_tier(db, courant, tier_id)]
+
+
 @router.post(
     "/tiers/{tier_id}/demandes-credit",
     response_model=DemandeResume,
