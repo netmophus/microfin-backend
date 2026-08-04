@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.modules.audit.router import router as audit_router
 from app.modules.comptabilite.router import router as comptabilite_router
+from app.modules.credit.engagements import enregistrer as enregistrer_engagements_credit
 from app.modules.credit.router import router as credit_router
 from app.modules.epargne.engagements import enregistrer as enregistrer_engagements_epargne
 from app.modules.epargne.router import router as epargne_router
@@ -24,6 +25,7 @@ app = FastAPI(title="Microfinance SIG", version="0.1.0")
 # l'assemblage de l'app, pour que le garde-fou ne soit jamais inerte. Un méta-test le vérifie.
 enregistrer_engagements_epargne()
 enregistrer_engagements_parts()
+enregistrer_engagements_credit()
 
 app.include_router(auth_router)
 app.include_router(users_router)

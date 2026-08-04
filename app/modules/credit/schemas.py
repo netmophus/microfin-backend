@@ -5,7 +5,7 @@ ENTIERS de francs CFA. `tier_number`/`product_code` résolus (jamais l'UUID brut
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -42,3 +42,21 @@ class DemandeDetail(DemandeResume):
     montant_decide: int | None
     decided_at: datetime | None
     motif_decision: str | None
+
+
+class DemandeDecaissee(DemandeDetail):
+    disbursed_at: datetime | None
+    compte_credit_number: str | None
+    nb_echeances: int
+    premiere_echeance_le: date | None
+    derniere_echeance_le: date | None
+
+
+class EcheanceLigne(BaseModel):
+    numero: int
+    due_date: date
+    capital: int
+    interets: int
+    total: int
+    capital_restant_du: int
+    status: str

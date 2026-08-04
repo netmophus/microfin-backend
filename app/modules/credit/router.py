@@ -1,14 +1,17 @@
 """Endpoints HTTP du module Crédit — CR1 : produits (lecture), demande, décision.
+CR3 : décaissement (pièce comptable + échéancier persisté) et lecture de l'échéancier.
 
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
-credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide.
+credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
+décaisser -> credit.decaissement.create (séparée de decide — voir seed_security).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                    -> 403 (exige(), en amont)
   - tiers / demande hors périmètre ou inexistant -> 404
-  - tiers non actif (gate KYC, création ou approbation) -> 422
+  - tiers non actif (gate KYC, création, approbation ou décaissement) -> 422
   - produit inexistant/inactif             -> 422
   - demande déjà décidée / montant décidé invalide -> 422
+  - demande non approuvée, rattachement comptable manquant, échéancier impossible -> 422
 """
 
 import uuid
@@ -19,7 +22,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.comptabilite.models import Account
 from app.modules.credit import consultation
+from app.modules.credit.decaissement import (
+    DemandeNonApprouveeError,
+    RattachementManquantError,
+    decaisser,
+)
 from app.modules.credit.demandes import (
     DemandeDejaDecideeError,
     MontantDecideInvalideError,
@@ -28,8 +37,16 @@ from app.modules.credit.demandes import (
     creer_demande,
     decider,
 )
+from app.modules.credit.echeancier import EcheancierImpossibleError
 from app.modules.credit.models import Application
-from app.modules.credit.schemas import CreationDemande, Decision, DemandeDetail, DemandeResume
+from app.modules.credit.schemas import (
+    CreationDemande,
+    Decision,
+    DemandeDecaissee,
+    DemandeDetail,
+    DemandeResume,
+    EcheanceLigne,
+)
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 from app.modules.tiers.models import Tier
@@ -196,3 +213,85 @@ def decider_endpoint(
         decided_at=demande.decided_at,
         motif_decision=demande.motif_decision,
     )
+
+
+@router.post(
+    "/credit/demandes/{application_id}/decaissement", response_model=DemandeDecaissee
+)
+def decaisser_endpoint(
+    application_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.decaissement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> DemandeDecaissee:
+    """Décaisse une demande APPROUVÉE : pièce comptable + échéancier persisté, en une
+    transaction unique. Réservé au responsable d'agence (séparation des tâches avec le
+    chargé de prêt qui a monté le dossier)."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    demande = db.get(Application, application_id)
+    assert demande is not None
+
+    try:
+        decaisser(db, demande, par=courant.user_id, contexte=_contexte(request))
+        db.commit()
+    except (
+        DemandeNonApprouveeError,
+        TierNonActifError,
+        ProduitIntrouvableError,
+        RattachementManquantError,
+        EcheancierImpossibleError,
+    ) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+
+    ligne = consultation.lire_demande(db, courant, application_id)
+    assert ligne is not None
+    base = _resume(ligne)
+    echeances = consultation.lire_echeancier(db, courant, application_id)
+    compte_credit_number = db.execute(
+        select(Account.account_number).where(Account.id == demande.compte_credit_id)
+    ).scalar_one_or_none()
+    return DemandeDecaissee(
+        **base.model_dump(),
+        objet=demande.objet,
+        montant_decide=demande.montant_decide,
+        decided_at=demande.decided_at,
+        motif_decision=demande.motif_decision,
+        disbursed_at=demande.disbursed_at,
+        compte_credit_number=compte_credit_number,
+        nb_echeances=len(echeances),
+        premiere_echeance_le=echeances[0].due_date if echeances else None,
+        derniere_echeance_le=echeances[-1].due_date if echeances else None,
+    )
+
+
+@router.get("/credit/demandes/{application_id}/echeancier", response_model=list[EcheanceLigne])
+def lire_echeancier_endpoint(
+    application_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.demande.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[EcheanceLigne]:
+    """L'échéancier persisté d'une demande décaissée (vide si pas encore décaissée)."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    return [
+        EcheanceLigne(
+            numero=e.numero,
+            due_date=e.due_date,
+            capital=e.capital,
+            interets=e.interets,
+            total=e.total,
+            capital_restant_du=e.capital_restant_du,
+            status=e.status,
+        )
+        for e in consultation.lire_echeancier(db, courant, application_id)
+    ]

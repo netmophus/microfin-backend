@@ -6,6 +6,7 @@ nul, et les combinaisons de paramètres pathologiques qui doivent échouer propr
 plutôt que produire un capital_restant_du négatif.
 """
 
+import itertools
 from decimal import Decimal
 
 import pytest
@@ -44,7 +45,7 @@ class TestCapitalConstant:
             regle_arrondi="plus_proche",
         )
 
-        for precedent, suivant in zip(echeances, echeances[1:]):
+        for precedent, suivant in itertools.pairwise(echeances):
             assert suivant.interets <= precedent.interets
             assert suivant.total <= precedent.total
             assert suivant.capital_restant_du < precedent.capital_restant_du
@@ -76,14 +77,16 @@ class TestEcheanceConstante:
             regle_arrondi="plus_proche",
         )
 
-        for precedent, suivant in zip(echeances, echeances[1:]):
+        for precedent, suivant in itertools.pairwise(echeances):
             assert suivant.capital >= precedent.capital
             assert suivant.interets <= precedent.interets
 
 
 class TestConvergenceEtDeterminisme:
     def test_les_deux_methodes_convergent_a_taux_nul(self) -> None:
-        params = dict(montant=100_000, taux_bp=0, duree_echeances=12, periodicite="mensuelle")
+        params = {
+            "montant": 100_000, "taux_bp": 0, "duree_echeances": 12, "periodicite": "mensuelle"
+        }
 
         capital_constant = generer_echeancier(
             **params, methode_amortissement="capital_constant", regle_arrondi="plus_proche"
@@ -95,22 +98,25 @@ class TestConvergenceEtDeterminisme:
         assert capital_constant == echeance_constante
 
     def test_rejouable_a_lidentique(self) -> None:
-        params = dict(
-            montant=250_000,
-            taux_bp=1500,
-            duree_echeances=18,
-            periodicite="mensuelle",
-            methode_amortissement="echeance_constante",
-            regle_arrondi="plus_proche",
-        )
+        params = {
+            "montant": 250_000,
+            "taux_bp": 1500,
+            "duree_echeances": 18,
+            "periodicite": "mensuelle",
+            "methode_amortissement": "echeance_constante",
+            "regle_arrondi": "plus_proche",
+        }
 
         assert generer_echeancier(**params) == generer_echeancier(**params)
 
     def test_la_regle_darrondi_change_le_resultat(self) -> None:
-        params = dict(
-            montant=100_000, taux_bp=1250, duree_echeances=7, periodicite="mensuelle",
-            methode_amortissement="echeance_constante",
-        )
+        params = {
+            "montant": 100_000,
+            "taux_bp": 1250,
+            "duree_echeances": 7,
+            "periodicite": "mensuelle",
+            "methode_amortissement": "echeance_constante",
+        }
 
         plus_proche = generer_echeancier(**params, regle_arrondi="plus_proche")
         plancher = generer_echeancier(**params, regle_arrondi="plancher")

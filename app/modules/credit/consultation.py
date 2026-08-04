@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.credit.models import Application, Product
+from app.modules.credit.models import Application, Installment, Product
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.models import GroupProfile, IndividualProfile, LegalEntityProfile, Tier
 
@@ -61,3 +61,23 @@ def lire_demande(db: Session, courant: UtilisateurCourant, application_id: uuid.
     return db.execute(
         _requete_demandes(courant).where(Application.id == application_id)
     ).first()
+
+
+def lire_echeancier(
+    db: Session, courant: UtilisateurCourant, application_id: uuid.UUID
+) -> Sequence[Installment]:
+    """L'échéancier PERSISTÉ (CR3) d'une demande, dans le périmètre — liste vide si non
+    décaissée ou hors périmètre (le router distingue les deux via lire_demande)."""
+    return (
+        db.execute(
+            select(Installment)
+            .join(Application, Application.id == Installment.application_id)
+            .where(
+                Installment.application_id == application_id,
+                courant.condition_perimetre(Application.agency_id),
+            )
+            .order_by(Installment.numero)
+        )
+        .scalars()
+        .all()
+    )

@@ -1,15 +1,15 @@
-"""Modèles ORM du schéma « credit » — référentiel produit (migration 0031) + demandes et
-décision (migration 0032).
+"""Modèles ORM du schéma « credit » — référentiel produit (migration 0031), demandes et
+décision (migration 0032), décaissement et échéancier persisté (migration 0033).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT les migrations (exigence
 d'alembic check pour les FK — les CHECK/triggers ne sont pas comparés, la base les impose).
 
-Module Crédit (individuel simple, échéances fixes, membres ET clients). Décaissement,
-échéancier, remboursements : blocs suivants (CR2+), pas encore de modèles ici.
+Module Crédit (individuel simple, échéances fixes, membres ET clients). Remboursements
+(retards/provisionnement) : blocs suivants (CR4+).
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -27,6 +27,7 @@ FK_ACCOUNT = "comptabilite.accounts.id"
 FK_TIER = "tiers.tiers.id"
 FK_AGENCY = "parameters.agencies.id"
 FK_PRODUCT = "credit.products.id"
+FK_APPLICATION = "credit.applications.id"
 
 
 class Product(Base):
@@ -88,8 +89,13 @@ class NumberingSequence(Base):
 
 
 class Application(Base):
-    """Une demande de crédit — de la création à la décision. États : en_instruction ->
-    approuve | refuse. La décision est UNIQUE et définitive (voir service.decider)."""
+    """Une demande de crédit — de la création au décaissement. États : en_instruction ->
+    approuve | refuse -> decaisse (CR3, uniquement depuis approuve). La décision est UNIQUE
+    et définitive (voir demandes.decider) ; le décaissement aussi (voir decaissement.decaisser).
+
+    compte_credit_id : l'ANCRAGE membre/client (202211/202221 ou 203111/203121 selon le
+    produit), résolu une fois au décaissement, jamais re-routé ensuite — miroir exact de
+    epargne.accounts.compte_collectif_id (PS3)."""
 
     __tablename__ = "applications"
     __table_args__: tuple[Any, ...] = (
@@ -113,6 +119,9 @@ class Application(Base):
     decided_at: Mapped[datetime | None] = mapped_column(TS)
     decided_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     motif_decision: Mapped[str | None] = mapped_column(sa.Text)
+    disbursed_at: Mapped[datetime | None] = mapped_column(TS)
+    disbursed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    compte_credit_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
@@ -120,3 +129,38 @@ class Application(Base):
 
     def __repr__(self) -> str:
         return f"<Application {self.application_number} {self.status}>"
+
+
+class Installment(Base):
+    """Une échéance PERSISTÉE d'un crédit décaissé — résultat figé de generer_echeancier()
+    (CR2, pur) au moment du décaissement. due_date : date calendaire, calculée par pas de
+    période depuis la date de décaissement (stdlib, voir decaissement._ajouter_periode).
+
+    status sans CHECK pour l'instant : le vocabulaire des états (payé/en retard/...) est
+    celui de CR4 (remboursements), pas encore décidé — colonne posée en avance pour éviter
+    une migration disruptive plus tard, sa contrainte attend les règles réelles."""
+
+    __tablename__ = "installments"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("application_id", "numero"),
+        sa.Index("ix_credit_installments_application", "application_id"),
+        {"schema": "credit"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey(FK_APPLICATION, ondelete="CASCADE"), nullable=False
+    )
+    numero: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    due_date: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    capital: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    interets: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    total: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    capital_restant_du: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'a_echoir'")
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+
+    def __repr__(self) -> str:
+        return f"<Installment {self.application_id} #{self.numero}>"

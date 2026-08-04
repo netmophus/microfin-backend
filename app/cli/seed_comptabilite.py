@@ -110,6 +110,12 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "parts.annulation", "Annulation de souscription (non libérée)", "OD",
         (("PARTS_LIBEREES", "D"), ("PARTS_NON_LIBEREES", "C")),
     ),
+    # Décaissement de crédit (CR3) : la caisse sort, la créance sur le tiers monte.
+    # D CREDIT (202211/202221 ou 203111/203121, selon produit + membre/client) / C CAISSE.
+    ModeleEcriture(
+        "credit.decaissement", "Décaissement de crédit", "CA",
+        (("CREDIT", "D"), ("CAISSE", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(

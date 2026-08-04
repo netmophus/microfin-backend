@@ -256,6 +256,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission(
         "credit.demande.decide", "credit", "Décider (approuver/refuser) une demande de crédit"
     ),
+    # --- CR3 : décaissement. Acte de GESTION qui fait sortir de l'argent réel de la caisse —
+    # séparé de credit.demande.decide (décider n'engage aucun mouvement) et réservé au
+    # responsable, jamais au chargé de prêt qui a monté le dossier (séparation des tâches,
+    # même principe que la fermeture d'un compte d'épargne ou le remboursement de parts).
+    Permission("credit.decaissement.create", "credit", "Décaisser une demande de crédit approuvée"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -371,6 +376,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.refund",
             "credit.product.read",
             "credit.demande.read",
+            "credit.decaissement.create",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
