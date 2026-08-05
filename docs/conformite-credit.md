@@ -131,17 +131,25 @@ Le décaissement peut se faire de **deux façons**, au choix du responsable au m
 
 - **`caisse`** (défaut, comportement historique de CR3) : D CREDIT / C CAISSE, espèces à
   l'agence.
-- **`epargne`** : D CREDIT / C **le compte `epargne.accounts` choisi** du tiers — n'importe quel
-  produit (EAV, DAT, EPR, ou tout futur produit), pas figé sur une catégorie. Aucun argent
-  physique ne bouge : virement comptable interne, journal **OD** (pas `CA`) — même distinction
-  déjà posée pour la souscription-engagement des parts sociales (pas de caisse tant que rien
-  n'est versé/reçu physiquement).
+- **`epargne`** : D CREDIT / C **le compte `epargne.accounts` choisi** du tiers — par principe
+  n'importe quel produit, pas figé sur une catégorie (voir exception DAT ci-dessous). Aucun
+  argent physique ne bouge : virement comptable interne, journal **OD** (pas `CA`) — même
+  distinction déjà posée pour la souscription-engagement des parts sociales (pas de caisse tant
+  que rien n'est versé/reçu physiquement).
 
-**Aucune des deux options n'est imposée par une règle BCEAO connue**, et aucune ne restreint le
-choix à un type de compte précis — les deux existent dans la pratique des IMF (décaissement en
-espèces au guichet, ou virement direct sur le compte d'épargne du membre pour éviter la
-manipulation d'espèces). **À confirmer avec l'expert si le sujet se pose formellement**, mais
-rien ici ne prétend appliquer une règle qui n'existe pas.
+**Aucune des deux options n'est imposée par une règle BCEAO connue**, et par principe aucune ne
+restreint le choix à un type de compte précis — les deux existent dans la pratique des IMF
+(décaissement en espèces au guichet, ou virement direct sur le compte d'épargne du membre pour
+éviter la manipulation d'espèces). **À confirmer avec l'expert si le sujet se pose
+formellement**, mais rien ici ne prétend appliquer une règle qui n'existe pas.
+
+**Exception temporaire — les DAT ('terme') sont exclus du sélecteur** (05/08/2026). Ce filtre
+exclut les DAT du sélecteur de décaissement en attendant un vrai mécanisme de blocage (date
+d'échéance, contrôle au retrait). Le jour où ce mécanisme existera, remplacer ce filtre par un
+vrai prédicat « compte disponible », pas une exclusion par type. Détail du chantier de fond
+(blocage DAT jamais implémenté dans le module Épargne) : voir `docs/conformite-comptable.md`.
+Refusé aux deux niveaux : `epargne/operations.py::charger_compte_pour_credit_externe` (serveur,
+`CompteInvalideError`) et le sélecteur frontend (le compte n'apparaît même pas dans la liste).
 
 Traçabilité : `credit.applications.mode_decaissement` et `compte_destination_id` sont remplis
 dans **les deux cas** (miroir de `compte_credit_id` côté créance) — un contrôleur retrouve

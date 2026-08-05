@@ -123,6 +123,19 @@ def _produit_epargne(db: Session) -> EpargneProduct:
     return produit
 
 
+def _produit_dat(db: Session) -> EpargneProduct:
+    produit = EpargneProduct(
+        code=f"DAT{uuid.uuid4().hex[:5]}",
+        name="Dépôt à terme test",
+        type="terme",
+        compte_epargne_id=_cid(db, "252111"),
+        compte_epargne_client_id=_cid(db, "252121"),
+    )
+    db.add(produit)
+    db.flush()
+    return produit
+
+
 def _compte_epargne(
     db: Session, agence: Agency, tier_id: uuid.UUID, produit: EpargneProduct
 ) -> SavingsAccount:
@@ -320,6 +333,35 @@ def test_decaissement_epargne_compte_ferme_refuse(client: TestClient, db: Sessio
 
     assert reponse.status_code == 422
     assert "fermé" in reponse.json()["detail"].lower()
+
+
+def test_decaissement_epargne_compte_dat_refuse(client: TestClient, db: Session) -> None:
+    """Dette temporaire (voir docs/conformite-comptable.md) : aucun mécanisme de blocage
+    jusqu'à échéance n'existe pour un DAT — le créditer d'un décaissement n'a pas de sens
+    métier (fonds indisponibles au client). Refusé, pas une exclusion silencieuse."""
+    agence = _agence(db, "DEA5B")
+    tier_id = _tier(db, agence)
+    produit_credit = _produit_credit(db)
+    produit_dat = _produit_dat(db)
+    compte = _compte_epargne(db, agence, tier_id, produit_dat)
+    demande_id = _demande_approuvee(db, agence, tier_id, produit_credit)
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    reponse = client.post(
+        f"/credit/demandes/{demande_id}/decaissement",
+        json={"mode": "epargne", "compte_epargne_id": str(compte.id)},
+        headers=responsable,
+    )
+
+    assert reponse.status_code == 422
+    assert "dépôt à terme" in reponse.json()["detail"].lower()
+
+    solde = db.execute(
+        text("SELECT balance FROM epargne.accounts WHERE id = :c"), {"c": compte.id}
+    ).scalar_one()
+    assert solde == 0
+    demande = db.get(Application, demande_id)
+    assert demande.status == "approuve"  # rien n'a bougé
 
 
 # --- Cohérence du corps de la requête -------------------------------------------------------

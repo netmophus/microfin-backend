@@ -9,6 +9,37 @@
 > redéploiement. Les valeurs livrées sont **provisoires**, marquées « À VALIDER » (drapeau
 > `is_provisional` en base + bannière à l'écran). Aucune n'est présentée comme définitive.
 
+## ⚠️ Chantier non démarré, nommé explicitement : blocage des DAT (dépôts à terme)
+
+Le blocage des DAT (date d'échéance, contrôle au retrait, pénalité de sortie anticipée
+éventuelle) **n'a jamais été implémenté**. Un DAT est aujourd'hui **aussi liquide qu'un compte à
+vue** — `epargne.products.type` (`a_vue`/`terme`/`programmee`) n'est qu'une étiquette, sans
+aucune conséquence sur `retirer()` (`epargne/guichet.py`), qui ne contrôle que
+`min_balance`/`decouvert_autorise`, identique quel que soit le type. Il n'existe aucune colonne
+`maturity_date` sur `epargne.accounts`.
+
+**Risque assumé et documenté, PAS corrigé par un filtre** (bien qu'un filtre équivalent existe
+ailleurs — voir plus bas) : bloquer le retrait au guichet par `type = 'terme'` créerait un
+**blocage permanent, sans mécanisme de déblocage**, faute de date d'échéance en base — rien ne
+dirait quand le lever. Ce serait remplacer le trou actuel par un incident pire (un client ne
+récupérerait plus jamais son épargne), pas une correction. Décision (05/08/2026) : ne pas
+toucher au guichet de retrait tant que le vrai mécanisme n'existe pas.
+
+**Découvert le 05/08/2026** (chantier CR6d, sélecteur de décaissement de crédit) : le sélecteur
+qui propose un compte du tiers pour recevoir un décaissement exclut désormais les DAT — ce
+filtre-là est sûr (retire une option d'une liste, réversible, sans conséquence persistante sur
+le compte lui-même), contrairement à un filtre au retrait. Voir `docs/conformite-credit.md` §6.
+
+**Nécessite, avant tout code sur le mécanisme lui-même** :
+1. Une **décision réglementaire préalable** : y a-t-il une pénalité de sortie anticipée sur un
+   DAT selon le référentiel/les pratiques UEMOA/BCEAO ? Sans cette réponse, aucun contrôle ne
+   peut être écrit correctement.
+2. Une **migration** : colonne date d'échéance sur `epargne.accounts` (ou équivalent).
+3. Un **contrôle au retrait** : refus (ou pénalité) avant l'échéance, autorisé après.
+
+Chantier à part entière, avec sa propre analyse au moment de l'attaquer — pas une ligne de
+filtre glissée ailleurs.
+
 ## Le plan de comptes — référentiel officiel RCSFD + extensions IMF
 
 **Le plan actif est le référentiel officiel**, depuis le départ : **380 comptes**

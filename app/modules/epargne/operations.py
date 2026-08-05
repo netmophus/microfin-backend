@@ -84,6 +84,21 @@ def charger_compte_pour_credit_externe(
         )
     if compte.status != "actif":
         raise CompteInvalideError("Ce compte est fermé : impossible d'y créditer un décaissement.")
+    # DETTE TEMPORAIRE (voir docs/conformite-comptable.md, chantier « blocage des DAT ») : un
+    # DAT ('terme') n'a AUCUN mécanisme de blocage jusqu'à échéance dans ce module (pas de
+    # maturity_date, retirer() ne distingue pas les types) — le créditer d'un décaissement n'a
+    # pas de sens métier (le client ne pourrait pas en disposer librement, ce qui contredit
+    # l'objet même d'un décaissement). Exclusion PAR TYPE, pas un vrai contrôle de disponibilité
+    # (qui n'existe pas encore) : à remplacer par un prédicat « compte disponible » le jour où
+    # le blocage DAT sera réellement implémenté.
+    type_produit = db.execute(
+        select(Product.type).where(Product.id == compte.product_id)
+    ).scalar_one()
+    if type_produit == "terme":
+        raise CompteInvalideError(
+            "Ce compte est un dépôt à terme : un décaissement de crédit ne peut pas y être "
+            "crédité (le client ne pourrait pas en disposer librement)."
+        )
     return compte
 
 
