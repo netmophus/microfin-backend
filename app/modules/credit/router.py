@@ -68,12 +68,13 @@ MESSAGE_DEMANDE_INTROUVABLE = "Demande de crédit introuvable."
 
 
 def _resume(ligne: tuple) -> DemandeResume:
-    demande, produit, tier_number, tier_nom = ligne
+    demande, produit, tier_number, tier_nom, is_member = ligne
     return DemandeResume(
         id=demande.id,
         application_number=demande.application_number,
         tier_number=tier_number,
         tier_nom=tier_nom,
+        is_member=is_member,
         product_code=produit.code,
         product_name=produit.name,
         montant_demande=demande.montant_demande,
@@ -115,7 +116,7 @@ def lire_demande_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
         )
-    demande, produit, tier_number, tier_nom = ligne
+    demande, *_reste = ligne
     base = _resume(ligne)
     return DemandeDetail(
         **base.model_dump(),

@@ -137,6 +137,26 @@ def test_creer_demande_reussit_avec_numero_atomique(client: TestClient, db: Sess
     assert corps["montant_demande"] == 500000
 
 
+def test_reponse_indique_is_member_du_tiers(client: TestClient, db: Session) -> None:
+    """is_member accompagne le dossier — dira au responsable, au décaissement (CR6b), quel
+    compte de crédit (membre ou client) recevra la créance."""
+    agence = _agence(db, "CRA1B")
+    tier_id = _tier(db, agence)
+    db.execute(text("UPDATE tiers.tiers SET is_member = TRUE WHERE id = :t"), {"t": tier_id})
+    db.flush()
+    produit = _produit(db)
+    charge = _entete(db, agence, "CHARGE_PRET")
+
+    reponse = client.post(
+        f"/tiers/{tier_id}/demandes-credit",
+        json={"product_id": str(produit.id), "montant_demande": 500000, "duree_echeances": 12},
+        headers=charge,
+    )
+
+    assert reponse.status_code == 201
+    assert reponse.json()["is_member"] is True
+
+
 def test_creer_demande_tiers_non_actif_422(client: TestClient, db: Session) -> None:
     agence = _agence(db, "CRA2")
     tier_id = _tier(db, agence, statut="prospect")

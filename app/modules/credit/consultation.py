@@ -39,7 +39,13 @@ def lister_produits(db: Session) -> Sequence[Product]:
 
 def _requete_demandes(courant: UtilisateurCourant):
     return (
-        select(Application, Product, _T.c.tier_number, _nom_tier().label("tier_nom"))
+        select(
+            Application,
+            Product,
+            _T.c.tier_number,
+            _nom_tier().label("tier_nom"),
+            _T.c.is_member,
+        )
         .join(Product, Product.id == Application.product_id)
         .join(_T, _T.c.id == Application.tier_id)
         .outerjoin(_IND, _IND.c.tier_id == _T.c.id)

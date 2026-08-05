@@ -29,6 +29,7 @@ class DemandeResume(BaseModel):
     application_number: str
     tier_number: str
     tier_nom: str
+    is_member: bool  # membre ou client — pour dire quel compte de crédit recevra la créance
     product_code: str
     product_name: str
     montant_demande: int
