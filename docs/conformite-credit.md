@@ -125,7 +125,32 @@ plancher) — tous `is_provisional = TRUE`, tous à 0/valeur neutre par défaut.
   c'est ce que vérifie `verifier_engagements_credit` avant d'autoriser la désactivation d'un
   tiers.
 
-## 6. Séparation des tâches (organisationnel, pas comptable — mentionné pour traçabilité)
+## 6. Décaissement multi-mode — caisse OU compte du tiers (opérationnel, pas réglementaire)
+
+Le décaissement peut se faire de **deux façons**, au choix du responsable au moment de l'acte :
+
+- **`caisse`** (défaut, comportement historique de CR3) : D CREDIT / C CAISSE, espèces à
+  l'agence.
+- **`epargne`** : D CREDIT / C **le compte `epargne.accounts` choisi** du tiers — n'importe quel
+  produit (EAV, DAT, EPR, ou tout futur produit), pas figé sur une catégorie. Aucun argent
+  physique ne bouge : virement comptable interne, journal **OD** (pas `CA`) — même distinction
+  déjà posée pour la souscription-engagement des parts sociales (pas de caisse tant que rien
+  n'est versé/reçu physiquement).
+
+**Aucune des deux options n'est imposée par une règle BCEAO connue**, et aucune ne restreint le
+choix à un type de compte précis — les deux existent dans la pratique des IMF (décaissement en
+espèces au guichet, ou virement direct sur le compte d'épargne du membre pour éviter la
+manipulation d'espèces). **À confirmer avec l'expert si le sujet se pose formellement**, mais
+rien ici ne prétend appliquer une règle qui n'existe pas.
+
+Traçabilité : `credit.applications.mode_decaissement` et `compte_destination_id` sont remplis
+dans **les deux cas** (miroir de `compte_credit_id` côté créance) — un contrôleur retrouve
+après coup ce qui a été crédité sans devoir remonter le journal comptable. Le mouvement posé
+sur le compte du tiers (mode `epargne`) porte `operation_type='decaissement_credit'` — un
+libellé DÉDIÉ, distinct d'un dépôt classique, avec le numéro de dossier en clair dans son
+libellé (`label`).
+
+## 7. Séparation des tâches (organisationnel, pas comptable — mentionné pour traçabilité)
 
 `credit.demande.decide` (comité de crédit), `credit.decaissement.create` (responsable d'agence)
 et `credit.remboursement.create` (caissier/responsable, opération de guichet) sont des

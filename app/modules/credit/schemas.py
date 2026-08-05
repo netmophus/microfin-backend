@@ -8,7 +8,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CreationDemande(BaseModel):
@@ -27,6 +27,7 @@ class Decision(BaseModel):
 class DemandeResume(BaseModel):
     id: uuid.UUID
     application_number: str
+    tier_id: uuid.UUID  # pour lister les comptes epargne.accounts éligibles au décaissement
     tier_number: str
     tier_nom: str
     is_member: bool  # membre ou client — pour dire quel compte de crédit recevra la créance
@@ -45,9 +46,32 @@ class DemandeDetail(DemandeResume):
     motif_decision: str | None
 
 
+class DecaissementCorps(BaseModel):
+    """mode='epargne' exige compte_epargne_id (le compte epargne.accounts choisi, n'importe
+    quel produit) ; mode='caisse' (défaut) ne doit PAS en porter — explicite, pas deviné."""
+
+    mode: Literal["caisse", "epargne"] = "caisse"
+    compte_epargne_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _coherence(self) -> "DecaissementCorps":
+        if self.mode == "epargne" and self.compte_epargne_id is None:
+            raise ValueError(
+                "compte_epargne_id est obligatoire pour un décaissement sur compte."
+            )
+        if self.mode == "caisse" and self.compte_epargne_id is not None:
+            raise ValueError(
+                "compte_epargne_id ne doit pas être fourni pour un décaissement en espèces."
+            )
+        return self
+
+
 class DemandeDecaissee(DemandeDetail):
     disbursed_at: datetime | None
     compte_credit_number: str | None
+    mode_decaissement: str  # 'caisse' | 'epargne'
+    # Le compte réellement crédité (C) : la caisse utilisée, ou le compte du tiers choisi.
+    compte_destination_number: str | None
     nb_echeances: int
     premiere_echeance_le: date | None
     derniere_echeance_le: date | None

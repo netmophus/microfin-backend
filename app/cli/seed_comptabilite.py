@@ -116,6 +116,15 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "credit.decaissement", "Décaissement de crédit", "CA",
         (("CREDIT", "D"), ("CAISSE", "C")),
     ),
+    # Décaissement de crédit DIRECT sur un compte du tiers (mode 'epargne') : aucun argent
+    # physique ne bouge, virement comptable interne — journal OD, même distinction que la
+    # souscription-engagement des parts sociales (pas de caisse tant que rien n'est versé/reçu
+    # physiquement). D CREDIT / C EPARGNE (le compte epargne.accounts choisi, n'importe quel
+    # produit — résolu par credit/decaissement.py, pas par le résolveur d'Épargne).
+    ModeleEcriture(
+        "credit.decaissement_epargne", "Décaissement de crédit sur compte du tiers", "OD",
+        (("CREDIT", "D"), ("EPARGNE", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(

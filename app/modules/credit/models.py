@@ -129,6 +129,16 @@ class Application(Base):
     disbursed_at: Mapped[datetime | None] = mapped_column(TS)
     disbursed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     compte_credit_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
+    # Mode de décaissement (migration 0035) : 'caisse' (D crédit/C caisse) ou 'epargne' (D
+    # crédit/C un compte epargne.accounts du tiers, choisi au décaissement — n'importe quel
+    # produit). compte_destination_id est rempli dans LES DEUX cas (miroir de compte_credit_id
+    # côté créance) : la caisse utilisée, ou le compte du tiers crédité.
+    mode_decaissement: Mapped[str] = mapped_column(
+        sa.String(20), nullable=False, server_default=sa.text("'caisse'")
+    )
+    compte_destination_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey(FK_ACCOUNT)
+    )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

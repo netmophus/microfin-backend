@@ -2,17 +2,26 @@
 l'échéancier persisté (CR2 appliqué), et l'ancrage du routage membre/client.
 CR6b — aperçu PUR de l'échéancier (même moteur, rien n'est écrit) : voir generer_apercu().
 
-TRANSACTION UNIQUE : la pièce comptable, les échéances et le passage à 'decaisse' vivent dans
-la même session, sans commit intermédiaire (ecritures.creer_brouillon/valider ne font que
-flush — voir comptabilite/ecritures.py). Si generer_echeancier() lève après que la pièce a été
-posée, l'appelant (le router) rollback : RIEN ne persiste, ni écriture sans échéancier, ni
-échéancier sans statut décaissé.
+DEUX MODES au décaissement, choisis par le responsable (aucun n'est réglementaire — voir
+conformite-credit.md) :
+  - 'caisse' (par défaut) : D CREDIT / C CAISSE — inchangé depuis CR3.
+  - 'epargne' : D CREDIT / C le compte epargne.accounts CHOISI du tiers (n'importe quel
+    produit — EAV/DAT/EPR), sans transiter par la caisse. Journal OD (virement comptable
+    interne, aucun argent physique ne bouge — même distinction que la souscription-engagement
+    des parts sociales). Le mouvement sur ce compte porte operation_type='decaissement_credit'
+    (voir epargne/operations.py::enregistrer_credit_externe), identifiable dans son historique.
+`mode_decaissement`/`compte_destination_id` sont figés sur la demande dans LES DEUX cas.
+
+TRANSACTION UNIQUE : la pièce comptable, les échéances, le crédit du compte du tiers (si
+mode='epargne') et le passage à 'decaisse' vivent dans la même session, sans commit
+intermédiaire. Si generer_echeancier() lève après que la pièce a été posée, l'appelant (le
+router) rollback : RIEN ne persiste, quel que soit le mode.
 
 GATE KYC, TROISIÈME ET DERNIER TEMPS (après la création et l'approbation, migration 0032) :
 revérifie le tiers ACTIF à l'instant du décaissement — le plus critique des trois, puisque
-c'est ici que l'argent sort réellement de la caisse. Pas d'asymétrie cette fois (voir 0033) :
-un seul sens possible (approuve -> decaisse), toujours vérifié. Le trigger 0033 double ce
-contrôle en base, dernier rempart.
+c'est ici que l'argent sort réellement de la caisse (ou change de compte). Pas d'asymétrie
+cette fois (voir 0033) : un seul sens possible (approuve -> decaisse), toujours vérifié. Le
+trigger 0033 double ce contrôle en base, dernier rempart.
 
 ROUTAGE ANCRÉ (miroir PS3/épargne) : le compte de crédit (membre ou client, selon le produit)
 est résolu UNE FOIS ici et stocké dans compte_credit_id — jamais re-routé ensuite, même si le
@@ -23,6 +32,7 @@ import calendar
 import uuid
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -39,9 +49,16 @@ from app.modules.credit.demandes import (
 )
 from app.modules.credit.echeancier import Echeance, generer_echeancier
 from app.modules.credit.models import Application, Installment, Product
+from app.modules.epargne.operations import (
+    charger_compte_pour_credit_externe,
+    enregistrer_credit_externe,
+    resoudre_compte_collectif,
+)
 from app.modules.parameters.models import Agency
+from app.modules.security.autorisation import UtilisateurCourant
 
 CODE_DECAISSEMENT = "credit.decaissement"
+CODE_DECAISSEMENT_EPARGNE = "credit.decaissement_epargne"
 
 
 class DemandeNonApprouveeError(CreditError):
@@ -97,15 +114,26 @@ def decaisser(
     demande: Application,
     *,
     par: uuid.UUID | None,
+    mode: Literal["caisse", "epargne"] = "caisse",
+    compte_epargne_id: uuid.UUID | None = None,
+    courant: UtilisateurCourant | None = None,
     entry_date: date | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Application:
-    """Décaisse une demande APPROUVÉE. Pose la pièce comptable, génère et persiste
-    l'échéancier (CR2), ancre le compte de crédit, fait passer la demande à 'decaisse'.
-    Refuse si la demande n'est pas approuvée, si le tiers n'est plus actif, si le produit
-    est devenu indisponible, si un rattachement comptable manque, ou si les paramètres
-    produisent un échéancier impossible (EcheancierImpossibleError, non capturée ici — elle
-    remonte telle quelle, la transaction reste non commitée)."""
+    """Décaisse une demande APPROUVÉE. Pose la pièce comptable (D crédit / C caisse ou D
+    crédit / C le compte du tiers choisi, selon `mode`), génère et persiste l'échéancier
+    (CR2), ancre le compte de crédit, fait passer la demande à 'decaisse'.
+
+    mode='epargne' exige `compte_epargne_id` ET `courant` (pour vérifier que le compte
+    appartient bien à ce tiers et reste dans le périmètre de l'acteur — voir
+    epargne.operations.charger_compte_pour_credit_externe) ; `courant` est fourni par le
+    routeur dans ce cas, jamais par un appel service direct en mode 'caisse'.
+
+    Refuse si la demande n'est pas approuvée, si le tiers n'est plus actif, si le produit est
+    devenu indisponible, si un rattachement comptable manque, si le compte choisi (mode
+    'epargne') est invalide, ou si les paramètres produisent un échéancier impossible
+    (EcheancierImpossibleError, non capturée ici — elle remonte telle quelle, la transaction
+    reste non commitée)."""
     if demande.status != "approuve":
         raise DemandeNonApprouveeError(
             f"Cette demande ({demande.application_number}) n'est pas approuvée "
@@ -127,7 +155,8 @@ def decaisser(
     ).scalar_one()
     # ROUTAGE ANCRÉ : membre -> compte membre ; client -> compte client SI configuré, sinon
     # repli sur le compte membre (comportement épargne, tant que le compte client n'est pas
-    # rattaché). Figé ici, jamais re-routé ensuite.
+    # rattaché). Figé ici, jamais re-routé ensuite. Inchangé quel que soit le mode : le côté
+    # CRÉANCE (D) ne dépend jamais de où va l'argent (C).
     collectif = (
         produit.compte_credit_membre_id
         if (est_membre or produit.compte_credit_client_id is None)
@@ -139,33 +168,57 @@ def decaisser(
             "pour ce tiers"
         )
 
-    compte_caisse = db.execute(
-        select(Agency.compte_caisse_id).where(Agency.id == demande.agency_id)
-    ).scalar_one()
-    if compte_caisse is None:
-        raise RattachementManquantError(
-            "l'agence de cette demande n'a pas de compte de caisse rattaché"
-        )
-
     jour = entry_date
     if jour is None:
         jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
 
+    # Résolution du côté DESTINATION (C) : caisse (comme toujours) ou compte du tiers choisi.
+    compte_epargne = None
+    if mode == "epargne":
+        if compte_epargne_id is None:
+            raise CreditError(
+                "Un compte doit être choisi pour un décaissement crédité sur un compte."
+            )
+        assert courant is not None  # le routeur le fournit toujours pour ce mode
+        compte_epargne = charger_compte_pour_credit_externe(
+            db, courant, compte_epargne_id, demande.tier_id
+        )
+        compte_destination = resoudre_compte_collectif(db, compte_epargne)
+        if compte_destination is None:
+            raise RattachementManquantError(
+                "le produit de ce compte n'a pas de compte d'épargne rattaché (plan comptable)"
+            )
+        code_ecriture = CODE_DECAISSEMENT_EPARGNE
+        description = (
+            f"Décaissement crédit {demande.application_number} "
+            f"(compte {compte_epargne.account_number})"
+        )
+    else:
+        compte_destination = db.execute(
+            select(Agency.compte_caisse_id).where(Agency.id == demande.agency_id)
+        ).scalar_one()
+        if compte_destination is None:
+            raise RattachementManquantError(
+                "l'agence de cette demande n'a pas de compte de caisse rattaché"
+            )
+        code_ecriture = CODE_DECAISSEMENT
+        description = f"Décaissement crédit {demande.application_number}"
+
     def resoudre(role: str) -> uuid.UUID:
         if role == "CREDIT":
             return collectif
-        if role == "CAISSE":
-            return compte_caisse
+        if role in ("CAISSE", "EPARGNE"):
+            return compte_destination
         raise RattachementManquantError(f"rôle « {role} » inconnu dans le modèle d'écriture")
 
     piece: JournalEntry = poser_depuis_schema(
         db,
-        code=CODE_DECAISSEMENT,
+        code=code_ecriture,
         montant=demande.montant_decide,
         resoudre_role=resoudre,
         entry_date=jour,
         par=par,
-        description=f"Décaissement crédit {demande.application_number}",
+        description=description,
         contexte=contexte,
     )
 
@@ -193,11 +246,26 @@ def decaisser(
             )
         )
 
+    # Comptabilisation auxiliaire côté tiers (mode 'epargne' seulement) : mouvement
+    # IDENTIFIABLE ("decaissement_credit") + solde, flush seulement — même transaction.
+    if compte_epargne is not None:
+        enregistrer_credit_externe(
+            db,
+            compte_epargne,
+            demande.montant_decide,
+            operation_type="decaissement_credit",
+            label=f"Décaissement crédit {demande.application_number}",
+            journal_entry_id=piece.id,
+            par=par,
+        )
+
     avant = {"status": demande.status}
     demande.status = "decaisse"
     demande.disbursed_at = db.execute(text("SELECT NOW()")).scalar_one()
     demande.disbursed_by = par
     demande.compte_credit_id = collectif
+    demande.mode_decaissement = mode
+    demande.compte_destination_id = compte_destination
     demande.updated_by = par
     db.flush()
 
@@ -213,6 +281,7 @@ def decaisser(
         new_values={
             "status": "decaisse",
             "montant_decide": demande.montant_decide,
+            "mode_decaissement": mode,
             "entry_number": piece.entry_number,
             "nb_echeances": len(echeances),
         },

@@ -16,6 +16,7 @@ TABLE DES ERREURS (un seul endroit) :
   - produit inexistant/inactif             -> 422
   - demande déjà décidée / montant décidé invalide -> 422
   - demande non approuvée, rattachement comptable manquant, échéancier impossible -> 422
+  - compte choisi invalide (mode 'epargne' : hors tiers, hors périmètre, fermé) -> 422
   - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
 """
 
@@ -52,6 +53,7 @@ from app.modules.credit.remboursement import (
 )
 from app.modules.credit.schemas import (
     CreationDemande,
+    DecaissementCorps,
     Decision,
     DemandeDecaissee,
     DemandeDetail,
@@ -61,6 +63,8 @@ from app.modules.credit.schemas import (
     Remboursement,
     RemboursementRecu,
 )
+from app.modules.epargne.models import SavingsAccount
+from app.modules.epargne.operations import CompteInvalideError
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 from app.modules.tiers.models import Tier
@@ -69,6 +73,9 @@ router = APIRouter(tags=["credit"])
 
 MESSAGE_TIER_INTROUVABLE = "Tiers introuvable."
 MESSAGE_DEMANDE_INTROUVABLE = "Demande de crédit introuvable."
+# Défaut du corps de décaissement (mode 'caisse', comportement historique si aucun corps
+# n'est envoyé) — singleton module, pas un appel dans la signature (immutable, jamais modifié).
+_DECAISSEMENT_CAISSE_PAR_DEFAUT = DecaissementCorps()
 
 
 def _resume(ligne: tuple) -> DemandeResume:
@@ -76,6 +83,7 @@ def _resume(ligne: tuple) -> DemandeResume:
     return DemandeResume(
         id=demande.id,
         application_number=demande.application_number,
+        tier_id=demande.tier_id,
         tier_number=tier_number,
         tier_nom=tier_nom,
         is_member=is_member,
@@ -305,10 +313,14 @@ def decaisser_endpoint(
     request: Request,
     courant: Annotated[UtilisateurCourant, Depends(exige("credit.decaissement.create"))],
     db: Annotated[Session, Depends(get_db)],
+    corps: DecaissementCorps = _DECAISSEMENT_CAISSE_PAR_DEFAUT,
 ) -> DemandeDecaissee:
     """Décaisse une demande APPROUVÉE : pièce comptable + échéancier persisté, en une
     transaction unique. Réservé au responsable d'agence (séparation des tâches avec le
-    chargé de prêt qui a monté le dossier)."""
+    chargé de prêt qui a monté le dossier).
+
+    `corps.mode` : 'caisse' (espèces, défaut) ou 'epargne' (crédit direct sur un compte du
+    tiers choisi — n'importe quel produit epargne.accounts, `corps.compte_epargne_id`)."""
     ligne = consultation.lire_demande(db, courant, application_id)
     if ligne is None:
         raise HTTPException(
@@ -318,7 +330,15 @@ def decaisser_endpoint(
     assert demande is not None
 
     try:
-        decaisser(db, demande, par=courant.user_id, contexte=_contexte(request))
+        decaisser(
+            db,
+            demande,
+            par=courant.user_id,
+            mode=corps.mode,
+            compte_epargne_id=corps.compte_epargne_id,
+            courant=courant,
+            contexte=_contexte(request),
+        )
         db.commit()
     except (
         DemandeNonApprouveeError,
@@ -326,6 +346,7 @@ def decaisser_endpoint(
         ProduitIntrouvableError,
         RattachementManquantError,
         EcheancierImpossibleError,
+        CompteInvalideError,
     ) as erreur:
         db.rollback()
         raise HTTPException(
@@ -339,6 +360,19 @@ def decaisser_endpoint(
     compte_credit_number = db.execute(
         select(Account.account_number).where(Account.id == demande.compte_credit_id)
     ).scalar_one_or_none()
+    # Mode 'epargne' : le numéro UTILE est celui du compte du TIERS (ex. EP-2026-000006), pas
+    # celui du collectif comptable (251121) — plusieurs tiers partagent le même collectif, il
+    # ne distinguerait rien. Mode 'caisse' : le compte de caisse (comptabilité) suffit.
+    if demande.mode_decaissement == "epargne" and corps.compte_epargne_id is not None:
+        compte_destination_number = db.execute(
+            select(SavingsAccount.account_number).where(
+                SavingsAccount.id == corps.compte_epargne_id
+            )
+        ).scalar_one_or_none()
+    else:
+        compte_destination_number = db.execute(
+            select(Account.account_number).where(Account.id == demande.compte_destination_id)
+        ).scalar_one_or_none()
     return DemandeDecaissee(
         **base.model_dump(),
         objet=demande.objet,
@@ -347,6 +381,8 @@ def decaisser_endpoint(
         motif_decision=demande.motif_decision,
         disbursed_at=demande.disbursed_at,
         compte_credit_number=compte_credit_number,
+        mode_decaissement=demande.mode_decaissement,
+        compte_destination_number=compte_destination_number,
         nb_echeances=len(echeances),
         premiere_echeance_le=echeances[0].due_date if echeances else None,
         derniere_echeance_le=echeances[-1].due_date if echeances else None,
