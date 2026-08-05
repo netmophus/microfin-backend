@@ -31,6 +31,7 @@ from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
 from app.modules.credit.models import Application as CreditApplication
+from app.modules.credit.models import DelinquencyTier as CreditDelinquencyTier
 from app.modules.credit.models import Installment as CreditInstallment
 from app.modules.credit.models import NumberingSequence as CreditNumberingSequence
 from app.modules.credit.models import Product as CreditProduct
@@ -156,6 +157,8 @@ TABLES_ATTENDUES = frozenset(
         "credit.installments",
         # Crédit CR4 — remboursements (migration 0034).
         "credit.repayments",
+        # Crédit CR5a — paliers de souffrance, paramétrage (migration 0036).
+        "credit.delinquency_tiers",
     }
 )
 
@@ -211,6 +214,7 @@ MODELES = [
     CreditApplication,
     CreditInstallment,
     CreditRepayment,
+    CreditDelinquencyTier,
 ]
 
 

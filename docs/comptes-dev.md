@@ -31,6 +31,7 @@ Tous rattachés à l'agence **siège** (AG-001).
 | `caissier`  | CAISSIER             | Vue guichet limitée (read.basic), identification sans données KYC, remboursement de crédit |
 | `pret`      | CHARGE_PRET          | Monter un dossier de crédit (créer une demande), consulter |
 | `comite`    | MEMBRE_COMITE_CREDIT | Décider une demande de crédit (approuver/refuser) |
+| `comptable` | COMPTABLE            | Plan de comptes, tous les écrans de rattachement (Bloc 5), paliers de souffrance (CR5a) |
 
 Le compte **admin** (ADMIN_FONCTIONNEL) vient de `creer-admin`, séparément (mot de passe généré).
 

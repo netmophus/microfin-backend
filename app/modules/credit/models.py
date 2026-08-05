@@ -1,12 +1,15 @@
 """Modèles ORM du schéma « credit » — référentiel produit (migration 0031), demandes et
 décision (migration 0032), décaissement et échéancier persisté (migration 0033), remboursements
-(migration 0034).
+(migration 0034), décaissement multi-mode (migration 0035), paliers de souffrance CR5a
+(migration 0036).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT les migrations (exigence
 d'alembic check pour les FK — les CHECK/triggers ne sont pas comparés, la base les impose).
 
-Module Crédit (individuel simple, échéances fixes, membres ET clients). Retards/
-provisionnement : bloc suivant (CR5), bloqué en attendant les règles de l'expert-comptable.
+Module Crédit (individuel simple, échéances fixes, membres ET clients). Impayés/
+provisionnement (CR5) : CR5a (paramétrage des paliers, ce module) posé ; reclassification
+automatique (CR5c) bloquée en attendant les règles de l'expert-comptable (voir
+docs/conformite-credit.md §2).
 """
 
 import uuid
@@ -224,3 +227,44 @@ class Repayment(Base):
 
     def __repr__(self) -> str:
         return f"<Repayment {self.installment_id} {self.montant_total}>"
+
+
+class DelinquencyTier(Base):
+    """Un PALIER de souffrance (CR5a, migration 0036) — paramétrage institution, PLUSIEURS
+    lignes (pas un singleton comme ShareParameters). La machine à états créance saine ->
+    impayée -> douteuse -> irrécouvrable se lit en triant sur `seuil_jours`, qui sert LUI-MÊME
+    de clé d'ordre : pas de colonne `ordre` séparée, aucune chance qu'elle diverge du seuil.
+
+    `compte_encours_id`/`compte_dotation_id` sont VOLONTAIREMENT découplés (voir
+    docs/conformite-credit.md §2 : la classe 29 a 3 tranches officielles, la classe 664 en a 4,
+    aucune correspondance terme à terme) — deux paliers peuvent partager le même compte
+    d'encours tout en ayant des comptes de dotation distincts. Comptes NULL par défaut, remplis
+    via l'écran de paramétrage (Bloc 5), jamais codés en dur.
+
+    Aucun comportement automatique ne lit encore cette table en CR5a — paramétrage seul."""
+
+    __tablename__ = "delinquency_tiers"
+    __table_args__: tuple[Any, ...] = ({"schema": "credit"},)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    code: Mapped[str] = mapped_column(sa.String(20), nullable=False, unique=True)
+    libelle: Mapped[str] = mapped_column(sa.String(150), nullable=False)
+    seuil_jours: Mapped[int] = mapped_column(sa.Integer, nullable=False, unique=True)
+    taux_provision_bp: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("0")
+    )
+    compte_encours_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
+    compte_dotation_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
+    is_terminal: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.false()
+    )
+    is_provisional: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.true()
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<DelinquencyTier {self.code} seuil={self.seuil_jours}j>"

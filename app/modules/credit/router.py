@@ -3,21 +3,25 @@ CR3 : décaissement (pièce comptable + échéancier persisté) et lecture de l'
 CR4 : remboursement (une échéance à la fois, montant exact).
 CR6b : aperçu PUR de l'échéancier d'une demande approuvée — même moteur que le décaissement,
 rien n'est écrit en base (à présenter au client avant signature/décaissement).
+CR5a : paramétrage des paliers de souffrance (Bloc 5) — lecture/écriture de la CONFIGURATION
+seule, aucun crédit n'est encore reclassé automatiquement (CR5c, à venir).
 
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
 credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
 décaisser -> credit.decaissement.create (séparée de decide) ; rembourser ->
-credit.remboursement.create (voir seed_security).
+credit.remboursement.create (voir seed_security) ; paliers de souffrance -> compta.plan.read /
+compta.plan.manage (même paire que les autres écrans de rattachement Bloc 5).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                    -> 403 (exige(), en amont)
-  - tiers / demande hors périmètre ou inexistant -> 404
+  - tiers / demande / palier hors périmètre ou inexistant -> 404
   - tiers non actif (gate KYC, création, approbation ou décaissement) -> 422
   - produit inexistant/inactif             -> 422
   - demande déjà décidée / montant décidé invalide -> 422
   - demande non approuvée, rattachement comptable manquant, échéancier impossible -> 422
   - compte choisi invalide (mode 'epargne' : hors tiers, hors périmètre, fermé) -> 422
   - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
+  - code/seuil de palier déjà utilisé par un autre palier, compte de rattachement invalide -> 422
 """
 
 import uuid
@@ -28,13 +32,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
-from app.modules.credit import consultation
+from app.modules.credit import consultation, delinquency_parametres
 from app.modules.credit.decaissement import (
     DemandeNonApprouveeError,
     RattachementManquantError,
     decaisser,
     generer_apercu,
+)
+from app.modules.credit.delinquency_parametres import (
+    CodeDejaUtiliseError,
+    SeuilDejaUtiliseError,
 )
 from app.modules.credit.demandes import (
     DemandeDejaDecideeError,
@@ -45,14 +54,16 @@ from app.modules.credit.demandes import (
     decider,
 )
 from app.modules.credit.echeancier import EcheancierImpossibleError
-from app.modules.credit.models import Application, Installment
+from app.modules.credit.models import Application, DelinquencyTier, Installment
 from app.modules.credit.remboursement import (
     AucuneEcheanceAReglerError,
     MontantIncorrectError,
     rembourser,
 )
 from app.modules.credit.schemas import (
+    CompteRattachementPalier,
     CreationDemande,
+    CreationPalier,
     DecaissementCorps,
     Decision,
     DemandeDecaissee,
@@ -60,8 +71,11 @@ from app.modules.credit.schemas import (
     DemandeResume,
     EcheanceApercuLigne,
     EcheanceLigne,
+    ModificationPalier,
+    PalierSouffrance,
     Remboursement,
     RemboursementRecu,
+    SuppressionPalier,
 )
 from app.modules.epargne.models import SavingsAccount
 from app.modules.epargne.operations import CompteInvalideError
@@ -73,6 +87,7 @@ router = APIRouter(tags=["credit"])
 
 MESSAGE_TIER_INTROUVABLE = "Tiers introuvable."
 MESSAGE_DEMANDE_INTROUVABLE = "Demande de crédit introuvable."
+MESSAGE_PALIER_INTROUVABLE = "Palier de souffrance introuvable."
 # Défaut du corps de décaissement (mode 'caisse', comportement historique si aucun corps
 # n'est envoyé) — singleton module, pas un appel dans la signature (immutable, jamais modifié).
 _DECAISSEMENT_CAISSE_PAR_DEFAUT = DecaissementCorps()
@@ -464,3 +479,146 @@ def rembourser_endpoint(
         paid_at=echeance.paid_at,
         echeances_restantes=restantes,
     )
+
+
+# --- Paliers de souffrance (CR5a, Bloc 5) -----------------------------------------------------
+
+
+def _compte_rattachement_palier(
+    db: Session, account_id: uuid.UUID | None
+) -> CompteRattachementPalier | None:
+    if account_id is None:
+        return None
+    compte = db.get(Account, account_id)
+    if compte is None:
+        return None
+    return CompteRattachementPalier(account_number=compte.account_number, name=compte.name)
+
+
+def _vers_palier(db: Session, palier: DelinquencyTier) -> PalierSouffrance:
+    return PalierSouffrance(
+        id=palier.id,
+        code=palier.code,
+        libelle=palier.libelle,
+        seuil_jours=palier.seuil_jours,
+        taux_provision_bp=palier.taux_provision_bp,
+        compte_encours=_compte_rattachement_palier(db, palier.compte_encours_id),
+        compte_dotation=_compte_rattachement_palier(db, palier.compte_dotation_id),
+        is_terminal=palier.is_terminal,
+        is_provisional=palier.is_provisional,
+    )
+
+
+@router.get("/credit/paliers-souffrance", response_model=list[PalierSouffrance])
+def lister_paliers_souffrance_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PalierSouffrance]:
+    """Les paliers de souffrance, triés par ancienneté (CR5a, paramétrage seul)."""
+    return [_vers_palier(db, p) for p in delinquency_parametres.lister(db)]
+
+
+@router.post(
+    "/credit/paliers-souffrance",
+    response_model=PalierSouffrance,
+    status_code=status.HTTP_201_CREATED,
+)
+def creer_palier_souffrance_endpoint(
+    corps: CreationPalier,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PalierSouffrance:
+    """Ajoute un palier — le nombre de paliers est une donnée, aucune migration requise."""
+    try:
+        palier = delinquency_parametres.creer(
+            db,
+            code=corps.code,
+            libelle=corps.libelle,
+            seuil_jours=corps.seuil_jours,
+            taux_provision_bp=corps.taux_provision_bp,
+            compte_encours_number=corps.compte_encours,
+            compte_dotation_number=corps.compte_dotation,
+            is_terminal=corps.is_terminal,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except (
+        CodeDejaUtiliseError,
+        SeuilDejaUtiliseError,
+        CompteInvalideRattachementError,
+    ) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_palier(db, palier)
+
+
+@router.patch("/credit/paliers-souffrance/{palier_id}", response_model=PalierSouffrance)
+def modifier_palier_souffrance_endpoint(
+    palier_id: uuid.UUID,
+    corps: ModificationPalier,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PalierSouffrance:
+    """Remplace l'état complet d'un palier (pas un PATCH partiel — même discipline que les
+    rattachements produit d'épargne)."""
+    palier = db.get(DelinquencyTier, palier_id)
+    if palier is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PALIER_INTROUVABLE
+        )
+    try:
+        delinquency_parametres.modifier(
+            db,
+            palier,
+            code=corps.code,
+            libelle=corps.libelle,
+            seuil_jours=corps.seuil_jours,
+            taux_provision_bp=corps.taux_provision_bp,
+            compte_encours_number=corps.compte_encours,
+            compte_dotation_number=corps.compte_dotation,
+            is_terminal=corps.is_terminal,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except (
+        CodeDejaUtiliseError,
+        SeuilDejaUtiliseError,
+        CompteInvalideRattachementError,
+    ) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_palier(db, palier)
+
+
+@router.post(
+    "/credit/paliers-souffrance/{palier_id}/retirer",
+    response_model=None,
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def supprimer_palier_souffrance_endpoint(
+    palier_id: uuid.UUID,
+    corps: SuppressionPalier,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Retire un palier. CR5a : aucun crédit ne peut encore y être rattaché (CR5c, à venir)."""
+    palier = db.get(DelinquencyTier, palier_id)
+    if palier is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PALIER_INTROUVABLE
+        )
+    delinquency_parametres.supprimer(
+        db, palier, motif=corps.motif, par=courant.user_id, contexte=_contexte(request)
+    )
+    db.commit()

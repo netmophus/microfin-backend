@@ -17,7 +17,7 @@ from app.cli.seed_comptabilite import (
     rattacher_caisse_agences,
     seed_parametres_parts,
 )
-from app.cli.seed_credit import executer_seed_produits_credit
+from app.cli.seed_credit import executer_seed_paliers_souffrance, executer_seed_produits_credit
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
     AgenceManquanteError,
@@ -208,14 +208,21 @@ def seed_epargne() -> None:
 
 @app.command("seed-credit")
 def seed_credit() -> None:
-    """Installe le produit de crédit de démonstration (PROVISOIRE, taux non nul). Idempotente."""
+    """Installe le produit de crédit de démonstration et les paliers de souffrance de départ
+    (CR5a) — tout PROVISOIRE. Idempotente."""
     with SessionLocal() as db:
-        nb = executer_seed_produits_credit(db)
+        nb_produits = executer_seed_produits_credit(db)
+        nb_paliers = executer_seed_paliers_souffrance(db)
         db.commit()
     typer.echo("")
-    typer.secho(f"  Produit(s) de crédit en place : {nb}.", fg=typer.colors.GREEN, bold=True)
     typer.secho(
-        "  PROVISOIRE — taux de démonstration, à valider/remplacer par l'IMF.",
+        f"  Produit(s) de crédit en place : {nb_produits}.", fg=typer.colors.GREEN, bold=True
+    )
+    typer.secho(
+        f"  Palier(s) de souffrance en place : {nb_paliers}.", fg=typer.colors.GREEN, bold=True
+    )
+    typer.secho(
+        "  PROVISOIRE — taux/seuils de démonstration, comptes non rattachés, à valider par l'IMF.",
         fg=typer.colors.YELLOW,
     )
     typer.echo("")

@@ -111,3 +111,54 @@ class RemboursementRecu(BaseModel):
     montant_total: int
     paid_at: datetime
     echeances_restantes: int
+
+
+class CompteRattachementPalier(BaseModel):
+    """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
+
+    account_number: str
+    name: str
+
+
+class PalierSouffrance(BaseModel):
+    """Un palier de souffrance (CR5a). `compte_encours`/`compte_dotation` absents (None) =
+    non rattaché — provisoire, à compléter via l'écran."""
+
+    id: uuid.UUID
+    code: str
+    libelle: str
+    seuil_jours: int
+    taux_provision_bp: int
+    compte_encours: CompteRattachementPalier | None
+    compte_dotation: CompteRattachementPalier | None
+    is_terminal: bool
+    is_provisional: bool
+
+
+class CreationPalier(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    libelle: str = Field(min_length=1, max_length=150)
+    seuil_jours: int = Field(ge=0)
+    taux_provision_bp: int = Field(ge=0, le=10000)
+    compte_encours: str | None = None
+    compte_dotation: str | None = None
+    is_terminal: bool = False
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ModificationPalier(BaseModel):
+    """L'écran soumet l'état COMPLET du palier à chaque enregistrement — pas un PATCH partiel,
+    même discipline que les rattachements produit d'épargne."""
+
+    code: str = Field(min_length=1, max_length=20)
+    libelle: str = Field(min_length=1, max_length=150)
+    seuil_jours: int = Field(ge=0)
+    taux_provision_bp: int = Field(ge=0, le=10000)
+    compte_encours: str | None = None
+    compte_dotation: str | None = None
+    is_terminal: bool = False
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class SuppressionPalier(BaseModel):
+    motif: str = Field(min_length=3, max_length=500)
