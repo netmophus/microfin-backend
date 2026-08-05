@@ -63,6 +63,18 @@ class EcheanceLigne(BaseModel):
     status: str
 
 
+class EcheanceApercuLigne(BaseModel):
+    """Une échéance d'APERÇU (CR6b) — mêmes montants qu'une échéance réelle, sans `status` :
+    rien n'est suivi puisque rien n'est écrit en base."""
+
+    numero: int
+    due_date: date
+    capital: int
+    interets: int
+    total: int
+    capital_restant_du: int
+
+
 class Remboursement(BaseModel):
     montant: int = Field(gt=0)
 

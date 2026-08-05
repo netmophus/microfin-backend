@@ -1,5 +1,6 @@
 """Crédit CR3 — décaissement : LA première écriture comptable du module (D crédit / C caisse),
 l'échéancier persisté (CR2 appliqué), et l'ancrage du routage membre/client.
+CR6b — aperçu PUR de l'échéancier (même moteur, rien n'est écrit) : voir generer_apercu().
 
 TRANSACTION UNIQUE : la pièce comptable, les échéances et le passage à 'decaisse' vivent dans
 la même session, sans commit intermédiaire (ecritures.creer_brouillon/valider ne font que
@@ -20,6 +21,7 @@ statut membre/client du tiers change après coup.
 
 import calendar
 import uuid
+from dataclasses import dataclass
 from datetime import date
 
 from sqlalchemy import select, text
@@ -35,7 +37,7 @@ from app.modules.credit.demandes import (
     TierNonActifError,
     _statut_tier,
 )
-from app.modules.credit.echeancier import generer_echeancier
+from app.modules.credit.echeancier import Echeance, generer_echeancier
 from app.modules.credit.models import Application, Installment, Product
 from app.modules.parameters.models import Agency
 
@@ -50,6 +52,19 @@ class RattachementManquantError(CreditError):
     """Le produit ou l'agence n'a pas le compte nécessaire rattaché (plan comptable)."""
 
 
+@dataclass(frozen=True)
+class EcheanceApercu:
+    """Une échéance d'APERÇU — même champs qu'une échéance persistée, sans `status` : rien
+    n'est suivi puisque rien n'est écrit (voir generer_apercu)."""
+
+    numero: int
+    due_date: date
+    capital: int
+    interets: int
+    total: int
+    capital_restant_du: int
+
+
 def _ajouter_periode(depart: date, periodicite: str) -> date:
     """Avance `depart` d'UNE période calendaire. Stdlib pure (calendar.monthrange), pas de
     nouvelle dépendance. Cale sur le dernier jour du mois cible si le jour d'origine n'y
@@ -61,6 +76,20 @@ def _ajouter_periode(depart: date, periodicite: str) -> date:
     dernier_jour_du_mois = calendar.monthrange(annee, mois)[1]
     jour = min(depart.day, dernier_jour_du_mois)
     return date(annee, mois, jour)
+
+
+def _dater_echeances(
+    echeances: list[Echeance], depart: date, periodicite: str
+) -> list[tuple[Echeance, date]]:
+    """Associe à chaque échéance sa date calendaire, par pas de période depuis `depart`.
+    PARTAGÉ par decaisser() (persisté) et generer_apercu() (pur) : même datation, même moteur
+    — pour que les deux ne puissent jamais diverger par accident."""
+    resultat: list[tuple[Echeance, date]] = []
+    echeance_date = depart
+    for echeance in echeances:
+        echeance_date = _ajouter_periode(echeance_date, periodicite)
+        resultat.append((echeance, echeance_date))
+    return resultat
 
 
 def decaisser(
@@ -151,9 +180,7 @@ def decaisser(
         regle_arrondi=produit.regle_arrondi,
     )
 
-    echeance_date = jour
-    for echeance in echeances:
-        echeance_date = _ajouter_periode(echeance_date, produit.periodicite)
+    for echeance, echeance_date in _dater_echeances(echeances, jour, produit.periodicite):
         db.add(
             Installment(
                 application_id=demande.id,
@@ -191,3 +218,50 @@ def decaisser(
         },
     )
     return demande
+
+
+def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
+    """Aperçu PUR de l'échéancier d'une demande APPROUVÉE — même moteur que decaisser()
+    (generer_echeancier + _dater_echeances). RIEN N'EST ÉCRIT EN BASE : aucun db.add, aucun
+    db.commit — juste deux lectures (produit, date du jour) et un calcul. À présenter au
+    client avant signature/décaissement.
+
+    Les MONTANTS (capital/intérêts/total/capital restant dû) sont GARANTIS identiques à
+    l'échéancier réellement décaissé : ils ne dépendent que du montant, de la durée et des
+    paramètres du produit, jamais de la date. Les DATES, elles, sont calculées comme si le
+    décaissement avait lieu AUJOURD'HUI — illustratives : le décaissement réel ancre ses
+    propres dates sur SA date d'exécution, qui peut différer du jour où l'aperçu a été vu.
+
+    Refuse si la demande n'est pas approuvée (rien à prévisualiser) ou si le produit est
+    devenu indisponible. Peut lever EcheancierImpossibleError — même garde-fou qu'au
+    décaissement, révélé PLUS TÔT (dès l'approbation, avant toute tentative réelle)."""
+    if demande.status != "approuve":
+        raise DemandeNonApprouveeError(
+            f"Cette demande ({demande.application_number}) n'est pas approuvée "
+            f"(statut={demande.status}) : aucun échéancier à prévisualiser."
+        )
+
+    produit = db.get(Product, demande.product_id)
+    if produit is None or not produit.is_active:
+        raise ProduitIntrouvableError("Produit de crédit inexistant ou devenu indisponible.")
+
+    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    echeances = generer_echeancier(
+        montant=demande.montant_decide,
+        taux_bp=produit.taux_bp,
+        duree_echeances=demande.duree_echeances,
+        periodicite=produit.periodicite,
+        methode_amortissement=produit.methode_amortissement,
+        regle_arrondi=produit.regle_arrondi,
+    )
+    return [
+        EcheanceApercu(
+            numero=echeance.numero,
+            due_date=echeance_date,
+            capital=echeance.capital,
+            interets=echeance.interets,
+            total=echeance.total,
+            capital_restant_du=echeance.capital_restant_du,
+        )
+        for echeance, echeance_date in _dater_echeances(echeances, jour, produit.periodicite)
+    ]

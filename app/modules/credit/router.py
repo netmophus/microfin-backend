@@ -1,6 +1,8 @@
 """Endpoints HTTP du module Crédit — CR1 : produits (lecture), demande, décision.
 CR3 : décaissement (pièce comptable + échéancier persisté) et lecture de l'échéancier.
 CR4 : remboursement (une échéance à la fois, montant exact).
+CR6b : aperçu PUR de l'échéancier d'une demande approuvée — même moteur que le décaissement,
+rien n'est écrit en base (à présenter au client avant signature/décaissement).
 
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
 credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
@@ -31,6 +33,7 @@ from app.modules.credit.decaissement import (
     DemandeNonApprouveeError,
     RattachementManquantError,
     decaisser,
+    generer_apercu,
 )
 from app.modules.credit.demandes import (
     DemandeDejaDecideeError,
@@ -53,6 +56,7 @@ from app.modules.credit.schemas import (
     DemandeDecaissee,
     DemandeDetail,
     DemandeResume,
+    EcheanceApercuLigne,
     EcheanceLigne,
     Remboursement,
     RemboursementRecu,
@@ -247,6 +251,50 @@ def decider_endpoint(
         decided_at=demande.decided_at,
         motif_decision=demande.motif_decision,
     )
+
+
+@router.get(
+    "/credit/demandes/{application_id}/echeancier-apercu",
+    response_model=list[EcheanceApercuLigne],
+)
+def apercu_echeancier_endpoint(
+    application_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.demande.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[EcheanceApercuLigne]:
+    """Aperçu PUR de l'échéancier d'une demande approuvée — calcul, RIEN n'est écrit en base.
+    À présenter au client avant signature/décaissement : montants définitifs, dates
+    indicatives (voir decaissement.generer_apercu)."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    demande = db.get(Application, application_id)
+    assert demande is not None
+
+    try:
+        echeances = generer_apercu(db, demande)
+    except (
+        DemandeNonApprouveeError,
+        ProduitIntrouvableError,
+        EcheancierImpossibleError,
+    ) as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+
+    return [
+        EcheanceApercuLigne(
+            numero=e.numero,
+            due_date=e.due_date,
+            capital=e.capital,
+            interets=e.interets,
+            total=e.total,
+            capital_restant_du=e.capital_restant_du,
+        )
+        for e in echeances
+    ]
 
 
 @router.post(
