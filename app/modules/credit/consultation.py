@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.credit.models import Application, Installment, Product
@@ -81,6 +81,27 @@ def lire_demande(db: Session, courant: UtilisateurCourant, application_id: uuid.
     return db.execute(
         _requete_demandes(courant).where(Application.id == application_id)
     ).first()
+
+
+def rechercher_remboursables(db: Session, courant: UtilisateurCourant, q: str) -> Sequence[Any]:
+    """Crédits DÉCAISSÉS du périmètre dont le numéro de dossier, le numéro de tiers ou le nom
+    correspond à `q` — chemin de recherche du guichet CR6d. Un dossier entièrement soldé (plus
+    aucune échéance 'a_echoir') reste dans les résultats : c'est au router/frontend de le dire
+    tel quel, jamais un silence qui ressemble à « rien trouvé »."""
+    motif = f"%{q}%"
+    return db.execute(
+        _requete_demandes(courant)
+        .where(
+            Application.status == "decaisse",
+            or_(
+                Application.application_number.ilike(motif),
+                _T.c.tier_number.ilike(motif),
+                _nom_tier().ilike(motif),
+            ),
+        )
+        .order_by(Application.created_at.desc())
+        .limit(20)
+    ).all()
 
 
 def lire_echeancier(

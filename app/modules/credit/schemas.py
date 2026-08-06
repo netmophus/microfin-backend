@@ -78,6 +78,9 @@ class DemandeDecaissee(DemandeDetail):
 
 
 class EcheanceLigne(BaseModel):
+    """CR5b : `montant_paye`/`solde_du` reflètent un versement partiel éventuel — `status` seul
+    ('partiellement_paye') ne suffit pas à afficher ce qui reste réellement dû."""
+
     numero: int
     due_date: date
     capital: int
@@ -85,6 +88,8 @@ class EcheanceLigne(BaseModel):
     total: int
     capital_restant_du: int
     status: str
+    montant_paye: int
+    solde_du: int
 
 
 class EcheanceApercuLigne(BaseModel):
@@ -99,17 +104,50 @@ class EcheanceApercuLigne(BaseModel):
     capital_restant_du: int
 
 
+class EcheanceDue(BaseModel):
+    """CR5b : `solde_du` (pas `total`) est le montant à présenter/encaisser au guichet — une
+    échéance déjà partiellement payée (`montant_paye` > 0) ne doit jamais faire réapparaître
+    son montant d'origine comme s'il restait intégralement dû."""
+
+    numero: int
+    due_date: date
+    capital: int
+    interets: int
+    total: int
+    montant_paye: int
+    solde_du: int
+
+
+class DossierRemboursable(BaseModel):
+    """Un résultat de recherche du guichet (CR6d). `prochaine_echeance` absente (None) = ce
+    crédit est déjà entièrement soldé — affiché tel quel, jamais un résultat qui échouerait
+    au clic."""
+
+    id: uuid.UUID
+    application_number: str
+    tier_number: str
+    tier_nom: str
+    product_name: str
+    prochaine_echeance: EcheanceDue | None
+
+
 class Remboursement(BaseModel):
     montant: int = Field(gt=0)
 
 
 class RemboursementRecu(BaseModel):
+    """CE versement (CR5b) — `capital`/`interets`/`montant_total` décrivent ce que CE paiement
+    a couvert, pas nécessairement l'échéance entière si elle n'est que partiellement soldée
+    (`echeance_soldee=False`, `solde_du` > 0 : il reste un reliquat sur CETTE échéance)."""
+
     numero: int
     due_date: date
     capital: int
     interets: int
     montant_total: int
     paid_at: datetime
+    solde_du: int
+    echeance_soldee: bool
     echeances_restantes: int
 
 

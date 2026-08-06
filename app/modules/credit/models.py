@@ -1,15 +1,15 @@
 """Modèles ORM du schéma « credit » — référentiel produit (migration 0031), demandes et
 décision (migration 0032), décaissement et échéancier persisté (migration 0033), remboursements
 (migration 0034), décaissement multi-mode (migration 0035), paliers de souffrance CR5a
-(migration 0036).
+(migration 0036), paiement partiel CR5b (migration 0037).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT les migrations (exigence
 d'alembic check pour les FK — les CHECK/triggers ne sont pas comparés, la base les impose).
 
 Module Crédit (individuel simple, échéances fixes, membres ET clients). Impayés/
-provisionnement (CR5) : CR5a (paramétrage des paliers, ce module) posé ; reclassification
-automatique (CR5c) bloquée en attendant les règles de l'expert-comptable (voir
-docs/conformite-credit.md §2).
+provisionnement (CR5) : CR5a (paramétrage des paliers) et CR5b (paiement partiel, ce module)
+posés ; reclassification automatique (CR5c) bloquée en attendant les règles de l'expert-
+comptable (voir docs/conformite-credit.md §2).
 """
 
 import uuid
@@ -159,15 +159,27 @@ class Installment(Base):
     due_date : date calendaire, calculée par pas de période depuis la date de décaissement
     (stdlib, voir decaissement._ajouter_periode).
 
-    status : 'a_echoir' -> 'paye' (CR4). Toujours RIEN pour « en retard » — condition calculée
-    à la lecture (due_date < aujourd'hui AND status='a_echoir'), pas un état stocké : le
-    vocabulaire de pénalité appartient à CR5, pas deviné ici."""
+    status : 'a_echoir' -> 'partiellement_paye' -> 'paye' (CR5b — paiement partiel, migration
+    0037). `montant_paye` est le cumul encaissé ; `solde_du` (total - montant_paye) n'est
+    JAMAIS stocké, calculé à la lecture. Toujours RIEN pour « en retard » — condition calculée
+    à la lecture (due_date < aujourd'hui AND status != 'paye'), pas un état stocké."""
 
     __tablename__ = "installments"
     __table_args__: tuple[Any, ...] = (
         sa.UniqueConstraint("application_id", "numero"),
         sa.Index("ix_credit_installments_application", "application_id"),
-        sa.CheckConstraint("status IN ('a_echoir', 'paye')", name="status"),
+        sa.CheckConstraint(
+            "status IN ('a_echoir', 'partiellement_paye', 'paye')", name="status"
+        ),
+        sa.CheckConstraint(
+            "montant_paye >= 0 AND montant_paye <= total", name="montant_paye_borne"
+        ),
+        sa.CheckConstraint(
+            "(status = 'a_echoir' AND montant_paye = 0) OR "
+            "(status = 'partiellement_paye' AND montant_paye > 0 AND montant_paye < total) OR "
+            "(status = 'paye' AND montant_paye = total)",
+            name="statut_coherent_avec_montant_paye",
+        ),
         {"schema": "credit"},
     )
 
@@ -184,6 +196,9 @@ class Installment(Base):
     status: Mapped[str] = mapped_column(
         sa.String(20), nullable=False, server_default=sa.text("'a_echoir'")
     )
+    montant_paye: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
     paid_at: Mapped[datetime | None] = mapped_column(TS)
     paid_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
@@ -195,13 +210,16 @@ class Installment(Base):
 class Repayment(Base):
     """Un paiement RÉELLEMENT encaissé — registre append-only (miroir epargne.movements).
 
-    installment_id est UNIQUE : périmètre v1, un remboursement règle UNE échéance en entier,
-    jamais de paiement partiel ni groupé (voir credit/remboursement.py). entry_id référence la
-    pièce comptable qui l'a posé (D CAISSE / C CREDIT / C PRODUITS_INTERETS)."""
+    installment_id N'EST PLUS unique depuis CR5b (migration 0037) : plusieurs paiements
+    successifs peuvent viser la même échéance (paiement partiel, jusqu'à solde). Chaque ligne
+    représente UN paiement, avec SA propre ventilation capital/intérêts (montant_capital/
+    montant_interets décrivent ce que CE paiement a couvert, pas l'échéance entière). entry_id
+    référence la pièce comptable qui l'a posé (D CAISSE / C CREDIT / C PRODUITS_INTERETS)."""
 
     __tablename__ = "repayments"
     __table_args__: tuple[Any, ...] = (
         sa.Index("ix_credit_repayments_application", "application_id"),
+        sa.Index("ix_credit_repayments_installment", "installment_id"),
         {"schema": "credit"},
     )
 
@@ -210,7 +228,6 @@ class Repayment(Base):
         UUID,
         sa.ForeignKey("credit.installments.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
     )
     application_id: Mapped[uuid.UUID] = mapped_column(
         UUID, sa.ForeignKey(FK_APPLICATION), nullable=False

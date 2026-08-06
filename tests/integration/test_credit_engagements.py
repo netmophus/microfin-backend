@@ -164,6 +164,31 @@ def test_desactivation_autorisee_une_fois_le_credit_solde(db: Session) -> None:
     assert tier.status == "desactive"
 
 
+def test_desactivation_refusee_si_echeance_partiellement_payee(db: Session) -> None:
+    """CR5b, garde-fou (b) : une échéance PARTIELLEMENT payée doit continuer à bloquer la
+    désactivation — son statut n'est ni 'a_echoir' ni 'paye'. UNE SEULE échéance (duree=1) :
+    si la sélection ne teste que status = 'a_echoir', plus AUCUNE ligne ne correspond une fois
+    le versement partiel posé (elle est 'partiellement_paye'), et la désactivation serait
+    acceptée à tort — le point précis que la sélection status != 'paye' corrige."""
+    agency_id, produit, tier_id = _cadre(db, "PART")
+    demande = creer_demande(
+        db, tier_id=tier_id, agency_id=agency_id, product_id=produit.id,
+        montant_demande=100000, duree_echeances=1, objet="Test partiel", par=None,
+    )
+    decider(db, demande, decision="approuve", montant_decide=100000, motif="OK", par=None)
+    decaisser(db, demande, par=None, contexte=CONTEXTE_VIDE)
+    db.flush()
+
+    seule = db.execute(
+        select(Installment).where(Installment.application_id == demande.id)
+    ).scalar_one()
+    rembourser(db, demande, montant=seule.total // 2, par=None, contexte=CONTEXTE_VIDE)
+    db.flush()
+
+    with pytest.raises(EngagementsOuvertsError):
+        _desactiver(db, _acteur(db, agency_id), tier_id)
+
+
 def test_desactivation_autorisee_si_aucun_credit_decaisse(db: Session) -> None:
     agency_id, _produit, tier_id = _cadre(db, "B")
     # Demande créée mais jamais décidée ni décaissée : aucun engagement.

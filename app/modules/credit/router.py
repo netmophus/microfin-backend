@@ -3,6 +3,8 @@ CR3 : décaissement (pièce comptable + échéancier persisté) et lecture de l'
 CR4 : remboursement (une échéance à la fois, montant exact).
 CR6b : aperçu PUR de l'échéancier d'une demande approuvée — même moteur que le décaissement,
 rien n'est écrit en base (à présenter au client avant signature/décaissement).
+CR6d : recherche du guichet (numéro de dossier, numéro de tiers ou nom) — voir
+credit.remboursement.create pour l'encaissement lui-même, déjà présent.
 CR5a : paramétrage des paliers de souffrance (Bloc 5) — lecture/écriture de la CONFIGURATION
 seule, aucun crédit n'est encore reclassé automatiquement (CR5c, à venir).
 
@@ -58,6 +60,7 @@ from app.modules.credit.models import Application, DelinquencyTier, Installment
 from app.modules.credit.remboursement import (
     AucuneEcheanceAReglerError,
     MontantIncorrectError,
+    prochaine_echeance,
     rembourser,
 )
 from app.modules.credit.schemas import (
@@ -69,7 +72,9 @@ from app.modules.credit.schemas import (
     DemandeDecaissee,
     DemandeDetail,
     DemandeResume,
+    DossierRemboursable,
     EcheanceApercuLigne,
+    EcheanceDue,
     EcheanceLigne,
     ModificationPalier,
     PalierSouffrance,
@@ -425,9 +430,53 @@ def lire_echeancier_endpoint(
             total=e.total,
             capital_restant_du=e.capital_restant_du,
             status=e.status,
+            montant_paye=e.montant_paye,
+            solde_du=e.total - e.montant_paye,
         )
         for e in consultation.lire_echeancier(db, courant, application_id)
     ]
+
+
+@router.get("/credit/recherche-remboursement", response_model=list[DossierRemboursable])
+def rechercher_remboursement_endpoint(
+    q: str,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.remboursement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DossierRemboursable]:
+    """Trouve les crédits DÉCAISSÉS du périmètre, par numéro de dossier, numéro de tiers ou nom
+    (chemin de recherche du guichet CR6d). Un résultat sans `prochaine_echeance` est déjà
+    entièrement soldé — le frontend l'affiche tel quel, jamais un clic qui échouerait.
+
+    Gardée sur `credit.remboursement.create` (pas `credit.demande.read`) : le CAISSIER, seul
+    acteur du guichet de remboursement, ne détient QUE ce premier droit — il n'a pas de visibilité
+    générale sur les dossiers de crédit, seulement sur ceux qu'il peut encaisser."""
+    resultats: list[DossierRemboursable] = []
+    lignes = consultation.rechercher_remboursables(db, courant, q.strip())
+    for demande, produit, tier_number, tier_nom, _is_member in lignes:
+        echeance = prochaine_echeance(db, demande.id)
+        resultats.append(
+            DossierRemboursable(
+                id=demande.id,
+                application_number=demande.application_number,
+                tier_number=tier_number,
+                tier_nom=tier_nom,
+                product_name=produit.name,
+                prochaine_echeance=(
+                    EcheanceDue(
+                        numero=echeance.numero,
+                        due_date=echeance.due_date,
+                        capital=echeance.capital,
+                        interets=echeance.interets,
+                        total=echeance.total,
+                        montant_paye=echeance.montant_paye,
+                        solde_du=echeance.total - echeance.montant_paye,
+                    )
+                    if echeance is not None
+                    else None
+                ),
+            )
+        )
+    return resultats
 
 
 @router.post(
@@ -451,7 +500,7 @@ def rembourser_endpoint(
     assert demande is not None
 
     try:
-        echeance = rembourser(
+        resultat = rembourser(
             db, demande, montant=corps.montant, par=courant.user_id, contexte=_contexte(request)
         )
         db.commit()
@@ -465,18 +514,22 @@ def rembourser_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
         ) from None
 
+    # != 'paye', pas == 'a_echoir' (CR5b) : une échéance partiellement payée reste « restante ».
     restantes = db.execute(
         select(func.count())
         .select_from(Installment)
-        .where(Installment.application_id == application_id, Installment.status == "a_echoir")
+        .where(Installment.application_id == application_id, Installment.status != "paye")
     ).scalar_one()
+    echeance = resultat.echeance
     return RemboursementRecu(
         numero=echeance.numero,
         due_date=echeance.due_date,
-        capital=echeance.capital,
-        interets=echeance.interets,
-        montant_total=echeance.total,
-        paid_at=echeance.paid_at,
+        capital=resultat.montant_capital,
+        interets=resultat.montant_interets,
+        montant_total=resultat.montant,
+        paid_at=resultat.paid_at,
+        solde_du=resultat.solde_du,
+        echeance_soldee=resultat.echeance_soldee,
         echeances_restantes=restantes,
     )
 

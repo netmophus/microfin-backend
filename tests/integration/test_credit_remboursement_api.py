@@ -239,6 +239,8 @@ def test_ligne_interets_omise_quand_le_taux_est_nul(client: TestClient, db: Sess
 
 
 def test_montant_incorrect_indique_le_montant_attendu(client: TestClient, db: Session) -> None:
+    """CR5b : un montant INFÉRIEUR au solde est désormais un versement partiel légitime (voir
+    plus bas) — seul un DÉPASSEMENT du solde reste un refus, avec le solde nommé."""
     agence = _agence(db, "RMA3")
     tier_id = _tier(db, agence)
     produit = _produit(db)
@@ -254,13 +256,14 @@ def test_montant_incorrect_indique_le_montant_attendu(client: TestClient, db: Se
 
     reponse = client.post(
         f"/credit/demandes/{demande.id}/remboursement",
-        json={"montant": premiere.total - 500},
+        json={"montant": premiere.total + 500},
         headers=caissier,
     )
 
     assert reponse.status_code == 422
     assert reponse.json()["detail"] == (
-        f"Cette échéance est de {premiere.total} F, vous avez saisi {premiere.total - 500} F."
+        f"Le solde restant de cette échéance est de {premiere.total} F, "
+        f"vous avez saisi {premiere.total + 500} F."
     )
 
     # Rien n'a bougé.
@@ -313,6 +316,214 @@ def test_aucune_echeance_a_regler_si_deja_solde(client: TestClient, db: Session)
     )
     assert solde.status_code == 422
     assert "soldé" in solde.json()["detail"].lower()
+
+
+# --- CR5b : paiement partiel — garde-fou (a) -----------------------------------------------
+
+
+def test_remboursement_partiel_bascule_partiellement_paye(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "RMA8")
+    tier_id = _tier(db, agence)
+    produit = _produit(db, taux_bp=1200)
+    demande = _demande_decaissee(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    premiere = db.execute(
+        select(Installment)
+        .where(Installment.application_id == demande.id)
+        .order_by(Installment.numero)
+        .limit(1)
+    ).scalar_one()
+    assert premiere.interets > 0
+    moitie = premiere.total // 2
+
+    reponse = client.post(
+        f"/credit/demandes/{demande.id}/remboursement", json={"montant": moitie}, headers=caissier
+    )
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["montant_total"] == moitie
+    assert corps["echeance_soldee"] is False
+    assert corps["solde_du"] == premiere.total - moitie
+    # Echéance TOUJOURS présente dans les restantes (ni soldée, ni disparue).
+    assert corps["echeances_restantes"] == 6
+
+    echeance = db.get(Installment, premiere.id)
+    assert echeance.status == "partiellement_paye"
+    assert echeance.montant_paye == moitie
+    assert echeance.paid_at is None  # pas encore soldée
+
+
+def test_remboursement_complete_apres_partiel_bascule_paye(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "RMA9")
+    tier_id = _tier(db, agence)
+    produit = _produit(db, taux_bp=1200)
+    demande = _demande_decaissee(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    premiere = db.execute(
+        select(Installment)
+        .where(Installment.application_id == demande.id)
+        .order_by(Installment.numero)
+        .limit(1)
+    ).scalar_one()
+    moitie = premiere.total // 2
+    reste = premiere.total - moitie
+
+    client.post(
+        f"/credit/demandes/{demande.id}/remboursement", json={"montant": moitie}, headers=caissier
+    )
+    reponse = client.post(
+        f"/credit/demandes/{demande.id}/remboursement", json={"montant": reste}, headers=caissier
+    )
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["echeance_soldee"] is True
+    assert corps["solde_du"] == 0
+    assert corps["echeances_restantes"] == 5
+
+    echeance = db.get(Installment, premiere.id)
+    assert echeance.status == "paye"
+    assert echeance.montant_paye == premiere.total
+    assert echeance.paid_at is not None
+
+    # DEUX paiements distincts pour LA MÊME échéance — la contrainte UNIQUE est bien tombée.
+    paiements = db.execute(
+        select(Repayment)
+        .where(Repayment.installment_id == premiere.id)
+        .order_by(Repayment.created_at)
+    ).scalars().all()
+    assert len(paiements) == 2
+    assert paiements[0].montant_total == moitie
+    assert paiements[1].montant_total == reste
+
+
+def test_remboursement_depasse_le_solde_du_refuse_meme_sous_le_total(
+    client: TestClient, db: Session
+) -> None:
+    """Le plafond est le SOLDE restant, pas le total d'origine : après un premier versement
+    partiel, un second versement supérieur à ce qui reste (même inférieur au total complet)
+    doit être refusé, avec le SOLDE nommé dans le message — pas le total."""
+    agence = _agence(db, "RMA10")
+    tier_id = _tier(db, agence)
+    produit = _produit(db, taux_bp=1200)
+    demande = _demande_decaissee(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    premiere = db.execute(
+        select(Installment)
+        .where(Installment.application_id == demande.id)
+        .order_by(Installment.numero)
+        .limit(1)
+    ).scalar_one()
+    # Verse 80% du total — il ne reste que 20%.
+    premier_versement = (premiere.total * 8) // 10
+    solde_restant = premiere.total - premier_versement
+    tentative = solde_restant + 1000  # dépasse le solde, reste < total d'origine
+
+    client.post(
+        f"/credit/demandes/{demande.id}/remboursement",
+        json={"montant": premier_versement},
+        headers=caissier,
+    )
+    reponse = client.post(
+        f"/credit/demandes/{demande.id}/remboursement",
+        json={"montant": tentative},
+        headers=caissier,
+    )
+
+    assert reponse.status_code == 422
+    assert reponse.json()["detail"] == (
+        f"Le solde restant de cette échéance est de {solde_restant} F, "
+        f"vous avez saisi {tentative} F."
+    )
+    # Rien n'a bougé depuis le premier versement.
+    echeance = db.get(Installment, premiere.id)
+    assert echeance.montant_paye == premier_versement
+    assert echeance.status == "partiellement_paye"
+
+
+def test_ventilation_interets_dabord_puis_capital(client: TestClient, db: Session) -> None:
+    """Convention PROVISOIRE (à valider) : un versement partiel couvre d'abord les intérêts,
+    puis le capital avec le reliquat — déduit de montant_paye, aucune colonne dédiée."""
+    agence = _agence(db, "RMA11")
+    tier_id = _tier(db, agence)
+    produit = _produit(db, taux_bp=1200)
+    demande = _demande_decaissee(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    premiere = db.execute(
+        select(Installment)
+        .where(Installment.application_id == demande.id)
+        .order_by(Installment.numero)
+        .limit(1)
+    ).scalar_one()
+    assert premiere.interets > 0 and premiere.capital > 0
+
+    # Premier versement : moins que les intérêts seuls -> tout part en intérêts, rien au capital.
+    petit_versement = max(1, premiere.interets - 1)
+    reponse1 = client.post(
+        f"/credit/demandes/{demande.id}/remboursement",
+        json={"montant": petit_versement},
+        headers=caissier,
+    )
+    assert reponse1.status_code == 200
+    assert reponse1.json()["interets"] == petit_versement
+    assert reponse1.json()["capital"] == 0
+
+    # Deuxième versement : le reliquat d'intérêts, puis du capital.
+    reste_interets = premiere.interets - petit_versement
+    deuxieme_versement = reste_interets + 5000
+    reponse2 = client.post(
+        f"/credit/demandes/{demande.id}/remboursement",
+        json={"montant": deuxieme_versement},
+        headers=caissier,
+    )
+    assert reponse2.status_code == 200
+    assert reponse2.json()["interets"] == reste_interets
+    assert reponse2.json()["capital"] == 5000
+
+
+def test_echeancier_expose_montant_paye_et_solde_du_apres_versement_partiel(
+    client: TestClient, db: Session
+) -> None:
+    """CR5b : l'échéancier PERSISTÉ (/echeancier, consulté depuis la fiche dossier) doit,
+    lui aussi, refléter un versement partiel — pas seulement le guichet de recherche. Le
+    statut seul ('partiellement_paye') ne dit pas ce qui reste dû."""
+    agence = _agence(db, "RMA12")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    premiere = db.execute(
+        select(Installment)
+        .where(Installment.application_id == demande.id)
+        .order_by(Installment.numero)
+        .limit(1)
+    ).scalar_one()
+    versement = premiere.total - 1000
+
+    reponse = client.post(
+        f"/credit/demandes/{demande.id}/remboursement",
+        json={"montant": versement},
+        headers=caissier,
+    )
+    assert reponse.status_code == 200
+
+    lecture = client.get(f"/credit/demandes/{demande.id}/echeancier", headers=responsable)
+    assert lecture.status_code == 200
+    premiere_ligne = lecture.json()[0]
+    assert premiere_ligne["status"] == "partiellement_paye"
+    assert premiere_ligne["montant_paye"] == versement
+    assert premiere_ligne["solde_du"] == 1000
 
 
 # --- Transaction unique : panne après la pièce, rien ne subsiste --------------------------
