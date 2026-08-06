@@ -1,15 +1,15 @@
 """Modèles ORM du schéma « credit » — référentiel produit (migration 0031), demandes et
 décision (migration 0032), décaissement et échéancier persisté (migration 0033), remboursements
 (migration 0034), décaissement multi-mode (migration 0035), paliers de souffrance CR5a
-(migration 0036), paiement partiel CR5b (migration 0037).
+(migration 0036), paiement partiel CR5b (migration 0037), reclassification automatique CR5c
+(migration 0038), prélèvement automatique CR5d (migration 0039).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT les migrations (exigence
 d'alembic check pour les FK — les CHECK/triggers ne sont pas comparés, la base les impose).
 
 Module Crédit (individuel simple, échéances fixes, membres ET clients). Impayés/
-provisionnement (CR5) : CR5a (paramétrage des paliers) et CR5b (paiement partiel, ce module)
-posés ; reclassification automatique (CR5c) bloquée en attendant les règles de l'expert-
-comptable (voir docs/conformite-credit.md §2).
+provisionnement (CR5) complet : CR5a (paliers), CR5b (paiement partiel), CR5c (reclassification
+automatique), CR5d (prélèvement automatique, ce module).
 """
 
 import uuid
@@ -111,6 +111,7 @@ class Application(Base):
     __table_args__: tuple[Any, ...] = (
         sa.Index("ix_credit_applications_tier", "tier_id"),
         sa.Index("ix_credit_applications_agency", "agency_id"),
+        sa.Index("ix_credit_applications_delinquency_tier", "delinquency_tier_id"),
         {"schema": "credit"},
     )
 
@@ -141,6 +142,20 @@ class Application(Base):
     )
     compte_destination_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey(FK_ACCOUNT)
+    )
+    # CR5c (migration 0038) : classification COURANTE, posée par le job de reclassification —
+    # NULL = sain. Jamais recalculée à la lecture (contrairement à « soldé », dérivé des
+    # installments) : c'est justement ce que ce champ trace, un état qui persiste entre deux
+    # exécutions du job. `rembourser()` s'en sert pour créditer le compte courant de l'encours
+    # (le palier si classé, sinon `compte_credit_id`) plutôt que toujours l'ancrage figé.
+    delinquency_tier_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("credit.delinquency_tiers.id")
+    )
+    # CR5d (migration 0039) : le compte epargne.accounts À DÉBITER pour le prélèvement
+    # automatique — rempli EXPLICITEMENT par prelevement.configurer_prelevement(), jamais
+    # recalculé. NULL = ce crédit n'est pas éligible (guichet CR6d uniquement).
+    compte_prelevement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("epargne.accounts.id")
     )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
@@ -258,7 +273,15 @@ class DelinquencyTier(Base):
     d'encours tout en ayant des comptes de dotation distincts. Comptes NULL par défaut, remplis
     via l'écran de paramétrage (Bloc 5), jamais codés en dur.
 
-    Aucun comportement automatique ne lit encore cette table en CR5a — paramétrage seul."""
+    `compte_provision_id`/`compte_reprise_id` (CR5c, migration 0038) : deux comptes de plus,
+    oubliés en CR5a (paramétrage seul, rien ne les lisait encore) — `compte_provision_id` est
+    le compte de BILAN (299x, contra-actif) qui porte la provision accumulée elle-même,
+    `compte_reprise_id` sert au mouvement inverse de la dotation quand la provision diminue ou
+    s'annule. Le référentiel RCSFD n'a qu'un compte de reprise (764, sans sous-tranches) mais
+    reste paramétrable par palier — même discipline que les autres, aucune exception codée en
+    dur.
+
+    Lu depuis CR5c par le job de reclassification (`app/modules/credit/reclassification.py`)."""
 
     __tablename__ = "delinquency_tiers"
     __table_args__: tuple[Any, ...] = ({"schema": "credit"},)
@@ -272,6 +295,8 @@ class DelinquencyTier(Base):
     )
     compte_encours_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
     compte_dotation_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
+    compte_provision_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
+    compte_reprise_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
     is_terminal: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, server_default=sa.false()
     )
@@ -285,3 +310,84 @@ class DelinquencyTier(Base):
 
     def __repr__(self) -> str:
         return f"<DelinquencyTier {self.code} seuil={self.seuil_jours}j>"
+
+
+class DelinquencyEvent(Base):
+    """Un reclassement (CR5c, migration 0038) — IMMUABLE, jamais modifié après coup (registre,
+    même philosophie que Repayment). `tier_avant_id`/`tier_apres_id` NULL = sain à ce moment-là.
+
+    `entry_id_encours`/`entry_id_reprise`/`entry_id_dotation` peuvent être NULL : le moteur
+    comptable refuse toute ligne à montant nul, donc une ligne n'est postée QUE si son montant
+    calculé est > 0 — règle unique, jamais de cas spécial. La provision n'est JAMAIS nettée en
+    delta (chaque palier a son propre compte 299x, pas de pool commun) : `entry_id_reprise`
+    reprend intégralement la provision de l'ancien palier, `entry_id_dotation` redote
+    intégralement celle du nouveau — les deux peuvent coexister. L'événement est écrit dans
+    tous les cas : il documente le reclassement même quand aucune écriture n'a été nécessaire.
+    """
+
+    __tablename__ = "delinquency_events"
+    __table_args__: tuple[Any, ...] = (
+        sa.Index("ix_credit_delinquency_events_application", "application_id"),
+        {"schema": "credit"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey(FK_APPLICATION), nullable=False
+    )
+    executed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    executed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    jours_retard: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    tier_avant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("credit.delinquency_tiers.id")
+    )
+    tier_apres_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("credit.delinquency_tiers.id")
+    )
+    encours_actuel: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    montant_encours_reclasse: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
+    provision_avant: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    provision_apres: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    entry_id_encours: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    )
+    entry_id_reprise: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    )
+    entry_id_dotation: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    )
+
+    def __repr__(self) -> str:
+        return f"<DelinquencyEvent {self.application_id} jours_retard={self.jours_retard}>"
+
+
+class PrelevementTentative(Base):
+    """Une tentative de prélèvement automatique (CR5d, migration 0039) — IMMUABLE, append-only
+    (trigger, miroir InteretCalcul). LE garde-fou anti-double-prélèvement : UNIQUE(installment_id,
+    date_tentative) — une échéance ne peut avoir qu'UNE tentative par jour de traitement, mais
+    reste retentable les jours suivants tant qu'elle n'est pas soldée. `montant_preleve` peut
+    être 0 (rien de disponible ce jour-là : compte à sec ou fermé) — la ligne existe quand même,
+    elle documente la tentative."""
+
+    __tablename__ = "prelevement_tentatives"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("installment_id", "date_tentative", name="uq_prelevement_tentative"),
+        sa.Index("ix_credit_prelevement_tentatives_installment", "installment_id"),
+        sa.CheckConstraint("montant_preleve >= 0", name="montant_preleve_positif"),
+        {"schema": "credit"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    installment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("credit.installments.id", ondelete="CASCADE"), nullable=False
+    )
+    date_tentative: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    montant_preleve: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<PrelevementTentative {self.installment_id} {self.date_tentative}>"

@@ -147,6 +147,30 @@ def test_lire_bytes_encodage_illisible_leve_fichier_invalide() -> None:
         lire_bytes(b"\xff\xfe\x00\xff invalide")
 
 
+@pytest.mark.parametrize("caractere", ["=", "+", "-", "@"])
+def test_lire_bytes_neutralise_un_libelle_qui_ressemble_a_une_formule(caractere: str) -> None:
+    # Un libellé du CSV qui commence par =, +, - ou @ serait interprété comme une formule à la
+    # réouverture dans Excel (injection de formule CSV — CLAUDE.md §12).
+    malveillant = f"{caractere}SOMME(A1:A10)"
+    contenu = _csv_bytes(f"6033;{malveillant};;6;;D;TRUE;FALSE;{malveillant}")
+
+    lignes = lire_bytes(contenu)
+
+    assert lignes[0].name == f"'{malveillant}"
+    assert lignes[0].notes == f"'{malveillant}"
+
+
+def test_lire_bytes_ne_double_pas_le_prefixe_deja_present() -> None:
+    # Un fichier réimporté après un export neutralisé porte déjà l'apostrophe protectrice :
+    # l'import ne doit pas en ajouter une seconde.
+    deja_neutralise = "'=SOMME(A1:A10)"
+    contenu = _csv_bytes(f"6033;{deja_neutralise};;6;;D;TRUE;FALSE;")
+
+    lignes = lire_bytes(contenu)
+
+    assert lignes[0].name == deja_neutralise
+
+
 def test_empreinte_stable_pour_le_meme_contenu_differente_sinon() -> None:
     a = _csv_bytes("6033;Charges diverses;;6;;D;TRUE;FALSE;")
     b = _csv_bytes("6033;Charges diverses;;6;;D;TRUE;FALSE;")

@@ -41,6 +41,20 @@ COLONNES_ATTENDUES = frozenset(
 
 _BOOLEENS = {"TRUE": True, "FALSE": False}
 
+# Un champ texte qui COMMENCE par l'un de ces caractères serait interprété comme une formule
+# à la réouverture dans Excel (injection de formule CSV — CLAUDE.md §12).
+_CARACTERES_DANGEREUX = ("=", "+", "-", "@")
+
+
+def _neutraliser(valeur: str) -> str:
+    """Préfixe d'une apostrophe un champ texte qui commencerait par =, +, - ou @, pour qu'Excel
+    le traite comme du texte et non comme une formule. Idempotent : un champ déjà préfixé (relu
+    depuis un export, ou réimporté tel quel) n'est pas re-préfixé — l'aller-retour export/import
+    reste stable, sans apostrophes qui s'accumulent."""
+    if valeur.startswith(_CARACTERES_DANGEREUX):
+        return f"'{valeur}"
+    return valeur
+
 
 @dataclass(frozen=True)
 class LigneBrute:
@@ -108,14 +122,14 @@ def lire_lignes(source) -> list[LigneBrute]:
             LigneBrute(
                 ligne=index,
                 account_number=(brut.get("account_number") or "").strip(),
-                name=(brut.get("name") or "").strip(),
-                short_name=(brut.get("short_name") or "").strip(),
+                name=_neutraliser((brut.get("name") or "").strip()),
+                short_name=_neutraliser((brut.get("short_name") or "").strip()),
                 classe=(brut.get("class") or "").strip(),
                 parent_number=(brut.get("parent_number") or "").strip(),
                 normal_side=(brut.get("normal_side") or "").strip().upper(),
                 is_posting=(brut.get("is_posting") or "").strip().upper(),
                 is_system=(brut.get("is_system") or "").strip().upper(),
-                notes=(brut.get("notes") or "").strip(),
+                notes=_neutraliser((brut.get("notes") or "").strip()),
             )
         )
     return lignes
@@ -448,14 +462,14 @@ def exporter_csv(db: Session, *, inclure_inactifs: bool = True) -> str:
         ecrivain.writerow(
             {
                 "account_number": c.account_number,
-                "name": c.name,
-                "short_name": c.short_name or "",
+                "name": _neutraliser(c.name),
+                "short_name": _neutraliser(c.short_name or ""),
                 "class": c.account_class,
                 "parent_number": numeros.get(c.parent_id, "") if c.parent_id else "",
                 "normal_side": c.normal_side,
                 "is_posting": "TRUE" if c.is_posting else "FALSE",
                 "is_system": "TRUE" if c.is_system else "FALSE",
-                "notes": c.notes or "",
+                "notes": _neutraliser(c.notes or ""),
                 "is_provisional": "TRUE" if c.is_provisional else "FALSE",
                 "is_active": "TRUE" if c.is_active else "FALSE",
             }

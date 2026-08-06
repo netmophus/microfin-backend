@@ -31,9 +31,11 @@ from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
 from app.modules.credit.models import Application as CreditApplication
+from app.modules.credit.models import DelinquencyEvent as CreditDelinquencyEvent
 from app.modules.credit.models import DelinquencyTier as CreditDelinquencyTier
 from app.modules.credit.models import Installment as CreditInstallment
 from app.modules.credit.models import NumberingSequence as CreditNumberingSequence
+from app.modules.credit.models import PrelevementTentative as CreditPrelevementTentative
 from app.modules.credit.models import Product as CreditProduct
 from app.modules.credit.models import Repayment as CreditRepayment
 from app.modules.epargne.models import (
@@ -159,6 +161,10 @@ TABLES_ATTENDUES = frozenset(
         "credit.repayments",
         # Crédit CR5a — paliers de souffrance, paramétrage (migration 0036).
         "credit.delinquency_tiers",
+        # Crédit CR5c — reclassification automatique (migration 0038).
+        "credit.delinquency_events",
+        # Crédit CR5d — prélèvement automatique, anti-double (migration 0039).
+        "credit.prelevement_tentatives",
     }
 )
 
@@ -215,6 +221,8 @@ MODELES = [
     CreditInstallment,
     CreditRepayment,
     CreditDelinquencyTier,
+    CreditDelinquencyEvent,
+    CreditPrelevementTentative,
 ]
 
 

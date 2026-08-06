@@ -28,11 +28,26 @@ from app.cli.seed_epargne import executer_seed_produits
 from app.cli.seed_security import executer_seed
 from app.core.config import settings
 from app.core.database import SessionLocal
+
+# Enregistre TOUS les modèles ORM dans Base.metadata avant toute utilisation — MÊME LISTE
+# qu'alembic/env.py, même raison : une FK inter-schéma déclarée en chaîne (ex.
+# credit.Application.tier_id -> "tiers.tiers.id") ne se résout qu'au premier flush/query
+# touchant les mappers, et lève NoReferencedTableError si le module qui définit la table cible
+# n'a jamais été importé. Le contexte FastAPI (app.main) importe tout transitivement ; cette
+# CLI, non — sans ces imports, toute commande touchant un modèle à FK croisée casse au premier
+# usage (découvert avec configurer-prelevement/prelever-echeances, CR5d).
+from app.modules.audit import models as _audit_models  # noqa: F401
+from app.modules.comptabilite import models as _comptabilite_models  # noqa: F401
 from app.modules.comptabilite.plan import (
     FichierInvalideError,
     ImportRefuseError,
     importer,
 )
+from app.modules.credit import models as _credit_models  # noqa: F401
+from app.modules.epargne import models as _epargne_models  # noqa: F401
+from app.modules.parameters import models as _parameters_models  # noqa: F401
+from app.modules.security import models as _security_models  # noqa: F401
+from app.modules.tiers import models as _tiers_models  # noqa: F401
 
 app = typer.Typer(help="Outils d'administration du SIG microfinance.", no_args_is_help=True)
 
@@ -256,6 +271,93 @@ def verser_interets_cmd(
     typer.echo("")
 
 
+@app.command("configurer-prelevement")
+def configurer_prelevement_cmd(
+    dossier: Annotated[
+        str, typer.Option(help="Numéro du dossier de crédit (ex. CR-2026-0000001).")
+    ],
+    compte: Annotated[
+        str, typer.Option(help="Numéro du compte d'épargne à débiter (ex. EP-2026-0000001).")
+    ],
+) -> None:
+    """Choisit le compte d'épargne à débiter pour le prélèvement automatique (CR5d) d'un crédit
+    DÉJÀ décaissé. Refuse si le compte n'appartient pas au même tiers, n'est pas actif, ou est un
+    dépôt à terme (DAT)."""
+    from sqlalchemy import select
+
+    from app.modules.credit.models import Application
+    from app.modules.credit.prelevement import (
+        CompteInvalideError,
+        DemandeNonDecaisseeError,
+        configurer_prelevement,
+    )
+    from app.modules.epargne.models import SavingsAccount
+
+    with SessionLocal() as db:
+        demande = db.execute(
+            select(Application).where(Application.application_number == dossier)
+        ).scalar_one_or_none()
+        if demande is None:
+            typer.secho(f"Dossier introuvable : {dossier}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+
+        compte_epargne = db.execute(
+            select(SavingsAccount).where(SavingsAccount.account_number == compte)
+        ).scalar_one_or_none()
+        if compte_epargne is None:
+            typer.secho(f"Compte introuvable : {compte}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+
+        try:
+            configurer_prelevement(db, demande, compte_epargne.id, par=None)
+        except (DemandeNonDecaisseeError, CompteInvalideError) as erreur:
+            db.rollback()
+            typer.secho(str(erreur), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from None
+        db.commit()
+
+    typer.echo("")
+    typer.secho(
+        f"  Compte de prélèvement de {dossier} : {compte}.", fg=typer.colors.GREEN, bold=True
+    )
+    typer.echo("")
+
+
+@app.command("prelever-echeances")
+def prelever_echeances_cmd(
+    date_echeance: Annotated[
+        str, typer.Option(help="Traite les échéances dues au plus tard cette date (AAAA-MM-JJ).")
+    ],
+) -> None:
+    """Prélève automatiquement (CR5d) les échéances dues, sur les crédits décaissés ayant un
+    compte de prélèvement configuré (voir configurer-prelevement).
+
+    Solde insuffisant : prélève ce qui est disponible, jamais en dessous du plancher du compte —
+    le reliquat reste dû, retentable les jours suivants. Idempotente pour CE jour (contrainte
+    base) : relancée le même jour, elle ne retraite pas une échéance déjà tentée.
+    """
+    from datetime import date
+
+    from app.modules.credit.prelevement import executer_prelevement
+
+    with SessionLocal() as db:
+        rapport = executer_prelevement(db, date_echeance=date.fromisoformat(date_echeance))
+    typer.echo("")
+    typer.secho(
+        f"  Prélèvement au {date_echeance} : {rapport.dossiers_evalues} dossier(s) évalué(s), "
+        f"{rapport.prelevements} prélevé(s) pour {rapport.total_preleve} F, "
+        f"{rapport.sans_disponible} sans solde disponible.",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    if rapport.ignores_deja_tente:
+        typer.echo(f"  Déjà tentées ce jour (ignorées) : {rapport.ignores_deja_tente}.")
+    if rapport.ignores_rattachement_manquant:
+        dossiers = ", ".join(rapport.ignores_rattachement_manquant)
+        typer.secho(f"  Rattachement manquant (ignorés) : {dossiers}.", fg=typer.colors.YELLOW)
+    typer.echo("")
+
+
 @app.command("ouvrir-exercice")
 def commande_ouvrir_exercice(
     code: Annotated[str, typer.Option(help="Code de l'exercice, ex. « 2026 ».")],
@@ -280,9 +382,11 @@ def commande_ouvrir_exercice(
             db.commit()
         except IntegrityError as erreur:
             db.rollback()
-            detail = "chevauchement avec un exercice existant" if "chevauch" in str(
-                erreur
-            ) else "code déjà utilisé, bornes incohérentes ou chevauchement"
+            detail = (
+                "chevauchement avec un exercice existant"
+                if "chevauch" in str(erreur)
+                else "code déjà utilisé, bornes incohérentes ou chevauchement"
+            )
             typer.secho(f"Refus : {detail}.", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1) from None
 

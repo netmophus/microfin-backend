@@ -135,6 +135,41 @@ def enregistrer_credit_externe(
     return mouvement
 
 
+def enregistrer_debit_externe(
+    db: Session,
+    compte: SavingsAccount,
+    montant: int,
+    *,
+    operation_type: str,
+    label: str,
+    journal_entry_id: uuid.UUID,
+    par: uuid.UUID | None,
+) -> SavingsMovement:
+    """Débite CE compte pour une opération EXTERNE dont l'écriture comptable a DÉJÀ ÉTÉ POSÉE
+    PAR L'APPELANT — miroir exact de `enregistrer_credit_externe`, sens inverse (prélèvement
+    automatique de crédit CR5d, voir credit/prelevement.py). Le plancher
+    (min_balance/decouvert_autorise) est déjà respecté par L'APPELANT avant ce point (montant
+    plafonné à ce qui est disponible) : ici on ne fait qu'enregistrer, aucun nouveau contrôle.
+    Mouvement + solde, FLUSH SEULEMENT — jamais de commit, pour composer DANS la transaction
+    unique de l'appelant."""
+    nouveau_solde = compte.balance - montant
+    mouvement = SavingsMovement(
+        account_id=compte.id,
+        sens="debit",
+        amount=montant,
+        balance_after=nouveau_solde,
+        operation_type=operation_type,
+        label=label,
+        journal_entry_id=journal_entry_id,
+        created_by=par,
+    )
+    db.add(mouvement)
+    compte.balance = nouveau_solde
+    compte.updated_by = par
+    db.flush()
+    return mouvement
+
+
 def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
     compte_epargne, compte_charge_interet = db.execute(
         select(Product.compte_epargne_id, Product.compte_charge_interet_id).where(

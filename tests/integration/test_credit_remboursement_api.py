@@ -1,12 +1,12 @@
 """API Crédit CR4 — remboursement : D CAISSE / C CREDIT / C PRODUITS_INTERETS.
 
-  - la ligne PRODUITS_INTERETS est OMISE proprement quand interets=0 (produit à taux nul) —
-    pas une ligne à montant zéro, une ligne ABSENTE ;
-  - un montant qui ne correspond pas exactement au total de l'échéance est refusé avec le
-    montant attendu, lisible par un caissier ;
-  - la transaction unique : une panne injectée APRÈS que la pièce a été posée (même patron que
-    test_guichet_concurrence.py::test_operation_interrompue_ne_laisse_rien) ne laisse rien à
-    moitié — ni pièce orpheline, ni échéance marquée payée, ni registre de remboursement.
+- la ligne PRODUITS_INTERETS est OMISE proprement quand interets=0 (produit à taux nul) —
+  pas une ligne à montant zéro, une ligne ABSENTE ;
+- un montant qui ne correspond pas exactement au total de l'échéance est refusé avec le
+  montant attendu, lisible par un caissier ;
+- la transaction unique : une panne injectée APRÈS que la pièce a été posée (même patron que
+  test_guichet_concurrence.py::test_operation_interrompue_ne_laisse_rien) ne laisse rien à
+  moitié — ni pièce orpheline, ni échéance marquée payée, ni registre de remboursement.
 """
 
 import uuid
@@ -107,8 +107,12 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     role = db.execute(select(Role).where(Role.code == role_code)).scalar_one()
     suffixe = uuid.uuid4().hex[:8]
     user = User(
-        matricule=f"MAT-{suffixe}", email=f"{suffixe}@ex.com", username=f"u{suffixe}",
-        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="A",
+        matricule=f"MAT-{suffixe}",
+        email=f"{suffixe}@ex.com",
+        username=f"u{suffixe}",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"),
+        last_name="T",
+        first_name="A",
         primary_agency_id=agence.id,
     )
     db.add(user)
@@ -130,8 +134,14 @@ def _demande_decaissee(
     duree_echeances: int = 6,
 ) -> Application:
     demande = creer_demande(
-        db, tier_id=tier_id, agency_id=agence.id, product_id=produit.id,
-        montant_demande=montant, duree_echeances=duree_echeances, objet="Test", par=None,
+        db,
+        tier_id=tier_id,
+        agency_id=agence.id,
+        product_id=produit.id,
+        montant_demande=montant,
+        duree_echeances=duree_echeances,
+        objet="Test",
+        par=None,
     )
     decider(db, demande, decision="approuve", montant_decide=montant, motif="OK", par=None)
     decaisser(db, demande, par=None)
@@ -235,6 +245,51 @@ def test_ligne_interets_omise_quand_le_taux_est_nul(client: TestClient, db: Sess
     assert len(lignes) == 2  # D CAISSE / C CREDIT — aucune ligne d'intérêts
 
 
+# --- CR5d : les paramètres compte_source_id/journal_code ne changent RIEN au guichet -------
+
+
+def test_rembourser_guichet_defaut_reste_caisse_journal_ca(client: TestClient, db: Session) -> None:
+    """Non-régression EXPLICITE (voir credit/remboursement.py, section CR5d) : appelé SANS
+    compte_source_id/journal_code (le seul chemin qu'emprunte le guichet CR6d, via l'endpoint
+    HTTP), rembourser() pose TOUJOURS D le compte de caisse de l'agence, sur le journal CA —
+    comme avant l'ajout de ces paramètres pour le prélèvement automatique (CR5d)."""
+    agence = _agence(db, "RMA13")
+    tier_id = _tier(db, agence)
+    produit = _produit(db, taux_bp=1200)
+    demande = _demande_decaissee(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    premiere = db.execute(
+        select(Installment)
+        .where(Installment.application_id == demande.id)
+        .order_by(Installment.numero)
+        .limit(1)
+    ).scalar_one()
+
+    reponse = client.post(
+        f"/credit/demandes/{demande.id}/remboursement",
+        json={"montant": premiere.total},
+        headers=caissier,
+    )
+    assert reponse.status_code == 200
+
+    ligne = db.execute(
+        text(
+            "SELECT j.code, a.account_number "
+            "FROM comptabilite.journal_lines jl "
+            "JOIN comptabilite.journal_entries je ON je.id = jl.entry_id "
+            "JOIN comptabilite.journals j ON j.id = je.journal_id "
+            "JOIN comptabilite.accounts a ON a.id = jl.account_id "
+            "WHERE je.description = :d AND jl.side = 'D'"
+        ),
+        {"d": f"Remboursement crédit {demande.application_number} #1"},
+    ).one()
+    assert ligne.code == "CA"
+    assert (
+        ligne.account_number == "101111"
+    )  # le compte de caisse de l'agence, pas un compte epargne
+
+
 # --- Montant incorrect : message actionnable ---------------------------------------------
 
 
@@ -276,8 +331,14 @@ def test_aucune_echeance_a_regler_si_pas_decaisse(client: TestClient, db: Sessio
     tier_id = _tier(db, agence)
     produit = _produit(db)
     demande = creer_demande(
-        db, tier_id=tier_id, agency_id=agence.id, product_id=produit.id,
-        montant_demande=100000, duree_echeances=4, objet="Non décaissée", par=None,
+        db,
+        tier_id=tier_id,
+        agency_id=agence.id,
+        product_id=produit.id,
+        montant_demande=100000,
+        duree_echeances=4,
+        objet="Non décaissée",
+        par=None,
     )
     db.commit()
     caissier = _entete(db, agence, "CAISSIER")
@@ -321,9 +382,7 @@ def test_aucune_echeance_a_regler_si_deja_solde(client: TestClient, db: Session)
 # --- CR5b : paiement partiel — garde-fou (a) -----------------------------------------------
 
 
-def test_remboursement_partiel_bascule_partiellement_paye(
-    client: TestClient, db: Session
-) -> None:
+def test_remboursement_partiel_bascule_partiellement_paye(client: TestClient, db: Session) -> None:
     agence = _agence(db, "RMA8")
     tier_id = _tier(db, agence)
     produit = _produit(db, taux_bp=1200)
@@ -357,9 +416,7 @@ def test_remboursement_partiel_bascule_partiellement_paye(
     assert echeance.paid_at is None  # pas encore soldée
 
 
-def test_remboursement_complete_apres_partiel_bascule_paye(
-    client: TestClient, db: Session
-) -> None:
+def test_remboursement_complete_apres_partiel_bascule_paye(client: TestClient, db: Session) -> None:
     agence = _agence(db, "RMA9")
     tier_id = _tier(db, agence)
     produit = _produit(db, taux_bp=1200)
@@ -394,11 +451,15 @@ def test_remboursement_complete_apres_partiel_bascule_paye(
     assert echeance.paid_at is not None
 
     # DEUX paiements distincts pour LA MÊME échéance — la contrainte UNIQUE est bien tombée.
-    paiements = db.execute(
-        select(Repayment)
-        .where(Repayment.installment_id == premiere.id)
-        .order_by(Repayment.created_at)
-    ).scalars().all()
+    paiements = (
+        db.execute(
+            select(Repayment)
+            .where(Repayment.installment_id == premiere.id)
+            .order_by(Repayment.created_at)
+        )
+        .scalars()
+        .all()
+    )
     assert len(paiements) == 2
     assert paiements[0].montant_total == moitie
     assert paiements[1].montant_total == reste

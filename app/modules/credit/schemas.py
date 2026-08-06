@@ -159,8 +159,8 @@ class CompteRattachementPalier(BaseModel):
 
 
 class PalierSouffrance(BaseModel):
-    """Un palier de souffrance (CR5a). `compte_encours`/`compte_dotation` absents (None) =
-    non rattaché — provisoire, à compléter via l'écran."""
+    """Un palier de souffrance (CR5a ; `compte_provision`/`compte_reprise` ajoutés en CR5c).
+    Comptes absents (None) = non rattaché — provisoire, à compléter via l'écran."""
 
     id: uuid.UUID
     code: str
@@ -169,6 +169,8 @@ class PalierSouffrance(BaseModel):
     taux_provision_bp: int
     compte_encours: CompteRattachementPalier | None
     compte_dotation: CompteRattachementPalier | None
+    compte_provision: CompteRattachementPalier | None
+    compte_reprise: CompteRattachementPalier | None
     is_terminal: bool
     is_provisional: bool
 
@@ -180,6 +182,8 @@ class CreationPalier(BaseModel):
     taux_provision_bp: int = Field(ge=0, le=10000)
     compte_encours: str | None = None
     compte_dotation: str | None = None
+    compte_provision: str | None = None
+    compte_reprise: str | None = None
     is_terminal: bool = False
     motif: str = Field(min_length=3, max_length=500)
 
@@ -194,9 +198,19 @@ class ModificationPalier(BaseModel):
     taux_provision_bp: int = Field(ge=0, le=10000)
     compte_encours: str | None = None
     compte_dotation: str | None = None
+    compte_provision: str | None = None
+    compte_reprise: str | None = None
     is_terminal: bool = False
     motif: str = Field(min_length=3, max_length=500)
 
 
 class SuppressionPalier(BaseModel):
     motif: str = Field(min_length=3, max_length=500)
+
+
+class RapportReclassement(BaseModel):
+    """Résultat d'une exécution du job de reclassification (CR5c)."""
+
+    dossiers_evalues: int
+    reclasses: int
+    ignores_rattachement_manquant: list[str]

@@ -6,13 +6,16 @@ rien n'est écrit en base (à présenter au client avant signature/décaissement
 CR6d : recherche du guichet (numéro de dossier, numéro de tiers ou nom) — voir
 credit.remboursement.create pour l'encaissement lui-même, déjà présent.
 CR5a : paramétrage des paliers de souffrance (Bloc 5) — lecture/écriture de la CONFIGURATION
-seule, aucun crédit n'est encore reclassé automatiquement (CR5c, à venir).
+seule. CR5c : reclassification automatique — un seul endpoint d'exécution, réservé DIRECTION,
+voir reclassification.py pour le détail (encours + provisionnement, comptes dynamiques par
+palier).
 
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
 credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
 décaisser -> credit.decaissement.create (séparée de decide) ; rembourser ->
 credit.remboursement.create (voir seed_security) ; paliers de souffrance -> compta.plan.read /
-compta.plan.manage (même paire que les autres écrans de rattachement Bloc 5).
+compta.plan.manage (même paire que les autres écrans de rattachement Bloc 5) ; reclassification
+-> credit.delinquency.executer (DIRECTION seule, acte d'institution).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                    -> 403 (exige(), en amont)
@@ -24,6 +27,7 @@ TABLE DES ERREURS (un seul endroit) :
   - compte choisi invalide (mode 'epargne' : hors tiers, hors périmètre, fermé) -> 422
   - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
   - code/seuil de palier déjà utilisé par un autre palier, compte de rattachement invalide -> 422
+  - palier encore classé sur un dossier (suppression refusée) -> 422
 """
 
 import uuid
@@ -45,6 +49,7 @@ from app.modules.credit.decaissement import (
 )
 from app.modules.credit.delinquency_parametres import (
     CodeDejaUtiliseError,
+    PalierEnUsageError,
     SeuilDejaUtiliseError,
 )
 from app.modules.credit.demandes import (
@@ -57,6 +62,7 @@ from app.modules.credit.demandes import (
 )
 from app.modules.credit.echeancier import EcheancierImpossibleError
 from app.modules.credit.models import Application, DelinquencyTier, Installment
+from app.modules.credit.reclassification import executer_reclassification
 from app.modules.credit.remboursement import (
     AucuneEcheanceAReglerError,
     MontantIncorrectError,
@@ -78,6 +84,7 @@ from app.modules.credit.schemas import (
     EcheanceLigne,
     ModificationPalier,
     PalierSouffrance,
+    RapportReclassement,
     Remboursement,
     RemboursementRecu,
     SuppressionPalier,
@@ -557,6 +564,8 @@ def _vers_palier(db: Session, palier: DelinquencyTier) -> PalierSouffrance:
         taux_provision_bp=palier.taux_provision_bp,
         compte_encours=_compte_rattachement_palier(db, palier.compte_encours_id),
         compte_dotation=_compte_rattachement_palier(db, palier.compte_dotation_id),
+        compte_provision=_compte_rattachement_palier(db, palier.compte_provision_id),
+        compte_reprise=_compte_rattachement_palier(db, palier.compte_reprise_id),
         is_terminal=palier.is_terminal,
         is_provisional=palier.is_provisional,
     )
@@ -592,6 +601,8 @@ def creer_palier_souffrance_endpoint(
             taux_provision_bp=corps.taux_provision_bp,
             compte_encours_number=corps.compte_encours,
             compte_dotation_number=corps.compte_dotation,
+            compte_provision_number=corps.compte_provision,
+            compte_reprise_number=corps.compte_reprise,
             is_terminal=corps.is_terminal,
             motif=corps.motif,
             par=courant.user_id,
@@ -635,6 +646,8 @@ def modifier_palier_souffrance_endpoint(
             taux_provision_bp=corps.taux_provision_bp,
             compte_encours_number=corps.compte_encours,
             compte_dotation_number=corps.compte_dotation,
+            compte_provision_number=corps.compte_provision,
+            compte_reprise_number=corps.compte_reprise,
             is_terminal=corps.is_terminal,
             motif=corps.motif,
             par=courant.user_id,
@@ -665,13 +678,38 @@ def supprimer_palier_souffrance_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    """Retire un palier. CR5a : aucun crédit ne peut encore y être rattaché (CR5c, à venir)."""
+    """Retire un palier. Refuse si un dossier de crédit y est actuellement classé (CR5c)."""
     palier = db.get(DelinquencyTier, palier_id)
     if palier is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PALIER_INTROUVABLE
         )
-    delinquency_parametres.supprimer(
-        db, palier, motif=corps.motif, par=courant.user_id, contexte=_contexte(request)
+    try:
+        delinquency_parametres.supprimer(
+            db, palier, motif=corps.motif, par=courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except PalierEnUsageError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+
+
+@router.post("/credit/delinquency/executer", response_model=RapportReclassement)
+def executer_reclassification_endpoint(
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.delinquency.executer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RapportReclassement:
+    """Reclasse tous les crédits décaissés (CR5c) — acte D'INSTITUTION réservé DIRECTION,
+    même patron que epargne.interet.executer. Chaque dossier est committé séparément : un
+    paramétrage incomplet sur l'un ne bloque pas les autres (voir reclassification.py)."""
+    rapport = executer_reclassification(
+        db, par=courant.user_id, contexte=_contexte(request)
     )
-    db.commit()
+    return RapportReclassement(
+        dossiers_evalues=rapport.dossiers_evalues,
+        reclasses=rapport.reclasses,
+        ignores_rattachement_manquant=rapport.ignores_rattachement_manquant,
+    )

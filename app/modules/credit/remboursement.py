@@ -1,10 +1,27 @@
-"""Crédit CR4/CR5b — remboursements : encaisser une échéance, D CAISSE / C CREDIT / C
-PRODUITS_INTERETS. Paiement PARTIEL (CR5b, migration 0037) : un ou plusieurs versements
-peuvent régler une même échéance, jusqu'à solde.
+"""Crédit CR4/CR5b/CR5c — remboursements : encaisser une échéance, D CAISSE / C <compte
+courant de l'encours> / C PRODUITS_INTERETS. Paiement PARTIEL (CR5b, migration 0037) : un ou
+plusieurs versements peuvent régler une même échéance, jusqu'à solde.
+
+COMPTE COURANT DE L'ENCOURS (CR5c, migration 0038) : la ligne capital ne crédite plus toujours
+`compte_credit_id` (l'ancrage figé au décaissement) — elle crédite `compte_encours_courant()`,
+qui vaut le compte du palier de souffrance si le dossier est classé, sinon cet ancrage. Sans ce
+changement, un remboursement continuerait de créditer le compte sain même après un passage en
+souffrance : le solde de la classe 29 (créances en souffrance) ne s'apurerait jamais, même quand
+le client rembourse réellement. Voir `app/modules/credit/reclassification.py`.
 
 PAS DE GATE KYC ICI, à la différence du décaissement : encaisser de l'argent qui RENTRE ne
 présente aucun risque (même logique que le refus toujours possible en CR1). Un tiers suspendu
 peut rembourser.
+
+SOURCE DU DÉBIT PARAMÉTRABLE (CR5d, migration 0039) : `compte_source_id`/`journal_code`
+permettent à un appelant EXTERNE (credit/prelevement.py, le prélèvement automatique) de débiter
+un compte d'épargne du tiers plutôt que la caisse — D EPARGNE / journal OD au lieu de D CAISSE /
+journal CA. PAR DÉFAUT (les deux à None/CODE_JOURNAL), le comportement du guichet CR6d est
+STRICTEMENT INCHANGÉ : aucune ligne de ce module n'a bougé pour ce cas, seul un paramètre
+optionnel a été ajouté (voir test_remboursement_guichet_defaut_inchange). La ventilation
+intérêts-d'abord, `compte_encours_courant` (CR5c) et le registre Repayment sont IDENTIQUES dans
+les deux cas — c'est tout l'intérêt de réutiliser cette fonction plutôt que d'en écrire une
+seconde (décision CR5d : « pas une nouvelle logique »).
 
 PIÈCE CONSTRUITE DIRECTEMENT (ecritures.creer_brouillon/valider), PAS via le moteur générique
 poser_depuis_schema : ce dernier applique un même montant à toutes les lignes d'un modèle à
@@ -44,7 +61,7 @@ from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE, CreditError
-from app.modules.credit.models import Application, Installment, Product, Repayment
+from app.modules.credit.models import Application, DelinquencyTier, Installment, Product, Repayment
 from app.modules.parameters.models import Agency
 
 CODE_JOURNAL = "CA"  # journal de caisse — même journal que le décaissement
@@ -72,6 +89,10 @@ class ResultatRemboursement:
     paid_at: datetime
     solde_du: int
     echeance_soldee: bool
+    # La pièce posée — CR5d en a besoin pour comptabiliser le débit côté epargne.accounts avec
+    # LE MÊME journal_entry_id (voir credit/prelevement.py). Jamais exposé à l'API (le router
+    # construit RemboursementRecu champ par champ, ce n'en fait pas partie).
+    entry_id: uuid.UUID
 
 
 def prochaine_echeance(db: Session, application_id: uuid.UUID) -> Installment | None:
@@ -88,6 +109,31 @@ def prochaine_echeance(db: Session, application_id: uuid.UUID) -> Installment | 
     ).scalar_one_or_none()
 
 
+def compte_encours_courant(db: Session, demande: Application) -> uuid.UUID:
+    """Le compte qui porte ACTUELLEMENT l'encours de ce crédit (CR5c) : celui du palier de
+    souffrance si le dossier est classé (`delinquency_tier_id`), sinon l'ancrage
+    `compte_credit_id` figé au décaissement (CR3). Sert à la fois à `rembourser()` (créditer le
+    bon compte) et au job de reclassification (compte D'ORIGINE du transfert, lu AVANT mise à
+    jour de `delinquency_tier_id`).
+
+    Refuse plutôt que deviner si le palier actuel n'a pas de compte d'encours rattaché — un
+    paramétrage incomplet ne doit jamais faire créditer silencieusement le mauvais compte."""
+    if demande.delinquency_tier_id is None:
+        assert demande.compte_credit_id is not None
+        return demande.compte_credit_id
+    compte_encours = db.execute(
+        select(DelinquencyTier.compte_encours_id).where(
+            DelinquencyTier.id == demande.delinquency_tier_id
+        )
+    ).scalar_one()
+    if compte_encours is None:
+        raise RattachementManquantError(
+            "le palier de souffrance actuel de ce crédit n'a pas de compte d'encours rattaché "
+            "(paramétrage)"
+        )
+    return compte_encours
+
+
 def rembourser(
     db: Session,
     demande: Application,
@@ -96,6 +142,8 @@ def rembourser(
     par: uuid.UUID | None,
     entry_date: date | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
+    compte_source_id: uuid.UUID | None = None,
+    journal_code: str = CODE_JOURNAL,
 ) -> ResultatRemboursement:
     """Encaisse un versement sur la PROCHAINE échéance non soldée d'un crédit décaissé — jusqu'à
     concurrence de son solde restant dû (PAS son total d'origine : une échéance déjà
@@ -104,7 +152,10 @@ def rembourser(
     Refuse si le crédit n'est pas décaissé ou déjà entièrement soldé (aucune échéance non
     'paye'), si le montant dépasse le solde restant dû (message actionnable, nommant CE solde),
     ou si un rattachement comptable manque (compte de caisse ou, si ce versement couvre des
-    intérêts, compte produits d'intérêts du produit)."""
+    intérêts, compte produits d'intérêts du produit).
+
+    compte_source_id/journal_code : réservés à un appelant EXTERNE (CR5d, voir docstring module)
+    — None/CODE_JOURNAL (défaut) préserve EXACTEMENT le comportement du guichet CR6d."""
     if demande.status != "decaisse":
         raise AucuneEcheanceAReglerError(
             f"Cette demande ({demande.application_number}) n'est pas décaissée : "
@@ -122,8 +173,7 @@ def rembourser(
     solde_du = echeance.total - montant_paye_avant
     if montant > solde_du:
         raise MontantIncorrectError(
-            f"Le solde restant de cette échéance est de {solde_du} F, "
-            f"vous avez saisi {montant} F."
+            f"Le solde restant de cette échéance est de {solde_du} F, vous avez saisi {montant} F."
         )
 
     # Ventilation intérêts d'abord (PROVISOIRE) : déduite de montant_paye_avant, aucune colonne
@@ -133,36 +183,34 @@ def rembourser(
     part_interets = min(montant, interets_restants)
     part_capital = montant - part_interets
 
-    compte_caisse = db.execute(
-        select(Agency.compte_caisse_id).where(Agency.id == demande.agency_id)
-    ).scalar_one()
-    if compte_caisse is None:
-        raise RattachementManquantError(
-            "l'agence de cette demande n'a pas de compte de caisse rattaché"
-        )
+    # D CAISSE (guichet, défaut) ou D le compte fourni par l'appelant (CR5d : le collectif
+    # épargne du tiers) — voir docstring module.
+    compte_debit = compte_source_id
+    prefixe_libelle = "Remboursement crédit"
+    if compte_debit is None:
+        compte_debit = db.execute(
+            select(Agency.compte_caisse_id).where(Agency.id == demande.agency_id)
+        ).scalar_one()
+        if compte_debit is None:
+            raise RattachementManquantError(
+                "l'agence de cette demande n'a pas de compte de caisse rattaché"
+            )
+    else:
+        prefixe_libelle = "Prélèvement automatique crédit"
 
-    journal_id = db.execute(
-        select(Journal.id).where(Journal.code == CODE_JOURNAL)
-    ).scalar_one()
+    journal_id = db.execute(select(Journal.id).where(Journal.code == journal_code)).scalar_one()
 
+    reference = f"{prefixe_libelle} {demande.application_number} #{echeance.numero}"
     lignes = [
-        LigneSaisie(
-            account_id=compte_caisse,
-            side="D",
-            amount=montant,
-            label=f"Remboursement crédit {demande.application_number} #{echeance.numero}",
-        ),
+        LigneSaisie(account_id=compte_debit, side="D", amount=montant, label=reference),
     ]
     if part_capital > 0:
         lignes.append(
             LigneSaisie(
-                account_id=demande.compte_credit_id,
+                account_id=compte_encours_courant(db, demande),
                 side="C",
                 amount=part_capital,
-                label=(
-                    f"Remboursement crédit {demande.application_number} "
-                    f"#{echeance.numero} (capital)"
-                ),
+                label=f"{reference} (capital)",
             )
         )
     if part_interets > 0:
@@ -177,10 +225,7 @@ def rembourser(
                 account_id=produit.compte_produits_interets_id,
                 side="C",
                 amount=part_interets,
-                label=(
-                    f"Remboursement crédit {demande.application_number} "
-                    f"#{echeance.numero} (intérêts)"
-                ),
+                label=f"{reference} (intérêts)",
             )
         )
 
@@ -192,7 +237,7 @@ def rembourser(
         db,
         journal_id=journal_id,
         entry_date=jour,
-        description=f"Remboursement crédit {demande.application_number} #{echeance.numero}",
+        description=reference,
         lignes=lignes,
         par=par,
     )
@@ -252,4 +297,5 @@ def rembourser(
         paid_at=maintenant,
         solde_du=echeance.total - nouveau_montant_paye,
         echeance_soldee=echeance_soldee,
+        entry_id=entry.id,
     )

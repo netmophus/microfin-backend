@@ -267,6 +267,15 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission(
         "credit.remboursement.create", "credit", "Encaisser le remboursement d'une échéance"
     ),
+    # --- CR5c : reclassification automatique (encours + provisionnement). Acte D'INSTITUTION,
+    # pas de guichet ni de paramétrage — même patron que epargne.interet.executer, réservé
+    # DIRECTION_GENERALE : ça pose des écritures de dotation/reprise sur TOUS les dossiers en
+    # une fois, jamais une action de routine pour un opérationnel.
+    Permission(
+        "credit.delinquency.executer",
+        "credit",
+        "Exécuter la reclassification automatique des crédits en souffrance",
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -439,6 +448,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.rapport.read",
             "tiers.shares.read",
             "perimetre.reseau",
+            "credit.delinquency.executer",
         }
     ),
     "ADMIN_FONCTIONNEL": frozenset(

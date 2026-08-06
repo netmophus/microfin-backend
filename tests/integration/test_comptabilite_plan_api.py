@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
-from app.modules.comptabilite import ecritures
+from app.modules.comptabilite import ecritures, plan
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account
 from app.modules.security.jwt import creer_access_token
@@ -489,3 +489,38 @@ def test_desactiver_sans_permission_403(client: TestClient, db: Session) -> None
         headers=caissier,
     )
     assert reponse.status_code == 403
+
+
+# --- Export CSV — neutralisation d'injection de formule Excel (CLAUDE.md §12) --------
+
+def test_export_neutralise_un_libelle_qui_ressemble_a_une_formule(db: Session) -> None:
+    # Compte posé DIRECTEMENT en base (migration, création API) — pas via l'import CSV : la
+    # neutralisation à l'export doit mordre même sans être passée par lire_lignes.
+    _compte(
+        db,
+        "6T530",
+        name="=CMD|'/C calc'!A1",
+        notes="@SUM(1+9)*cmd|' /C calc'!A0",
+    )
+
+    contenu = plan.exporter_csv(db)
+
+    assert "'=CMD|'/C calc'!A1" in contenu
+    assert "'@SUM(1+9)*cmd|' /C calc'!A0" in contenu
+    # La formule brute (sans apostrophe protectrice) ne doit apparaître nulle part dans l'export.
+    assert "\n=CMD" not in contenu and ";=CMD" not in contenu
+
+
+def test_aller_retour_export_puis_reimport_reste_stable(db: Session) -> None:
+    _compte(db, "6T531", name="+1+1", short_name="-danger")
+
+    exporte = plan.exporter_csv(db)
+    lignes = plan.lire_bytes(exporte.encode("utf-8"))
+    reexporte = plan.exporter_csv(db)
+
+    ligne = next(li for li in lignes if li.account_number == "6T531")
+    # Une seule apostrophe ajoutée, jamais deux : réimporter un export neutralisé ne re-préfixe pas.
+    assert ligne.name == "'+1+1"
+    assert ligne.short_name == "'-danger"
+    # Un second export produit le même contenu que le premier — le cycle est stable.
+    assert exporte == reexporte
