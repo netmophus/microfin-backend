@@ -276,6 +276,14 @@ PERMISSIONS: tuple[Permission, ...] = (
         "credit",
         "Exécuter la reclassification automatique des crédits en souffrance",
     ),
+    # Lecture SEULE des paliers, distincte de compta.plan.read (qui ouvre tout le Bloc 5 —
+    # plan de comptes, rattachements caisse/épargne, paramètres parts). DIRECTION_GENERALE a
+    # besoin de consulter les paliers avant de lancer credit.delinquency.executer, pas de gérer
+    # le paramétrage comptable dans son ensemble — moindre privilège (voir GET
+    # /credit/paliers-souffrance, exige_une_de avec compta.plan.read).
+    Permission(
+        "credit.delinquency.read", "credit", "Consulter les paliers de souffrance"
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -449,6 +457,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.read",
             "perimetre.reseau",
             "credit.delinquency.executer",
+            "credit.delinquency.read",
         }
     ),
     "ADMIN_FONCTIONNEL": frozenset(

@@ -29,6 +29,7 @@ from app.modules.security.autorisation import (
     PERMISSION_RESEAU,
     UtilisateurCourant,
     exige,
+    exige_une_de,
     routes_api,
     routes_sans_permission,
     utilisateur_courant,
@@ -82,6 +83,12 @@ def client(db: Session) -> Generator[TestClient, None, None]:
         courant: Annotated[UtilisateurCourant, Depends(exige("users.read"))],
     ) -> dict[str, Any]:
         return {"voit_tout": courant.voit_tout, "agence": str(courant.agency_id)}
+
+    # OU de permissions (ExigerUneDePermissions) — cas rare, voir credit/router.py
+    # (GET /credit/paliers-souffrance : compta.plan.read OU credit.delinquency.read).
+    @jetable.get("/gate-une-de", dependencies=[Depends(exige_une_de("test.perm.a", "test.perm.b"))])
+    def gate_une_de() -> dict[str, bool]:
+        return {"ok": True}
 
     jetable.dependency_overrides[get_db] = lambda: db
     with TestClient(jetable) as testclient:
@@ -202,6 +209,75 @@ def test_authentifie_avec_la_permission_200(
     reponse = client.get("/gate", headers=_entete(user, "RESPONSABLE_AGENCE"))
 
     assert reponse.status_code == 200
+
+
+def _accorder(db: Session, role_code: str, permission_code: str) -> None:
+    """Accorde une permission ad hoc à un rôle — auto-suffisant, ne dépend d'aucun octroi
+    réel de la matrice (permission de test « test.perm.a/b », jamais dans le seed)."""
+    role = db.execute(select(Role).where(Role.code == role_code)).scalar_one()
+    permission = db.execute(
+        select(Permission).where(Permission.code == permission_code)
+    ).scalar_one_or_none()
+    if permission is None:
+        permission = Permission(
+            code=permission_code, module="test", description="Permission de test"
+        )
+        db.add(permission)
+        db.flush()
+    db.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db.flush()
+
+
+def test_exige_une_de_autorise_via_la_premiere_permission(
+    client: TestClient, db: Session, utilisateur: Callable[[str], User]
+) -> None:
+    _accorder(db, "CAISSIER", "test.perm.a")
+    user = utilisateur("CAISSIER")
+
+    reponse = client.get("/gate-une-de", headers=_entete(user, "CAISSIER"))
+
+    assert reponse.status_code == 200
+
+
+def test_exige_une_de_autorise_via_la_seconde_permission(
+    client: TestClient, db: Session, utilisateur: Callable[[str], User]
+) -> None:
+    _accorder(db, "CAISSIER", "test.perm.b")
+    user = utilisateur("CAISSIER")
+
+    reponse = client.get("/gate-une-de", headers=_entete(user, "CAISSIER"))
+
+    assert reponse.status_code == 200
+
+
+def test_exige_une_de_refuse_si_aucune_des_deux(
+    client: TestClient, utilisateur: Callable[[str], User]
+) -> None:
+    user = utilisateur("CAISSIER")  # ni test.perm.a ni test.perm.b
+
+    reponse = client.get("/gate-une-de", headers=_entete(user, "CAISSIER"))
+
+    assert reponse.status_code == 403
+
+
+def test_exige_une_de_respecte_le_mot_de_passe_provisoire(
+    client: TestClient, db: Session, utilisateur: Callable[[str], User]
+) -> None:
+    """Même garde qu'ExigerPermission : un mot de passe provisoire n'ouvre rien, même à qui
+    détient l'une des permissions."""
+    _accorder(db, "CAISSIER", "test.perm.a")
+    user = utilisateur("CAISSIER")
+    jeton = creer_access_token(
+        user_id=user.id,
+        roles=["CAISSIER"],
+        primary_agency_id=user.primary_agency_id,
+        must_change_password=True,
+    )
+
+    reponse = client.get("/gate-une-de", headers={"Authorization": f"Bearer {jeton}"})
+
+    assert reponse.status_code == 403
+    assert reponse.headers["X-Erreur-Code"] == "password_change_required"
 
 
 def test_utilisateur_courant_sans_permission_reste_accessible(

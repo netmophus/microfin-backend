@@ -220,6 +220,47 @@ def exige(permission: str) -> ExigerPermission:
     return ExigerPermission(permission)
 
 
+class ExigerUneDePermissions:
+    """Dépendance déclarative : autorise si l'acteur détient AU MOINS UNE des permissions
+    listées, sinon 403. Cas RARE — n'existait pas avant les paliers de souffrance (CR5c/d) —
+    réservé aux lectures partagées entre deux périmètres distincts qui n'ont sinon rien en
+    commun (ex. paliers de souffrance : le comptable via `compta.plan.read` — Bloc 5 entier —,
+    la direction via `credit.delinquency.read` — lecture seule, avant de lancer le job).
+
+    Volontairement une classe SŒUR d'ExigerPermission, pas une modification de exige() lui-
+    même : exige() est le point de passage de TOUTE route protégée du projet, une évolution
+    pour un besoin ponctuel y ajouterait un risque disproportionné. Porte quand même
+    `permission_requise` (ici un TUPLE, pas un `str`) : le méta-test (`route_protegee`) ne
+    teste que `hasattr`, peu importe le type — cette route reste donc visible du garde-fou
+    « aucune route sans permission »."""
+
+    def __init__(self, *permissions: str) -> None:
+        self.permission_requise = permissions
+
+    def __call__(
+        self, courant: Annotated[UtilisateurCourant, Depends(utilisateur_courant)]
+    ) -> UtilisateurCourant:
+        # Même garde qu'ExigerPermission, dans le même ordre : un mot de passe provisoire
+        # n'ouvre rien, même à qui détiendrait l'une des permissions.
+        if courant.doit_changer_mot_de_passe:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=MESSAGE_MOT_DE_PASSE_A_RENOUVELER,
+                headers={"X-Erreur-Code": CODE_MOT_DE_PASSE_A_RENOUVELER},
+            )
+        if not any(p in courant.permissions for p in self.permission_requise):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=MESSAGE_PERMISSION_INSUFFISANTE
+            )
+        return courant
+
+
+def exige_une_de(*permissions: str) -> ExigerUneDePermissions:
+    """Fabrique la dépendance qui exige au moins une de `permissions`.
+    Usage : Depends(exige_une_de("compta.plan.read", "credit.delinquency.read"))."""
+    return ExigerUneDePermissions(*permissions)
+
+
 class ExigerAuthentification:
     """Protection « authentifié, sans permission particulière » — cas rare et justifié.
 

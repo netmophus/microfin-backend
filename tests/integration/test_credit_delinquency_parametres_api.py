@@ -123,7 +123,12 @@ def test_seed_installe_les_4_paliers_provisoires(db: Session) -> None:
     assert irrecouvrable.is_terminal is True
     assert irrecouvrable.taux_provision_bp == 10000
     assert irrecouvrable.is_provisional is True
-    assert irrecouvrable.compte_encours_id is None  # jamais codé en dur
+    # PAS d'assertion « compte_encours_id is None » ici : les 4 codes réels de cette base de
+    # dev partagée ont été délibérément rattachés (scénario de test CR5, section 7 du plan de
+    # test — voir docs/conformite-credit.md §2bis), un état désormais permanent et voulu, pas
+    # un artefact. La garantie « jamais codé en dur par le seed » reste couverte SANS dépendre
+    # d'un état pristine partagé par test_seed_ne_touche_pas_un_compte_deja_rattache ci-dessous
+    # (compte fraîchement créé DANS le test, jamais un des 4 codes réels).
 
 
 def test_seed_idempotent_ne_duplique_pas(db: Session) -> None:
@@ -185,6 +190,39 @@ def test_lecture_resout_les_comptes_en_numero_jamais_uuid(client: TestClient, db
 def test_lecture_sans_permission_403(client: TestClient, db: Session) -> None:
     caissier = _entete_auth(db, "CAISSIER")
     reponse = client.get("/credit/paliers-souffrance", headers=caissier)
+    assert reponse.status_code == 403
+
+
+def test_direction_lit_les_paliers_via_credit_delinquency_read(
+    client: TestClient, db: Session
+) -> None:
+    """DIRECTION_GENERALE n'a PAS compta.plan.read (tout le Bloc 5) — seulement
+    credit.delinquency.read (lecture seule des paliers, moindre privilège). exige_une_de doit
+    laisser passer malgré l'absence de compta.plan.read."""
+    _palier(db, "P-DIR", 50)
+    direction = _entete_auth(db, "DIRECTION_GENERALE")
+
+    reponse = client.get("/credit/paliers-souffrance", headers=direction)
+
+    assert reponse.status_code == 200
+    assert any(p["code"] == "P-DIR" for p in reponse.json())
+
+
+def test_direction_ne_peut_pas_modifier_les_paliers(client: TestClient, db: Session) -> None:
+    """La lecture élargie (credit.delinquency.read) n'ouvre PAS l'écriture — toujours
+    compta.plan.manage seul, que DIRECTION_GENERALE n'a pas."""
+    palier = _palier(db, "P-DIR-W", 51)
+    direction = _entete_auth(db, "DIRECTION_GENERALE")
+
+    reponse = client.patch(
+        f"/credit/paliers-souffrance/{palier.id}",
+        json={
+            "code": "P-DIR-W", "libelle": "X", "seuil_jours": 51, "taux_provision_bp": 0,
+            "compte_encours": None, "compte_dotation": None, "is_terminal": False,
+            "motif": "Tentative",
+        },
+        headers=direction,
+    )
     assert reponse.status_code == 403
 
 

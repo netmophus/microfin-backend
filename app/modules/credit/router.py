@@ -13,9 +13,11 @@ palier).
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
 credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
 décaisser -> credit.decaissement.create (séparée de decide) ; rembourser ->
-credit.remboursement.create (voir seed_security) ; paliers de souffrance -> compta.plan.read /
-compta.plan.manage (même paire que les autres écrans de rattachement Bloc 5) ; reclassification
--> credit.delinquency.executer (DIRECTION seule, acte d'institution).
+credit.remboursement.create (voir seed_security) ; paliers de souffrance en LECTURE ->
+compta.plan.read OU credit.delinquency.read (exige_une_de — le comptable via le Bloc 5 entier,
+la direction en lecture seule avant de lancer le job, moindre privilège) ; en ÉCRITURE ->
+compta.plan.manage seul (inchangé) ; aperçu + exécution de la reclassification ->
+credit.delinquency.executer (DIRECTION seule, acte d'institution).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                    -> 403 (exige(), en amont)
@@ -62,7 +64,10 @@ from app.modules.credit.demandes import (
 )
 from app.modules.credit.echeancier import EcheancierImpossibleError
 from app.modules.credit.models import Application, DelinquencyTier, Installment
-from app.modules.credit.reclassification import executer_reclassification
+from app.modules.credit.reclassification import (
+    executer_reclassification,
+    previsualiser_reclassement,
+)
 from app.modules.credit.remboursement import (
     AucuneEcheanceAReglerError,
     MontantIncorrectError,
@@ -70,6 +75,7 @@ from app.modules.credit.remboursement import (
     rembourser,
 )
 from app.modules.credit.schemas import (
+    ApercuReclassement,
     CompteRattachementPalier,
     CreationDemande,
     CreationPalier,
@@ -82,6 +88,8 @@ from app.modules.credit.schemas import (
     EcheanceApercuLigne,
     EcheanceDue,
     EcheanceLigne,
+    LigneApercuReclassement,
+    LigneReclassement,
     ModificationPalier,
     PalierSouffrance,
     RapportReclassement,
@@ -91,7 +99,7 @@ from app.modules.credit.schemas import (
 )
 from app.modules.epargne.models import SavingsAccount
 from app.modules.epargne.operations import CompteInvalideError
-from app.modules.security.autorisation import UtilisateurCourant, exige
+from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
 from app.modules.security.router import _contexte
 from app.modules.tiers.models import Tier
 
@@ -573,10 +581,16 @@ def _vers_palier(db: Session, palier: DelinquencyTier) -> PalierSouffrance:
 
 @router.get("/credit/paliers-souffrance", response_model=list[PalierSouffrance])
 def lister_paliers_souffrance_endpoint(
-    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    courant: Annotated[
+        UtilisateurCourant,
+        Depends(exige_une_de("compta.plan.read", "credit.delinquency.read")),
+    ],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[PalierSouffrance]:
-    """Les paliers de souffrance, triés par ancienneté (CR5a, paramétrage seul)."""
+    """Les paliers de souffrance, triés par ancienneté (CR5a, paramétrage). Lecture ouverte au
+    comptable (compta.plan.read, Bloc 5 entier) ET à la direction (credit.delinquency.read,
+    lecture seule — avant de lancer la reclassification). L'écriture (create/modifier/retirer)
+    reste réservée à compta.plan.manage, inchangée sur les 3 autres routes ci-dessous."""
     return [_vers_palier(db, p) for p in delinquency_parametres.lister(db)]
 
 
@@ -696,6 +710,37 @@ def supprimer_palier_souffrance_endpoint(
         ) from None
 
 
+@router.post("/credit/delinquency/apercu", response_model=ApercuReclassement)
+def previsualiser_reclassement_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.delinquency.executer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuReclassement:
+    """Prévisualisation OBLIGATOIRE avant exécution (dry-run) : CALCULE sans rien écrire — même
+    permission que l'exécution (voir reclassification.py, previsualiser_reclassement).
+    Ne liste que les dossiers dont le palier changerait réellement."""
+    apercu = previsualiser_reclassement(db)
+    return ApercuReclassement(
+        dossiers_evalues=apercu.dossiers_evalues,
+        a_reclasser=apercu.a_reclasser,
+        rattachements_manquants=apercu.rattachements_manquants,
+        lignes=[
+            LigneApercuReclassement(
+                application_number=ligne.application_number,
+                tier_avant_code=ligne.tier_avant_code,
+                tier_avant_libelle=ligne.tier_avant_libelle,
+                tier_apres_code=ligne.tier_apres_code,
+                tier_apres_libelle=ligne.tier_apres_libelle,
+                jours_retard=ligne.jours_retard,
+                encours_actuel=ligne.encours_actuel,
+                provision_avant=ligne.provision_avant,
+                provision_apres=ligne.provision_apres,
+                rattachement_manquant=ligne.rattachement_manquant,
+            )
+            for ligne in apercu.lignes
+        ],
+    )
+
+
 @router.post("/credit/delinquency/executer", response_model=RapportReclassement)
 def executer_reclassification_endpoint(
     request: Request,
@@ -712,4 +757,18 @@ def executer_reclassification_endpoint(
         dossiers_evalues=rapport.dossiers_evalues,
         reclasses=rapport.reclasses,
         ignores_rattachement_manquant=rapport.ignores_rattachement_manquant,
+        lignes=[
+            LigneReclassement(
+                application_number=ligne.application_number,
+                tier_avant_code=ligne.tier_avant_code,
+                tier_avant_libelle=ligne.tier_avant_libelle,
+                tier_apres_code=ligne.tier_apres_code,
+                tier_apres_libelle=ligne.tier_apres_libelle,
+                jours_retard=ligne.jours_retard,
+                encours_actuel=ligne.encours_actuel,
+                provision_avant=ligne.provision_avant,
+                provision_apres=ligne.provision_apres,
+            )
+            for ligne in rapport.lignes
+        ],
     )

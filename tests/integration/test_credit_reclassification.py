@@ -240,6 +240,9 @@ def test_credit_en_souffrance_reclasse_encours_et_provision(db: Session) -> None
     agence = _agence(db, "RCA2")
     tier_id = _tier(db, agence)
     produit = _produit(db)
+    # 202221 est PARTAGÉ par tout dossier crédit non-membre de la base de dev (voir
+    # [[blast-radius-comptes-partages]]) : delta AVANT/APRÈS, jamais une valeur absolue.
+    solde_202221_avant = _solde_compte(db, _cid(db, "202221"))
     demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=100000)
     souffrance = _palier(db, "SOUFFRANCE-A", 35, 1000, "SA")  # 10%
     echeance = _seule_echeance(db, demande)
@@ -264,8 +267,9 @@ def test_credit_en_souffrance_reclasse_encours_et_provision(db: Session) -> None
     demande_rechargee = db.get(Application, demande.id)
     assert demande_rechargee.delinquency_tier_id == souffrance.id
 
-    # L'encours a quitté 202221 (client) pour le compte du palier.
-    assert _solde_compte(db, _cid(db, "202221")) == 0
+    # L'encours a quitté 202221 (client) pour le compte du palier — RETOMBE à son niveau
+    # d'avant CE test (delta nul), pas forcément à zéro sur une base partagée.
+    assert _solde_compte(db, _cid(db, "202221")) == solde_202221_avant
     assert _solde_compte(db, souffrance.compte_encours_id) == 100000
     # Compte de provision, normalement créditeur (contra-actif) : _solde_compte compte le
     # débit en positif, donc une provision de 10000 s'y lit -10000.
@@ -279,6 +283,8 @@ def test_credit_souffrance_puis_solde_redevient_sain_provision_reprise(db: Sessi
     agence = _agence(db, "RCA3")
     tier_id = _tier(db, agence)
     produit = _produit(db)
+    # 202221 est PARTAGÉ (voir [[blast-radius-comptes-partages]]) : delta AVANT/APRÈS.
+    solde_202221_avant = _solde_compte(db, _cid(db, "202221"))
     demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=100000)
     souffrance = _palier(db, "SOUFFRANCE-B", 35, 1000, "SB")  # 10%
     echeance = _seule_echeance(db, demande)
@@ -298,7 +304,8 @@ def test_credit_souffrance_puis_solde_redevient_sain_provision_reprise(db: Sessi
     db.commit()
     assert resultat.echeance_soldee is True
     assert _solde_compte(db, souffrance.compte_encours_id) == 0  # déjà vidé par le remboursement
-    assert _solde_compte(db, _cid(db, "202221")) == 0  # jamais recrédité : bon compte visé
+    # Jamais recrédité : bon compte visé — retombé à son niveau d'avant CE test.
+    assert _solde_compte(db, _cid(db, "202221")) == solde_202221_avant
 
     # 3) Reclassification : le crédit est maintenant soldé (jours_retard=0, aucun palier ne
     #    correspond) -> redevient sain. RIEN à déplacer sur l'encours (déjà à 0), mais la
@@ -389,3 +396,171 @@ def test_endpoint_executer_reclasse_et_rapporte(db: Session, client: TestClient)
 
     demande_rechargee = db.get(Application, demande.id)
     assert demande_rechargee.delinquency_tier_id is not None
+
+
+# --- Aperçu (dry-run) : voir ce qui SERAIT reclassé, sans rien écrire ----------------------
+
+
+def test_apercu_ne_liste_que_ce_qui_changerait_reellement(db: Session) -> None:
+    """Un dossier sain (aucun palier ne s'applique) n'apparaît PAS dans l'aperçu — pas de
+    bruit sur les dossiers qui n'ont rien d'utile à dire."""
+    agence = _agence(db, "RCB1")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=60000)
+    echeance = _seule_echeance(db, demande)
+
+    apercu = reclassification_module.previsualiser_reclassement(
+        db, aujourdhui=echeance.due_date  # 0 jour de retard : sain, rien ne changerait
+    )
+
+    assert demande.application_number not in {x.application_number for x in apercu.lignes}
+
+
+def test_apercu_narrete_rien_narrete_pas_decrit_exactement_ce_que_executer_ferait(
+    db: Session,
+) -> None:
+    """Le point central de l'aperçu : mêmes chiffres que l'exécution réelle, mais RIEN écrit —
+    ni palier changé, ni écriture posée, ni DelinquencyEvent créé."""
+    agence = _agence(db, "RCB2")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=100000)
+    souffrance = _palier(db, "SOUFFRANCE-D", 35, 1000, "SD")  # 10%
+    echeance = _seule_echeance(db, demande)
+    aujourdhui = echeance.due_date + timedelta(days=40)
+
+    entries_avant = db.execute(
+        text("SELECT count(*) FROM comptabilite.journal_entries")
+    ).scalar_one()
+
+    apercu = reclassification_module.previsualiser_reclassement(db, aujourdhui=aujourdhui)
+
+    ligne = next(x for x in apercu.lignes if x.application_number == demande.application_number)
+    assert ligne.tier_avant_code is None
+    assert ligne.tier_apres_code == "SOUFFRANCE-D"
+    assert ligne.jours_retard == 40
+    assert ligne.encours_actuel == 100000
+    assert ligne.provision_avant == 0
+    assert ligne.provision_apres == 10000
+    assert ligne.rattachement_manquant is None
+
+    # RIEN n'a été écrit : ni palier, ni pièce, ni DelinquencyEvent.
+    demande_rechargee = db.get(Application, demande.id)
+    assert demande_rechargee.delinquency_tier_id is None
+    entries_apres = db.execute(
+        text("SELECT count(*) FROM comptabilite.journal_entries")
+    ).scalar_one()
+    assert entries_apres == entries_avant
+    aucun_evenement = db.execute(
+        text(
+            "SELECT 1 FROM credit.delinquency_events WHERE application_id = :a"
+        ),
+        {"a": demande.id},
+    ).first()
+    assert aucun_evenement is None
+    assert _solde_compte(db, souffrance.compte_encours_id) == 0  # jamais déplacé
+
+    # Puis l'EXÉCUTION réelle doit retomber EXACTEMENT sur les mêmes chiffres — l'aperçu ne
+    # ment pas.
+    event = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=aujourdhui, par=None
+    )
+    db.commit()
+    assert event is not None
+    assert event.encours_actuel == ligne.encours_actuel
+    assert event.provision_apres == ligne.provision_apres
+    assert event.tier_apres_id == souffrance.id
+
+
+def test_apercu_detecte_un_rattachement_manquant_sans_lever(db: Session) -> None:
+    """Le palier cible n'a PAS de compte d'encours rattaché — l'aperçu le DIT (rattachement_
+    manquant), il ne lève rien et n'écrit rien (contrairement à reclasser_un_credit, qui
+    lèverait RattachementManquantError sur ce même dossier)."""
+    agence = _agence(db, "RCB3")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=70000)
+    _palier(
+        db, "SOUFFRANCE-E", 35, 1000, "SE", compte_encours_id=None
+    )  # PAS rattaché — exprès
+    echeance = _seule_echeance(db, demande)
+    aujourdhui = echeance.due_date + timedelta(days=40)
+
+    apercu = reclassification_module.previsualiser_reclassement(db, aujourdhui=aujourdhui)
+
+    ligne = next(x for x in apercu.lignes if x.application_number == demande.application_number)
+    assert ligne.rattachement_manquant is not None
+    assert "compte d'encours" in ligne.rattachement_manquant
+    # >= 1, pas ==1 : base de dev partagée, d'autres dossiers décaissés existent déjà et
+    # peuvent eux aussi tomber sous ce même `aujourdhui` hypothétique (voir
+    # [[blast-radius-comptes-partages]]) — seule LA ligne de CE dossier fait foi ci-dessus.
+    assert apercu.rattachements_manquants >= 1
+    assert apercu.a_reclasser >= 1  # compté quand même : c'est CE qui changerait, en théorie
+
+    # La preuve que l'aperçu a raison : l'exécution réelle échoue bien sur CE dossier.
+    with pytest.raises(reclassification_module.RattachementManquantError):
+        reclassification_module.reclasser_un_credit(db, demande, aujourdhui=aujourdhui, par=None)
+
+
+# --- Rapport détaillé de l'exécution : palier avant/après par dossier ----------------------
+
+
+def test_rapport_execution_detaille_le_palier_avant_apres_par_dossier(db: Session) -> None:
+    agence = _agence(db, "RCB4")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=100000)
+    souffrance = _palier(db, "SOUFFRANCE-F", 35, 1000, "SF")
+    echeance = _seule_echeance(db, demande)
+
+    rapport = reclassification_module.executer_reclassification(
+        db, aujourdhui=echeance.due_date + timedelta(days=40), par=None
+    )
+
+    ligne = next(
+        x for x in rapport.lignes if x.application_number == demande.application_number
+    )
+    assert ligne.tier_avant_code is None
+    assert ligne.tier_avant_libelle is None
+    assert ligne.tier_apres_code == "SOUFFRANCE-F"
+    assert ligne.tier_apres_libelle == souffrance.libelle
+    assert ligne.jours_retard == 40
+    assert ligne.provision_apres == 10000
+
+
+def test_endpoint_apercu_refuse_sans_la_permission(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "RCB5")
+    caissier = _entete(db, agence, "CAISSIER")
+
+    reponse = client.post("/credit/delinquency/apercu", headers=caissier)
+
+    assert reponse.status_code == 403
+
+
+def test_endpoint_apercu_repond_sans_rien_ecrire(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "RCB6")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    # Date relative à CURRENT_DATE (pas de date en dur) : doit tomber dans l'exercice OUVERT,
+    # quel que soit le jour réel d'exécution — même patron que test_endpoint_executer_reclasse_
+    # et_rapporte.
+    aujourdhui = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    demande = _demande_decaissee_un_versement(
+        db, agence, tier_id, produit, montant=90000, entry_date=aujourdhui - timedelta(days=130)
+    )
+    _palier(db, "SOUFFRANCE-G", 45, 1000, "SG")
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+
+    reponse = client.post("/credit/delinquency/apercu", headers=direction)
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["dossiers_evalues"] >= 1
+    ligne = next(
+        x for x in corps["lignes"] if x["application_number"] == demande.application_number
+    )
+    assert ligne["tier_apres_code"] == "SOUFFRANCE-G"
+
+    demande_rechargee = db.get(Application, demande.id)
+    assert demande_rechargee.delinquency_tier_id is None  # rien écrit

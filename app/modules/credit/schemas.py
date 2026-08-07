@@ -208,9 +208,49 @@ class SuppressionPalier(BaseModel):
     motif: str = Field(min_length=3, max_length=500)
 
 
+class LigneReclassement(BaseModel):
+    """UN dossier réellement reclassé — palier avant/après en clair, pas un UUID nu."""
+
+    application_number: str
+    tier_avant_code: str | None
+    tier_avant_libelle: str | None
+    tier_apres_code: str | None
+    tier_apres_libelle: str | None
+    jours_retard: int
+    encours_actuel: int
+    provision_avant: int
+    provision_apres: int
+
+
 class RapportReclassement(BaseModel):
     """Résultat d'une exécution du job de reclassification (CR5c)."""
 
     dossiers_evalues: int
     reclasses: int
     ignores_rattachement_manquant: list[str]
+    lignes: list[LigneReclassement]
+
+
+class LigneApercuReclassement(BaseModel):
+    """UN dossier qui SERAIT reclassé (aperçu, dry-run) — même forme que LigneReclassement,
+    plus le motif de refus s'il y en aurait un."""
+
+    application_number: str
+    tier_avant_code: str | None
+    tier_avant_libelle: str | None
+    tier_apres_code: str | None
+    tier_apres_libelle: str | None
+    jours_retard: int
+    encours_actuel: int
+    provision_avant: int
+    provision_apres: int
+    rattachement_manquant: str | None
+
+
+class ApercuReclassement(BaseModel):
+    """Ce que la reclassification FERAIT — aucune écriture (CR5c, dry-run)."""
+
+    dossiers_evalues: int
+    a_reclasser: int
+    rattachements_manquants: int
+    lignes: list[LigneApercuReclassement]

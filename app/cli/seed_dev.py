@@ -47,6 +47,9 @@ COMPTES: tuple[CompteDev, ...] = (
     CompteDev("pret", "CHARGE_PRET", "DEV-PRT", "Charge", "Pret"),
     CompteDev("comite", "MEMBRE_COMITE_CREDIT", "DEV-CMT", "Membre", "ComiteCredit"),
     CompteDev("comptable", "COMPTABLE", "DEV-CPT", "Comptable", "SFD"),
+    # Distinct du compte réel "anne" (GG001) — celui-ci est un compte de DEV, mot de passe
+    # public connu, jamais à confondre avec un compte de production.
+    CompteDev("direction", "DIRECTION_GENERALE", "DEV-DIR", "Direction", "Generale"),
 )
 
 

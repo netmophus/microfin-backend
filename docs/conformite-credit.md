@@ -9,10 +9,12 @@
 > **provisoires**, marquées « À VALIDER » (`is_provisional = TRUE` sur `credit.products` +
 > bannière à l'écran quand le frontend crédit existera). Aucune n'est présentée comme définitive.
 
-**Périmètre couvert (au 04/08/2026)** : CR0 (référentiel produit), CR1 (demande et décision),
+**Périmètre couvert (au 06/08/2026)** : CR0 (référentiel produit), CR1 (demande et décision),
 CR2 (échéancier, calcul pur), CR3 (décaissement, première écriture comptable), CR4
-(remboursements). CR5 (retards/provisionnement) n'est pas encore construit, bloqué en attendant
-les règles de l'expert-comptable (voir §2) — ses points ouverts viendront s'ajouter ici.
+(remboursements), CR5 (retards/provisionnement — 5a paliers, 5b paiement partiel,
+5c reclassification automatique, 5d prélèvement automatique). Le blocage TECHNIQUE annoncé au
+§2 a sauté (chaque palier choisit librement ses comptes, sans correspondance imposée) ; la
+QUESTION RÉGLEMENTAIRE, elle, reste ouverte — voir §2 et son addendum §2bis.
 
 ## 1. Rattachement comptable (CR0) — comptes d'extension classe 20
 
@@ -51,6 +53,43 @@ d'exemple pour le cadrage de la question) : la classe 664 introduit une sous-cou
 contient une erreur/omission. **Rien n'est codé sur cet axe tant que la réponse n'est pas
 connue** (CR5 reste bloqué en attendant, conformément à la décision prise en amont du
 découpage CR0→CR6).
+
+## 2bis. Rattachement de démonstration posé le 06/08/2026 (scénario de test CR5, section 7)
+
+Pour pouvoir exécuter le job de reclassification sur un scénario de test (un dossier par
+palier), les 4 paliers ont été rattachés à des comptes réels du plan RCSFD — **jusque-là tous
+NULL**, ce qui aurait fait échouer le job sur `RattachementManquantError` pour chaque dossier,
+quel que soit le retard simulé. Posé via l'écran/service de paramétrage réel
+(`credit/delinquency_parametres.py::modifier`), motif tracé en audit, **provisoire comme le
+reste du paramétrage démo** (taux, produits) :
+
+| Palier (code lu en base) | Encours | Dotation | Provision | Reprise |
+|---|---|---|---|---|
+| `SOUFFRANCE` | 292 (souffrance ≤ 6 mois) | 66412 (3-6 mois) | 2991 | 764 |
+| `DOUTEUX` | 293 (souffrance 6-12 mois) | 6642 (6-12 mois) | 2992 | 764 |
+| `IRRECOUVRABLE` | 294 (souffrance 12-24 mois) | 6643 (12-24 mois) | 2993 | 764 |
+
+Encours/provision appariés par LIBELLÉ de tranche (292↔2991, 293↔2992, 294↔2993, tous « au
+plus » la même ancienneté) — pas une invention, une lecture directe des intitulés du plan.
+Dotation : la classe 664 a 4 tranches pour 3 paliers non-IMPAYE (voir §2) ; `66411` (0-3 mois)
+n'est associée à AUCUN palier — aucun des 3 ne correspond à cette fenêtre la plus précoce. Le
+compte de reprise (764) est unique dans le référentiel, sans sous-tranche : partagé par
+construction, pas par choix.
+
+**`IMPAYE` (seuil 1 jour, taux 0 %) — cas à part, à signaler explicitement à l'expert :**
+rattaché à `291` (Crédits immobilisés) **uniquement pour que le transfert d'encours du job
+trouve un compte** (`reclasser_un_credit` l'exige dès qu'un palier s'applique, indépendamment du
+taux de provision — voir `app/modules/credit/reclassification.py`). **Ce rattachement n'a AUCUN
+fondement dans le référentiel officiel pour ce palier précis** : la classe 29 (Comptes de
+crédits en souffrance) ne couvre, par construction BCEAO, que des créances DÉJÀ en souffrance
+(typiquement à partir de plusieurs mois de retard) — pas un simple impayé d'un jour. `291`
+« Crédits immobilisés » est un compte d'un autre registre (contentieux/juridique), pas une
+tranche d'ancienneté ; il a été choisi seulement parce qu'aucun autre compte de classe 29 n'était
+déjà pris. **L'expert-comptable devra trancher : IMPAYE doit-il porter un compte de classe 29 (et
+lequel), ou rester HORS comptabilisation d'encours jusqu'à ce qu'il bascule dans un palier
+réellement provisionné (`SOUFFRANCE`) ?** Dans ce second cas, le job devra apprendre à ne PAS
+exiger `compte_encours_id` pour un palier à `taux_provision_bp = 0` — changement non fait ici,
+hors périmètre du scénario de test.
 
 ## 3. L'échéancier (CR2) — conventions mécaniques assumées, pas des données réglementaires
 

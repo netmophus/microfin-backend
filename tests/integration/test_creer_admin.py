@@ -162,6 +162,27 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     DELETE des agences bute sur fk_tiers_primary_agency_id_agencies. Le rollback rend tout."""
     db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
     db.execute(text("DELETE FROM security.user_agencies"))
+    # Crédit AVANT Épargne : depuis CR5d (migration 0039), applications.compte_prelevement_id
+    # référence epargne.accounts — purger epargne.accounts avant d'avoir vidé applications
+    # violerait cette FK (repayments/installments référencent applications, donc les trois
+    # d'abord). prelevement_tentatives est en CASCADE depuis installments MAIS append-only
+    # (trigger) : la cascade elle-même se heurterait au trigger sans le désactiver le temps de
+    # la purge simulée (transaction annulée au rollback ; sans effet sur la garantie réelle).
+    db.execute(
+        text(
+            "ALTER TABLE credit.prelevement_tentatives "
+            "DISABLE TRIGGER trg_prelevement_tentative_immuable"
+        )
+    )
+    db.execute(text("DELETE FROM credit.repayments"))
+    db.execute(text("DELETE FROM credit.installments"))
+    db.execute(text("DELETE FROM credit.applications"))
+    db.execute(
+        text(
+            "ALTER TABLE credit.prelevement_tentatives "
+            "ENABLE TRIGGER trg_prelevement_tentative_immuable"
+        )
+    )
     # Épargne : les comptes référencent tiers ET agences (module E0+) -> purger avant elles.
     # Les mouvements sont APPEND-ONLY (trigger) : on le désactive le temps de la purge simulée
     # (transaction annulée au rollback ; sans effet sur la garantie réelle).
@@ -170,12 +191,6 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     db.execute(text("DELETE FROM epargne.movements"))
     db.execute(text("ALTER TABLE epargne.movements ENABLE TRIGGER trg_mouvement_immuable"))
     db.execute(text("DELETE FROM epargne.accounts"))
-    # Crédit : repayments/installments référencent applications, applications référence tiers ET
-    # agences -> purger les trois avant elles (aucun trigger d'immuabilité ici, contrairement à
-    # l'épargne/aux parts).
-    db.execute(text("DELETE FROM credit.repayments"))
-    db.execute(text("DELETE FROM credit.installments"))
-    db.execute(text("DELETE FROM credit.applications"))
     # Parts sociales : share_subscriptions est APPEND-ONLY (trigger) et référence tiers.tiers +
     # agencies -> purge avant les tiers, trigger désactivé le temps de la suppression simulée.
     db.execute(

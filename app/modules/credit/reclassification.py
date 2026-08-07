@@ -31,6 +31,16 @@ hors périmètre CR5c.
 CHAQUE DOSSIER EST COMMITTÉ SÉPARÉMENT (voir executer_reclassification, même patron que
 epargne.interets.verser_interets) : un paramétrage incomplet sur un dossier ne bloque pas le
 traitement des autres.
+
+APERÇU (`previsualiser_reclassement`, dry-run) : on MONTRE avant de poser de vraies écritures de
+dotation/reprise sur potentiellement tout le portefeuille — même exigence que le versement
+d'intérêts épargne (E5). N'est PAS un refactor de `reclasser_un_credit` (le chemin qui écrit,
+déjà testé, n'est pas touché) : réutilise les 4 fonctions déjà PURES et publiques ci-dessous
+(`jours_de_retard`, `palier_applicable`, `encours_actuel`, `compte_encours_courant`), et
+duplique en lecture seule les 4 contrôles de rattachement de `reclasser_un_credit` — même
+patron que `epargne/interets.py` (`previsualiser_interets`/`_verser_un` sont deux implémentations
+distinctes qui partagent les primitives de calcul, pas une fonction commune). Si les messages de
+refus de `reclasser_un_credit` changent, les mettre à jour ICI aussi (repère : « MÊME CONTRÔLE »).
 """
 
 import uuid
@@ -272,6 +282,22 @@ def reclasser_un_credit(
     return event
 
 
+@dataclass(frozen=True)
+class LigneReclassement:
+    """UN dossier réellement reclassé — palier avant/après, en clair (pas un UUID nu) pour
+    l'écran : un contrôleur doit pouvoir lire le rapport sans aller rouvrir chaque dossier."""
+
+    application_number: str
+    tier_avant_code: str | None
+    tier_avant_libelle: str | None
+    tier_apres_code: str | None
+    tier_apres_libelle: str | None
+    jours_retard: int
+    encours_actuel: int
+    provision_avant: int
+    provision_apres: int
+
+
 @dataclass
 class RapportReclassement:
     """Résultat d'une exécution du job — même esprit que RapportInterets (épargne E5)."""
@@ -279,6 +305,16 @@ class RapportReclassement:
     dossiers_evalues: int = 0
     reclasses: int = 0
     ignores_rattachement_manquant: list[str] = field(default_factory=list)
+    lignes: list[LigneReclassement] = field(default_factory=list)
+
+
+def _libelles_paliers(db: Session) -> dict[uuid.UUID, tuple[str, str]]:
+    """(code, libelle) de tous les paliers, par id — chargé UNE fois, pour ne pas refaire un
+    aller-retour base par ligne de rapport."""
+    return {
+        p.id: (p.code, p.libelle)
+        for p in db.execute(select(DelinquencyTier)).scalars()
+    }
 
 
 def executer_reclassification(
@@ -301,6 +337,7 @@ def executer_reclassification(
     ids = list(
         db.execute(select(Application.id).where(Application.status == "decaisse")).scalars()
     )
+    paliers = _libelles_paliers(db)
     rapport = RapportReclassement()
     for application_id in ids:
         demande = db.get(Application, application_id)
@@ -321,4 +358,156 @@ def executer_reclassification(
             continue
         db.commit()
         rapport.reclasses += 1
+        avant = paliers.get(event.tier_avant_id) if event.tier_avant_id else None
+        apres = paliers.get(event.tier_apres_id) if event.tier_apres_id else None
+        rapport.lignes.append(
+            LigneReclassement(
+                application_number=demande.application_number,
+                tier_avant_code=avant[0] if avant else None,
+                tier_avant_libelle=avant[1] if avant else None,
+                tier_apres_code=apres[0] if apres else None,
+                tier_apres_libelle=apres[1] if apres else None,
+                jours_retard=event.jours_retard,
+                encours_actuel=event.encours_actuel,
+                provision_avant=event.provision_avant,
+                provision_apres=event.provision_apres,
+            )
+        )
     return rapport
+
+
+# --- Aperçu (dry-run) : voir docstring module ----------------------------------------------
+
+
+@dataclass(frozen=True)
+class LigneApercuReclassement:
+    """UN dossier qui SERAIT reclassé — même forme que LigneReclassement, plus le motif de
+    refus s'il y en aurait un (paramétrage incomplet, connu SANS rien écrire)."""
+
+    application_number: str
+    tier_avant_code: str | None
+    tier_avant_libelle: str | None
+    tier_apres_code: str | None
+    tier_apres_libelle: str | None
+    jours_retard: int
+    encours_actuel: int
+    provision_avant: int
+    provision_apres: int
+    rattachement_manquant: str | None
+
+
+@dataclass
+class ApercuReclassement:
+    """Ce que `executer_reclassification` FERAIT — aucune écriture, aucune mutation. Ne liste
+    QUE les dossiers dont le palier changerait réellement (comme l'aperçu intérêts ne montre
+    que ce qui reste à verser) : un dossier sain ne dit rien d'utile dans ce rapport."""
+
+    dossiers_evalues: int = 0
+    a_reclasser: int = 0
+    rattachements_manquants: int = 0
+    lignes: list[LigneApercuReclassement] = field(default_factory=list)
+
+
+def previsualiser_reclassement(
+    db: Session, *, aujourdhui: date | None = None
+) -> ApercuReclassement:
+    """Calcule ce que `executer_reclassification` ferait, SANS RIEN ÉCRIRE — voir docstring
+    module pour pourquoi ce n'est pas un refactor de `reclasser_un_credit`. Détecte aussi, par
+    dossier, un rattachement manquant qui ferait échouer ce dossier à l'exécution — mêmes 4
+    contrôles que `reclasser_un_credit`, dupliqués ici en lecture seule (repère « MÊME
+    CONTRÔLE » dans les deux fonctions si l'un des messages change)."""
+    jour = aujourdhui
+    if jour is None:
+        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+
+    ids = list(
+        db.execute(select(Application.id).where(Application.status == "decaisse")).scalars()
+    )
+    paliers = _libelles_paliers(db)
+    apercu = ApercuReclassement()
+
+    for application_id in ids:
+        demande = db.get(Application, application_id)
+        assert demande is not None
+        apercu.dossiers_evalues += 1
+
+        tier_avant = (
+            db.get(DelinquencyTier, demande.delinquency_tier_id)
+            if demande.delinquency_tier_id is not None
+            else None
+        )
+        if tier_avant is not None and tier_avant.is_terminal:
+            continue  # gelé — jamais reclassé automatiquement, même à l'aperçu
+
+        jours = jours_de_retard(db, demande.id, aujourdhui=jour)
+        tier_apres = palier_applicable(db, jours)
+        id_avant = tier_avant.id if tier_avant is not None else None
+        id_apres = tier_apres.id if tier_apres is not None else None
+        if id_avant == id_apres:
+            continue  # rien ne changerait pour ce dossier
+
+        encours = encours_actuel(db, demande.id)
+
+        rattachement_manquant: str | None = None
+        # MÊME CONTRÔLE que reclasser_un_credit (compte d'encours du nouveau palier).
+        if tier_apres is not None and tier_apres.compte_encours_id is None:
+            rattachement_manquant = (
+                f"le palier « {tier_apres.libelle} » n'a pas de compte d'encours rattaché "
+                "(paramétrage)"
+            )
+
+        dernier_evenement = (
+            db.execute(
+                select(DelinquencyEvent)
+                .where(DelinquencyEvent.application_id == demande.id)
+                .order_by(DelinquencyEvent.executed_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        provision_avant = dernier_evenement.provision_apres if dernier_evenement else 0
+        taux_cible = tier_apres.taux_provision_bp if tier_apres is not None else 0
+        provision_apres = (encours * taux_cible) // 10000
+
+        # MÊME CONTRÔLE que reclasser_un_credit (reprise de la provision de l'ancien palier).
+        if rattachement_manquant is None and provision_avant > 0:
+            if tier_avant is None:
+                rattachement_manquant = (
+                    "provision positive sans palier antérieur connu — incohérence de données"
+                )
+            elif tier_avant.compte_provision_id is None or tier_avant.compte_reprise_id is None:
+                rattachement_manquant = (
+                    f"le palier « {tier_avant.libelle} » n'a pas de compte de provision/reprise "
+                    "rattaché (paramétrage)"
+                )
+
+        # MÊME CONTRÔLE que reclasser_un_credit (dotation du nouveau palier).
+        if rattachement_manquant is None and provision_apres > 0:
+            assert tier_apres is not None
+            if tier_apres.compte_dotation_id is None or tier_apres.compte_provision_id is None:
+                rattachement_manquant = (
+                    f"le palier « {tier_apres.libelle} » n'a pas de compte de dotation/provision "
+                    "rattaché (paramétrage)"
+                )
+
+        if rattachement_manquant is not None:
+            apercu.rattachements_manquants += 1
+        apercu.a_reclasser += 1
+        avant = paliers.get(id_avant) if id_avant else None
+        apres = paliers.get(id_apres) if id_apres else None
+        apercu.lignes.append(
+            LigneApercuReclassement(
+                application_number=demande.application_number,
+                tier_avant_code=avant[0] if avant else None,
+                tier_avant_libelle=avant[1] if avant else None,
+                tier_apres_code=apres[0] if apres else None,
+                tier_apres_libelle=apres[1] if apres else None,
+                jours_retard=jours,
+                encours_actuel=encours,
+                provision_avant=provision_avant,
+                provision_apres=provision_apres,
+                rattachement_manquant=rattachement_manquant,
+            )
+        )
+    return apercu

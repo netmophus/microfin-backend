@@ -32,8 +32,13 @@ Tous rattachés à l'agence **siège** (AG-001).
 | `pret`      | CHARGE_PRET          | Monter un dossier de crédit (créer une demande), consulter |
 | `comite`    | MEMBRE_COMITE_CREDIT | Décider une demande de crédit (approuver/refuser) |
 | `comptable` | COMPTABLE            | Plan de comptes, tous les écrans de rattachement (Bloc 5), paliers de souffrance (CR5a) |
+| `direction` | DIRECTION_GENERALE   | Actes d'institution : versement des intérêts, reclassification (aperçu + exécution, CR5c), consultation des paliers en lecture seule, portée réseau |
 
 Le compte **admin** (ADMIN_FONCTIONNEL) vient de `creer-admin`, séparément (mot de passe généré).
+
+`direction` est un compte de **DEV**, distinct du compte réel `anne` (GG001, DIRECTION_GENERALE
+lui aussi) qui peut exister sur une base ayant servi au navigateur — ne jamais confondre les
+deux ni toucher au second.
 
 ## Note
 
