@@ -12,21 +12,39 @@ caissier, pas par agence).
 
 UNE SEULE SESSION OUVERTE PAR CAISSIER : vérifié ici (message clair) ET en base (index unique
 partiel `uq_caisse_sessions_caissier_ouverte`, dernier rempart si ce contrôle était contourné).
+
+LECTURE : deux publics, un seul chemin (`lire_session`/`lister_sessions_manquantes`). Le
+CAISSIER voit TOUJOURS ses propres sessions (caisse.session.read, sans condition d'agence —
+c'est SA donnée, comme consulter sa propre fiche). Un tiers (responsable/audit/direction) ne
+voit une session qui n'est pas la sienne que s'il détient caisse.session.read.autres ET qu'elle
+est dans son périmètre (condition_perimetre : son agence, ou tout le réseau pour voit_tout).
+Sert la lettre de demande d'explication (manquant à la fermeture) — document, pas un
+garde-fou : aucune écriture, aucun blocage, orthogonal à CA2 (seuil/motif, pas construit).
 """
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.caisse.models import CaisseSession
+from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
+from app.modules.security.models import User
 
 RESSOURCE = "caisse.session"
+
+# Permission élargie : lire une session qui n'appartient pas à l'acteur (voir docstring module).
+PERMISSION_LECTURE_AUTRES = "caisse.session.read.autres"
+
+TAILLE_PAGE_DEFAUT = 25
+TAILLE_PAGE_MAX = 100
 
 
 class SessionDejaOuverteError(Exception):
@@ -233,6 +251,114 @@ def session_ouverte_de_lacteur(
     ).scalar_one_or_none()
 
 
+def _condition_lecture(courant: UtilisateurCourant) -> ColumnElement[bool]:
+    """La condition de visibilité en LECTURE (lire_session / lister_sessions_manquantes) :
+    TOUJOURS ses propres sessions ; en plus, celles du périmètre si caisse.session.read.autres
+    est détenue. Point UNIQUE — si demain un troisième public apparaît, c'est ici qu'il se
+    branche, pas recopié dans chaque fonction."""
+    if PERMISSION_LECTURE_AUTRES not in courant.permissions:
+        return CaisseSession.caissier_id == courant.user_id
+    return or_(
+        CaisseSession.caissier_id == courant.user_id,
+        courant.condition_perimetre(CaisseSession.agency_id),
+    )
+
+
 def lire_session(db: Session, courant: UtilisateurCourant, session_id: uuid.UUID) -> CaisseSession:
-    """Lit UNE session de l'acteur — mêmes règles IDOR que la fermeture."""
-    return _charger_session_de_lacteur(db, courant, session_id)
+    """Lit UNE session : TOUJOURS la sienne ; une autre SEULEMENT avec caisse.session.read.autres
+    ET dans le périmètre de l'acteur. Hors périmètre ou inexistante -> SessionIntrouvableError
+    (404, jamais 403 : IDOR, on ne révèle pas qu'une session hors de portée existe)."""
+    session = db.execute(
+        select(CaisseSession).where(
+            CaisseSession.id == session_id, _condition_lecture(courant)
+        )
+    ).scalar_one_or_none()
+    if session is None:
+        raise SessionIntrouvableError()
+    return session
+
+
+@dataclass(frozen=True)
+class LigneSessionManquante:
+    """Une session fermée avec un MANQUANT (écart < 0) — identité déjà résolue, comme
+    `audit.consultation.LigneAudit`. Jamais l'excédent : hors périmètre de la lettre de demande
+    d'explication (décision explicite, à confirmer séparément si un jour souhaité)."""
+
+    id: uuid.UUID
+    caissier_id: uuid.UUID
+    caissier_nom: str
+    agency_id: uuid.UUID
+    agency_nom: str
+    compte_caisse_number: str
+    fonds_initial: int
+    opened_at: datetime
+    closed_at: datetime
+    montant_reel_cloture: int
+    solde_theorique_cloture: int
+    ecart: int
+
+
+@dataclass(frozen=True)
+class PageSessionsManquantes:
+    lignes: Sequence[LigneSessionManquante]
+    total: int
+    page: int
+    taille: int
+
+
+def lister_sessions_manquantes(
+    db: Session,
+    courant: UtilisateurCourant,
+    *,
+    page: int = 1,
+    taille: int = TAILLE_PAGE_DEFAUT,
+) -> PageSessionsManquantes:
+    """Sessions FERMÉES avec un manquant, dans le périmètre de lecture de l'acteur (voir
+    `_condition_lecture`) — c'est ce qui permet de retrouver une lettre de demande
+    d'explication plus tard, sans dépendre d'un lien reçu au moment de la fermeture (le
+    caissier retrouve les SIENNES ; un responsable/audit/direction, celles de son périmètre).
+    Triée par fermeture la plus RÉCENTE d'abord."""
+    taille = max(1, min(taille, TAILLE_PAGE_MAX))
+    page = max(1, page)
+
+    conditions = (
+        CaisseSession.status == "fermee",
+        CaisseSession.ecart < 0,
+        _condition_lecture(courant),
+    )
+
+    total = db.execute(
+        select(func.count()).select_from(CaisseSession).where(*conditions)
+    ).scalar_one()
+
+    lignes = db.execute(
+        select(
+            CaisseSession.id,
+            CaisseSession.caissier_id,
+            func.concat_ws(" ", User.first_name, User.last_name).label("caissier_nom"),
+            CaisseSession.agency_id,
+            Agency.name.label("agency_nom"),
+            Account.account_number.label("compte_caisse_number"),
+            CaisseSession.fonds_initial,
+            CaisseSession.opened_at,
+            CaisseSession.closed_at,
+            CaisseSession.montant_reel_cloture,
+            CaisseSession.solde_theorique_cloture,
+            CaisseSession.ecart,
+        )
+        .select_from(CaisseSession)
+        .join(User, User.id == CaisseSession.caissier_id)
+        .join(Agency, Agency.id == CaisseSession.agency_id)
+        .join(Account, Account.id == CaisseSession.compte_caisse_id)
+        .where(*conditions)
+        .order_by(CaisseSession.closed_at.desc())
+        .offset((page - 1) * taille)
+        .limit(taille)
+    ).all()
+
+    return PageSessionsManquantes(
+        lignes=[LigneSessionManquante(**ligne._mapping) for ligne in lignes],
+        total=total,
+        page=page,
+        taille=taille,
+    )

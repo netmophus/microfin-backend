@@ -30,6 +30,8 @@ from app.modules.caisse.service import (
     SessionIntrouvableError,
     calculer_solde_theorique,
     fermer_session,
+    lire_session,
+    lister_sessions_manquantes,
     ouvrir_session,
 )
 from app.modules.credit.decaissement import decaisser
@@ -181,6 +183,26 @@ def _courant(user: User, agence: Agency) -> UtilisateurCourant:
             }
         ),
         primary_agency_id=agence.id, agency_id=agence.id, voit_tout=False,
+    )
+
+
+def _courant_role(
+    user: User,
+    agence: Agency,
+    *,
+    role_code: str,
+    permissions: frozenset[str],
+    voit_tout: bool = False,
+) -> UtilisateurCourant:
+    """Variante de `_courant` pour les rôles de contrôle (responsable/audit/direction) —
+    lecture des sessions d'AUTRES caissiers (caisse.session.read.autres)."""
+    return UtilisateurCourant(
+        user_id=user.id,
+        roles=(role_code,),
+        permissions=permissions,
+        primary_agency_id=agence.id,
+        agency_id=agence.id,
+        voit_tout=voit_tout,
     )
 
 
@@ -497,3 +519,237 @@ def test_endpoint_session_courante_reflete_un_mouvement_en_direct(
     assert fermeture.json()["solde_theorique_cloture"] == 15_000
 
 
+# --- Lecture élargie (lettre de demande d'explication) : la sienne toujours, une autre --------
+# SEULEMENT avec caisse.session.read.autres ET dans le périmètre --------------------------------
+
+
+def _session_fermee(
+    db: Session, courant: UtilisateurCourant, *, fonds_initial: int, montant_reel: int
+) -> CaisseSession:
+    """Une session ouverte puis fermée, SANS mouvement réel : le solde théorique reste égal au
+    fonds initial, donc `montant_reel` pilote directement le signe de l'écart — suffisant pour
+    les tests de PÉRIMÈTRE ci-dessous (le calcul du solde théorique lui-même est prouvé plus
+    haut, pas à reprouver ici)."""
+    session = ouvrir_session(db, courant, fonds_initial=fonds_initial)
+    db.flush()
+    resultat = fermer_session(db, courant, session.id, montant_reel=montant_reel)
+    db.flush()
+    return resultat.session
+
+
+def test_lire_session_responsable_meme_agence_autre_caissier(db: Session) -> None:
+    agence = _agence(db, "CXC1")
+    caissier = _courant(_utilisateur(db, agence, "30"), agence)
+    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+
+    responsable_user = _utilisateur(db, agence, "31", role_code="RESPONSABLE_AGENCE")
+    responsable = _courant_role(
+        responsable_user, agence,
+        role_code="RESPONSABLE_AGENCE", permissions=frozenset({"caisse.session.read.autres"}),
+    )
+
+    lue = lire_session(db, responsable, session.id)
+    assert lue.id == session.id
+    assert lue.ecart == -2_000
+
+
+def test_lire_session_responsable_agence_differente_refuse(db: Session) -> None:
+    agence_a = _agence(db, "CXC2")
+    agence_b = _agence(db, "CXC3")
+    caissier = _courant(_utilisateur(db, agence_a, "32"), agence_a)
+    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+
+    responsable_user = _utilisateur(db, agence_b, "33", role_code="RESPONSABLE_AGENCE")
+    responsable = _courant_role(
+        responsable_user, agence_b,
+        role_code="RESPONSABLE_AGENCE", permissions=frozenset({"caisse.session.read.autres"}),
+    )
+
+    with pytest.raises(SessionIntrouvableError):  # 404, jamais 403 : IDOR
+        lire_session(db, responsable, session.id)
+
+
+def test_lire_session_auditeur_reseau_entier(db: Session) -> None:
+    agence = _agence(db, "CXC4")
+    caissier = _courant(_utilisateur(db, agence, "34"), agence)
+    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+
+    autre_agence = _agence(db, "CXC5")
+    auditeur_user = _utilisateur(db, autre_agence, "35", role_code="AUDITEUR_INTERNE")
+    auditeur = _courant_role(
+        auditeur_user, autre_agence,
+        role_code="AUDITEUR_INTERNE",
+        permissions=frozenset({"caisse.session.read.autres"}),
+        voit_tout=True,
+    )
+
+    lue = lire_session(db, auditeur, session.id)
+    assert lue.id == session.id
+
+
+def test_lire_session_caissier_sans_autres_ne_lit_pas_celle_dun_collegue(db: Session) -> None:
+    """Comportement INCHANGÉ : un simple CAISSIER (caisse.session.read seul) ne voit toujours
+    QUE la sienne, même dans SA PROPRE agence — caisse.session.read.autres est une permission
+    à part, pas un sous-produit implicite de caisse.session.read."""
+    agence = _agence(db, "CXC6")
+    proprietaire = _courant(_utilisateur(db, agence, "36"), agence)
+    session = _session_fermee(db, proprietaire, fonds_initial=10_000, montant_reel=8_000)
+
+    collegue = _courant(_utilisateur(db, agence, "37"), agence)  # caisse.session.read seul
+
+    with pytest.raises(SessionIntrouvableError):
+        lire_session(db, collegue, session.id)
+
+
+def test_endpoint_lire_session_responsable_lit_celle_dun_autre_caissier(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "CXC7")
+    caissier_user = _utilisateur(db, agence, "38")
+    caissier = _courant(caissier_user, agence)
+    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=7_000)
+    db.commit()
+
+    role = db.execute(select(Role).where(Role.code == "RESPONSABLE_AGENCE")).scalar_one()
+    responsable_user = User(
+        matricule="MAT-CXC7", email="cxc7@ex.com", username="cxc7",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="R",
+        primary_agency_id=agence.id,
+    )
+    db.add(responsable_user)
+    db.flush()
+    db.add(UserRole(user_id=responsable_user.id, role_id=role.id))
+    db.commit()
+
+    reponse = client.get(
+        f"/caisse/sessions/{session.id}",
+        headers=_entete(responsable_user, agence, role_code="RESPONSABLE_AGENCE"),
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["ecart"] == -3_000
+    assert reponse.json()["caissier_nom"]  # résolu en clair, pas un UUID nu
+
+
+# --- Liste des manquants (retrouver une lettre plus tard) --------------------------------------
+
+
+def test_lister_manquants_caissier_voit_les_siennes_seulement(db: Session) -> None:
+    agence = _agence(db, "CXD1")
+    a = _courant(_utilisateur(db, agence, "40"), agence)
+    b = _courant(_utilisateur(db, agence, "41"), agence)
+    session_a = _session_fermee(db, a, fonds_initial=10_000, montant_reel=8_000)
+    _session_fermee(db, b, fonds_initial=10_000, montant_reel=6_000)  # pas la sienne
+
+    page = lister_sessions_manquantes(db, a)
+
+    assert [ligne.id for ligne in page.lignes] == [session_a.id]
+    assert page.total == 1
+
+
+def test_lister_manquants_responsable_voit_toute_son_agence(db: Session) -> None:
+    agence = _agence(db, "CXD2")
+    a = _courant(_utilisateur(db, agence, "42"), agence)
+    b = _courant(_utilisateur(db, agence, "43"), agence)
+    session_a = _session_fermee(db, a, fonds_initial=10_000, montant_reel=8_000)
+    session_b = _session_fermee(db, b, fonds_initial=10_000, montant_reel=6_000)
+
+    responsable_user = _utilisateur(db, agence, "44", role_code="RESPONSABLE_AGENCE")
+    responsable = _courant_role(
+        responsable_user, agence,
+        role_code="RESPONSABLE_AGENCE", permissions=frozenset({"caisse.session.read.autres"}),
+    )
+
+    page = lister_sessions_manquantes(db, responsable)
+
+    assert {ligne.id for ligne in page.lignes} == {session_a.id, session_b.id}
+    assert page.total == 2
+
+
+def test_lister_manquants_exclut_excedent_et_ecart_nul(db: Session) -> None:
+    agence = _agence(db, "CXD3")
+    caissier = _courant(_utilisateur(db, agence, "45"), agence)
+    session_manquant = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+    _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=10_000)  # nul
+
+    autre_caissier = _courant(_utilisateur(db, agence, "46"), agence)
+    _session_fermee(db, autre_caissier, fonds_initial=10_000, montant_reel=12_000)  # excédent
+
+    # Périmètre réseau : voit toutes les sessions fermées de la base, seul le filtre écart<0
+    # doit exclure le nul et l'excédent.
+    reseau_user = _utilisateur(db, agence, "47", role_code="DIRECTION_GENERALE")
+    reseau = _courant_role(
+        reseau_user, agence,
+        role_code="DIRECTION_GENERALE",
+        permissions=frozenset({"caisse.session.read.autres"}),
+        voit_tout=True,
+    )
+
+    page = lister_sessions_manquantes(db, reseau)
+
+    ids = {ligne.id for ligne in page.lignes}
+    assert session_manquant.id in ids
+    assert all(ligne.ecart < 0 for ligne in page.lignes)
+
+
+def test_lister_manquants_pagination(db: Session) -> None:
+    agence = _agence(db, "CXD4")
+    caissier = _courant(_utilisateur(db, agence, "48"), agence)
+    for _ in range(3):
+        _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=9_000)
+
+    page = lister_sessions_manquantes(db, caissier, page=1, taille=2)
+
+    assert page.total == 3
+    assert len(page.lignes) == 2
+    assert page.page == 1
+    assert page.taille == 2
+
+
+def test_endpoint_manquants_sans_permission_403(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "CXD5")
+    role = db.execute(select(Role).where(Role.code == "CHARGE_CLIENTELE")).scalar_one()
+    user = User(
+        matricule="MAT-CXD5", email="cxd5@ex.com", username="cxd5",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="C",
+        primary_agency_id=agence.id,
+    )
+    db.add(user)
+    db.flush()
+    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.flush()
+
+    reponse = client.get(
+        "/caisse/sessions",
+        params={"manquant": "true"},
+        headers=_entete(user, agence, role_code="CHARGE_CLIENTELE"),
+    )
+    assert reponse.status_code == 403
+
+
+def test_endpoint_manquants_manquant_false_refuse(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "CXD6")
+    user = _utilisateur(db, agence, "49")
+
+    reponse = client.get(
+        "/caisse/sessions", params={"manquant": "false"}, headers=_entete(user, agence)
+    )
+    assert reponse.status_code == 422
+
+
+def test_endpoint_manquants_caissier_retrouve_sa_propre_session(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "CXD7")
+    caissier_user = _utilisateur(db, agence, "50")
+    caissier = _courant(caissier_user, agence)
+    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=7_500)
+    db.commit()
+
+    reponse = client.get(
+        "/caisse/sessions", params={"manquant": "true"}, headers=_entete(caissier_user, agence)
+    )
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["total"] == 1
+    assert corps["lignes"][0]["id"] == str(session.id)
+    assert corps["lignes"][0]["ecart"] == -2_500

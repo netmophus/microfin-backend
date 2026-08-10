@@ -291,6 +291,13 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("caisse.session.open", "caisse", "Ouvrir une session de caisse"),
     Permission("caisse.session.close", "caisse", "Fermer une session de caisse"),
     Permission("caisse.session.read", "caisse", "Consulter une session de caisse"),
+    # CA-lettre : consulter une session qui n'est pas la sienne (contrôle) — utilisée pour la
+    # lettre de demande d'explication en cas de manquant. Cloisonnée à l'agence via
+    # condition_perimetre (perimetre.reseau pour les rôles qui l'ont déjà) ; le caissier
+    # continue de voir SES propres sessions avec caisse.session.read seul, sans celle-ci.
+    Permission(
+        "caisse.session.read.autres", "caisse", "Consulter la session de caisse d'un autre caissier"
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -412,6 +419,9 @@ MATRICE: dict[str, frozenset[str]] = {
             "credit.demande.read",
             "credit.decaissement.create",
             "credit.remboursement.create",
+            # Contrôle des manquants de caisse de SON agence (lettre de demande d'explication) —
+            # cloisonné, jamais perimetre.reseau (voir plus haut : c'est tout l'intérêt du rôle).
+            "caisse.session.read.autres",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les
@@ -430,6 +440,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.rapprochement.read",
             "compta.rapport.read",
             "tiers.shares.read",
+            "caisse.session.read.autres",
             "perimetre.reseau",
         }
     ),
@@ -468,6 +479,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "perimetre.reseau",
             "credit.delinquency.executer",
             "credit.delinquency.read",
+            "caisse.session.read.autres",
         }
     ),
     "ADMIN_FONCTIONNEL": frozenset(
