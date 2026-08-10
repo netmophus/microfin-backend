@@ -37,6 +37,7 @@ from app.core.database import SessionLocal
 # CLI, non — sans ces imports, toute commande touchant un modèle à FK croisée casse au premier
 # usage (découvert avec configurer-prelevement/prelever-echeances, CR5d).
 from app.modules.audit import models as _audit_models  # noqa: F401
+from app.modules.caisse import models as _caisse_models  # noqa: F401
 from app.modules.comptabilite import models as _comptabilite_models  # noqa: F401
 from app.modules.comptabilite.plan import (
     FichierInvalideError,

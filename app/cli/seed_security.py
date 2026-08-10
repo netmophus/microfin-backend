@@ -284,6 +284,13 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission(
         "credit.delinquency.read", "credit", "Consulter les paliers de souffrance"
     ),
+    # --- Module Caisse (CA1) : ouverture/fermeture de session, une par caissier. Guichet pur,
+    # même patron que epargne.operation.deposit/withdraw -> réservé CAISSIER. read couvre la
+    # consultation par le caissier de SES propres sessions (contrôle réel à l'objet, pas
+    # seulement la permission — voir caisse/service.py::_charger_session_de_lacteur).
+    Permission("caisse.session.open", "caisse", "Ouvrir une session de caisse"),
+    Permission("caisse.session.close", "caisse", "Fermer une session de caisse"),
+    Permission("caisse.session.read", "caisse", "Consulter une session de caisse"),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -321,6 +328,9 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.pay",  # le caissier ENCAISSE la libération / le comptant (l'argent entre)
             "tiers.shares.read",
             "credit.remboursement.create",  # même logique : encaisser une échéance, l'argent entre
+            "caisse.session.open",
+            "caisse.session.close",
+            "caisse.session.read",
         }
     ),
     # Le chargé de clientèle enrôle ET ouvre les comptes d'épargne des membres.

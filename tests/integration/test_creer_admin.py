@@ -176,6 +176,8 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     )
     db.execute(text("DELETE FROM credit.repayments"))
     db.execute(text("DELETE FROM credit.installments"))
+    # delinquency_events référence applications (CR5c) — pas de CASCADE, purger avant.
+    db.execute(text("DELETE FROM credit.delinquency_events"))
     db.execute(text("DELETE FROM credit.applications"))
     db.execute(
         text(
@@ -219,6 +221,9 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     db.execute(text("DELETE FROM tiers.legal_entity_profiles"))
     db.execute(text("DELETE FROM tiers.group_profiles"))
     db.execute(text("DELETE FROM tiers.tiers"))
+    # Caisse (CA1) : sessions.agency_id référence agencies -> purger avant. Mutable (pas de
+    # trigger d'immuabilité, contrairement aux mouvements/pièces ci-dessus) : DELETE simple.
+    db.execute(text("DELETE FROM caisse.sessions"))
     db.execute(text("DELETE FROM parameters.agencies"))
     db.flush()
 

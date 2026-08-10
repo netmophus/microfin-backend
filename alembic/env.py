@@ -14,6 +14,7 @@ from app.core.database import Base
 # visibles par --autogenerate. Tout module de modèles ajouté plus tard doit l'être
 # ici aussi, sinon autogenerate croira ses tables absentes et proposera de les créer.
 from app.modules.audit import models as audit_models
+from app.modules.caisse import models as caisse_models
 from app.modules.comptabilite import models as comptabilite_models
 from app.modules.credit import models as credit_models
 from app.modules.epargne import models as epargne_models

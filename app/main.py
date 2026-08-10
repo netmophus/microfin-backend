@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.modules.audit.router import router as audit_router
+from app.modules.caisse.router import router as caisse_router
 from app.modules.comptabilite.router import router as comptabilite_router
 from app.modules.credit.engagements import enregistrer as enregistrer_engagements_credit
 from app.modules.credit.router import router as credit_router
@@ -40,6 +41,7 @@ app.include_router(tiers_router)
 app.include_router(epargne_router)
 app.include_router(comptabilite_router)
 app.include_router(credit_router)
+app.include_router(caisse_router)
 
 
 @app.get("/health")

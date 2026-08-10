@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
+from app.modules.caisse.models import CaisseSession
 from app.modules.comptabilite.models import (
     Account,
     EntrySchema,
@@ -165,6 +166,8 @@ TABLES_ATTENDUES = frozenset(
         "credit.delinquency_events",
         # Crédit CR5d — prélèvement automatique, anti-double (migration 0039).
         "credit.prelevement_tentatives",
+        # Caisse CA0 — sessions (migration 0040).
+        "caisse.sessions",
     }
 )
 
@@ -223,6 +226,7 @@ MODELES = [
     CreditDelinquencyTier,
     CreditDelinquencyEvent,
     CreditPrelevementTentative,
+    CaisseSession,
 ]
 
 
