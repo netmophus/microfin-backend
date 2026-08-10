@@ -33,6 +33,7 @@ from app.modules.caisse.schemas import (
 from app.modules.caisse.service import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
+    PosteAmbiguError,
     RattachementManquantError,
     SessionDejaFermeeError,
     SessionDejaOuverteError,
@@ -107,7 +108,7 @@ def ouvrir_session_endpoint(
             db, courant, fonds_initial=corps.fonds_initial, contexte=_contexte(request)
         )
         db.commit()
-    except (SessionDejaOuverteError, RattachementManquantError) as erreur:
+    except (SessionDejaOuverteError, RattachementManquantError, PosteAmbiguError) as erreur:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)

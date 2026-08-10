@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
-from app.modules.caisse.models import CaisseSession
+from app.modules.caisse.models import CaisseSession, Poste
 from app.modules.caisse.service import (
     RattachementManquantError,
     SessionDejaOuverteError,
@@ -81,8 +81,21 @@ def _cid(db: Session, numero: str) -> uuid.UUID:
 
 
 def _agence(db: Session, code: str) -> Agency:
-    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=_cid(db, "101111"))
+    """Crée une agence rattachée — ET son poste (Bloc A, `ouvrir_session()` résout maintenant via
+    `caisse.postes`, pas directement `Agency.compte_caisse_id`). Le poste reprend le même compte,
+    miroir du backfill de la migration 0041."""
+    compte_id = _cid(db, "101111")
+    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=compte_id)
     db.add(agence)
+    db.flush()
+    db.add(
+        Poste(
+            agency_id=agence.id,
+            code="01",
+            libelle="Caisse principale",
+            compte_caisse_id=compte_id,
+        )
+    )
     db.flush()
     return agence
 
@@ -314,10 +327,10 @@ def test_le_garde_fou_mord_meme_en_base_index_unique_partiel(db: Session) -> Non
     with pytest.raises(Exception, match=r"uq_caisse_sessions_caissier_ouverte|duplicate key"):
         db.execute(
             text(
-                "INSERT INTO caisse.sessions (agency_id, caissier_id, compte_caisse_id, "
-                "fonds_initial, status) "
-                "SELECT agency_id, caissier_id, compte_caisse_id, fonds_initial, status "
-                "FROM caisse.sessions WHERE caissier_id = :c LIMIT 1"
+                "INSERT INTO caisse.sessions (agency_id, caissier_id, poste_id, "
+                "compte_caisse_id, fonds_initial, status) "
+                "SELECT agency_id, caissier_id, poste_id, compte_caisse_id, fonds_initial, "
+                "status FROM caisse.sessions WHERE caissier_id = :c LIMIT 1"
             ),
             {"c": caissier_user.id},
         )
@@ -391,7 +404,15 @@ def test_fermeture_fige_lecart_et_le_calcul_ne_bouge_plus_apres(db: Session) -> 
 
 def test_deux_caissiers_meme_agence_sessions_simultanees_independantes(db: Session) -> None:
     """La raison d'être du modèle « par caissier », prouvée : deux sessions ouvertes en même
-    temps, même agence, même compte de caisse — chacune ne voit QUE ses propres mouvements."""
+    temps, MÊME compte de caisse sous-jacent — chacune ne voit QUE ses propres mouvements.
+
+    Bloc A : un poste n'a plus qu'une session ouverte à la fois (`uq_caisse_sessions_poste_
+    ouverte`) — deux caissiers ne peuvent plus partager le MÊME poste simultanément (un
+    guichet physique n'a qu'un tiroir). `ouvrir_session()` ne résout encore qu'un poste
+    unique par agence (Bloc C, sélection explicite, pas construit) : on pose donc ici un
+    second poste directement (pas de CRUD Bloc B), sur le MÊME compte, pour isoler ce que ce
+    test veut PROUVER — l'isolation par caissier dans `calculer_solde_theorique` — du choix du
+    poste, qui a ses propres tests dédiés."""
     agence = _agence(db, "CXA9")
     tier_id = _tier(db, agence, "11")
     produit_epargne = _produit_epargne(db)
@@ -400,7 +421,25 @@ def test_deux_caissiers_meme_agence_sessions_simultanees_independantes(db: Sessi
     b = _courant(_utilisateur(db, agence, "12"), agence)
 
     session_a = ouvrir_session(db, a, fonds_initial=1_000)
-    session_b = ouvrir_session(db, b, fonds_initial=2_000)
+    poste_a = db.get(Poste, session_a.poste_id)
+    poste_b = Poste(
+        agency_id=agence.id,
+        code="02",
+        libelle="Caisse 2",
+        compte_caisse_id=poste_a.compte_caisse_id,
+    )
+    db.add(poste_b)
+    db.flush()
+    session_b = CaisseSession(
+        agency_id=agence.id,
+        caissier_id=b.user_id,
+        poste_id=poste_b.id,
+        compte_caisse_id=poste_b.compte_caisse_id,
+        fonds_initial=2_000,
+        created_by=b.user_id,
+        updated_by=b.user_id,
+    )
+    db.add(session_b)
     db.flush()
 
     deposer(db, a, compte.id, 500)

@@ -28,11 +28,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
-from app.modules.caisse.models import CaisseSession
+from app.modules.caisse.models import CaisseSession, Poste
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
@@ -63,6 +64,13 @@ class RattachementManquantError(Exception):
     """L'agence de l'acteur n'a pas de compte de caisse rattaché (paramétrage)."""
 
 
+class PosteAmbiguError(Exception):
+    """Plusieurs postes actifs existent pour cette agence : la SÉLECTION explicite (Bloc C)
+    n'est pas encore construite. Échec propre et clair plutôt qu'une exception SQLAlchemy
+    brute — ce cas devient atteignable depuis le Bloc B (un responsable d'agence peut créer un
+    second poste actif)."""
+
+
 def ouvrir_session(
     db: Session,
     courant: UtilisateurCourant,
@@ -75,8 +83,16 @@ def ouvrir_session(
     lui (message clair ; l'index unique partiel est le dernier rempart en base si ce contrôle
     était contourné par un appel concurrent).
 
-    `compte_caisse_id` est ANCRÉ ici, copié depuis l'agence COURANTE de l'acteur à cet instant —
-    jamais recalculé ensuite, même si le rattachement de l'agence change après coup."""
+    `poste_id`/`compte_caisse_id` sont ANCRÉS ici, copiés depuis le POSTE de l'agence COURANTE
+    de l'acteur à cet instant — jamais recalculés ensuite, même si le rattachement change après
+    coup.
+
+    Bloc A (structurel) : une agence rattachée n'a, pour l'instant, jamais plus d'UN poste actif
+    (backfill de la migration 0041) — cette résolution en profite pour rester le miroir exact du
+    comportement d'avant (une agence, un compte), le temps que la SÉLECTION explicite parmi
+    plusieurs postes assignés (Bloc C) et l'assignation elle-même (Bloc B) existent. Plus d'un
+    poste actif est une situation non gérée ici par construction — elle ne peut pas encore se
+    produire sans le CRUD de Bloc B, absent."""
     deja = db.execute(
         select(CaisseSession.id).where(
             CaisseSession.caissier_id == courant.user_id, CaisseSession.status == "ouverte"
@@ -88,10 +104,16 @@ def ouvrir_session(
             "une nouvelle."
         )
 
-    compte_caisse_id = db.execute(
-        select(Agency.compte_caisse_id).where(Agency.id == courant.agency_id)
-    ).scalar_one_or_none()
-    if compte_caisse_id is None:
+    try:
+        poste = db.execute(
+            select(Poste).where(Poste.agency_id == courant.agency_id, Poste.is_active.is_(True))
+        ).scalar_one_or_none()
+    except MultipleResultsFound:
+        raise PosteAmbiguError(
+            "votre agence a plusieurs postes de caisse actifs : le choix explicite n'est pas "
+            "encore disponible, contactez votre administrateur"
+        ) from None
+    if poste is None or poste.compte_caisse_id is None:
         raise RattachementManquantError(
             "votre agence n'a pas de compte de caisse rattaché (paramétrage)"
         )
@@ -99,7 +121,8 @@ def ouvrir_session(
     session = CaisseSession(
         agency_id=courant.agency_id,
         caissier_id=courant.user_id,
-        compte_caisse_id=compte_caisse_id,
+        poste_id=poste.id,
+        compte_caisse_id=poste.compte_caisse_id,
         fonds_initial=fonds_initial,
         created_by=courant.user_id,
         updated_by=courant.user_id,

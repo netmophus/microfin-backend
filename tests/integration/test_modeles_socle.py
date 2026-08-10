@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
-from app.modules.caisse.models import CaisseSession
+from app.modules.caisse.models import CaisseSession, Poste
 from app.modules.comptabilite.models import (
     Account,
     EntrySchema,
@@ -168,6 +168,8 @@ TABLES_ATTENDUES = frozenset(
         "credit.prelevement_tentatives",
         # Caisse CA0 — sessions (migration 0040).
         "caisse.sessions",
+        # Caisse Bloc A — postes, plusieurs par agence (migration 0041).
+        "caisse.postes",
     }
 )
 
@@ -227,6 +229,7 @@ MODELES = [
     CreditDelinquencyEvent,
     CreditPrelevementTentative,
     CaisseSession,
+    Poste,
 ]
 
 

@@ -1,13 +1,15 @@
-"""Modèles ORM du schéma « caisse » — sessions (CA0/CA1, migration 0040).
+"""Modèles ORM du schéma « caisse » — postes (Bloc A, migration 0041) et sessions (CA0/CA1,
+migration 0040).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT la migration (exigence
 d'alembic check pour les FK — les CHECK/index partiels ne sont pas comparés, la base les impose).
 
 Module Caisse : ouverture/fermeture de journée PAR CAISSIER (jamais deux sessions ouvertes à la
-fois pour le même caissier — UNIQUE partiel en base, `uq_caisse_sessions_caissier_ouverte`). Le
-solde théorique n'est jamais stocké en continu — voir service.py::calculer_solde_theorique,
-calcul dérivé des écritures validées, même philosophie que epargne.accounts.balance (cache,
-jamais une seconde vérité)."""
+fois pour le même caissier — UNIQUE partiel en base, `uq_caisse_sessions_caissier_ouverte`) ET,
+depuis le Bloc A, PAR POSTE (`uq_caisse_sessions_poste_ouverte` — un poste n'a qu'une session
+ouverte à la fois, quel que soit le caissier). Le solde théorique n'est jamais stocké en
+continu — voir service.py::calculer_solde_theorique, calcul dérivé des écritures validées, même
+philosophie que epargne.accounts.balance (cache, jamais une seconde vérité)."""
 
 import uuid
 from datetime import datetime
@@ -26,21 +28,68 @@ GEN_UUID = sa.text("gen_random_uuid()")
 FK_USER = "security.users.id"
 
 
+class Poste(Base):
+    """Un poste de caisse (guichet physique) — PLUSIEURS par agence (Bloc A). Le compte
+    historique de chaque agence rattachée est devenu son premier poste (migration 0041,
+    backfill). `compte_caisse_id` nullable, même discipline que l'ancien
+    `Agency.compte_caisse_id` : un poste sans compte rattaché est un état légitime.
+
+    AUCUN CRUD ici (Bloc B, pas construit) — cette table n'existe pour l'instant que via le
+    backfill de la migration. `ouvrir_session()` résout le poste unique actif de l'agence,
+    provisoirement (miroir exact du comportement actuel, une agence = un compte) : la
+    SÉLECTION explicite parmi plusieurs postes assignés est Bloc C, à venir."""
+
+    __tablename__ = "postes"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("agency_id", "code", name="uq_caisse_postes_agency_code"),
+        sa.Index("ix_caisse_postes_agency", "agency_id"),
+        {"schema": "caisse"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    agency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.agencies.id"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    libelle: Mapped[str] = mapped_column(sa.String(150), nullable=False)
+    compte_caisse_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    is_active: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.true()
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<Poste {self.agency_id} {self.code}>"
+
+
 class CaisseSession(Base):
     """Une session de caisse — CA1 : ouverture, fermeture, calcul/affichage de l'écart. AUCUNE
     écriture comptable posée par ce module en CA1 (voir CA3), aucun blocage sur écart (CA2).
 
-    `compte_caisse_id` : ANCRÉ à l'ouverture (copié depuis `Agency.compte_caisse_id` à cet
-    instant), jamais recalculé ensuite — même discipline que `compte_credit_id`/
-    `compte_collectif_id` ailleurs dans ce projet."""
+    `poste_id` : le poste dont dépend cette session (Bloc A). `compte_caisse_id` : ANCRÉ à
+    l'ouverture (copié depuis `poste.compte_caisse_id` à cet instant, plus depuis
+    `Agency.compte_caisse_id` directement — voir migration 0041), jamais recalculé ensuite —
+    même discipline que `compte_credit_id`/`compte_collectif_id` ailleurs dans ce projet."""
 
     __tablename__ = "sessions"
     __table_args__: tuple[Any, ...] = (
         sa.Index("ix_caisse_sessions_agency", "agency_id"),
         sa.Index("ix_caisse_sessions_caissier", "caissier_id"),
+        sa.Index("ix_caisse_sessions_poste", "poste_id"),
         sa.Index(
             "uq_caisse_sessions_caissier_ouverte",
             "caissier_id",
+            unique=True,
+            postgresql_where=sa.text("status = 'ouverte'"),
+        ),
+        sa.Index(
+            "uq_caisse_sessions_poste_ouverte",
+            "poste_id",
             unique=True,
             postgresql_where=sa.text("status = 'ouverte'"),
         ),
@@ -62,6 +111,9 @@ class CaisseSession(Base):
         UUID, sa.ForeignKey("parameters.agencies.id"), nullable=False
     )
     caissier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_USER), nullable=False)
+    poste_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("caisse.postes.id"), nullable=False
+    )
     compte_caisse_id: Mapped[uuid.UUID] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.accounts.id"), nullable=False
     )
