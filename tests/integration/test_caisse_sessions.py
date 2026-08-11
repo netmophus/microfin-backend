@@ -25,6 +25,7 @@ from app.core.database import engine, get_db
 from app.main import app
 from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.service import (
+    AucuneSessionOuverteError,
     RattachementManquantError,
     SessionDejaOuverteError,
     SessionIntrouvableError,
@@ -33,6 +34,7 @@ from app.modules.caisse.service import (
     lire_session,
     lister_sessions_manquantes,
     ouvrir_session,
+    resoudre_session_active,
 )
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
@@ -860,3 +862,55 @@ def test_endpoint_manquants_caissier_retrouve_sa_propre_session(
     assert corps["total"] == 1
     assert corps["lignes"][0]["id"] == str(session.id)
     assert corps["lignes"][0]["ecart"] == -2_500
+
+
+# --- Bloc C2 : resoudre_session_active() — isolée, RIEN NE L'APPELLE ENCORE -------------------
+# Le câblage guichet par guichet vient aux blocs suivants (C3 à C6). Ces tests prouvent le
+# comportement du point de contrôle SEUL, avant tout branchement.
+
+
+def test_resoudre_session_active_retrouve_la_session_ouverte(db: Session) -> None:
+    agence = _agence(db, "CXE1")
+    caissier = _courant(_utilisateur(db, agence, "51"), agence)
+    session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
+    db.flush()
+
+    trouvee = resoudre_session_active(db, caissier.user_id)
+
+    assert trouvee.id == session.id
+    assert trouvee.compte_caisse_id == session.compte_caisse_id  # déjà ancré, pas recalculé ici
+
+
+def test_resoudre_session_active_sans_aucune_session_refuse(db: Session) -> None:
+    agence = _agence(db, "CXE2")
+    caissier = _courant(_utilisateur(db, agence, "52"), agence)
+
+    with pytest.raises(AucuneSessionOuverteError):
+        resoudre_session_active(db, caissier.user_id)
+
+
+def test_resoudre_session_active_ignore_une_session_fermee(db: Session) -> None:
+    """La session existe bien, mais elle est FERMÉE : ne doit pas être rendue comme active —
+    prouve le filtre sur `status == 'ouverte'`, pas seulement « une session existe »."""
+    agence = _agence(db, "CXE3")
+    caissier = _courant(_utilisateur(db, agence, "53"), agence)
+    session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
+    db.flush()
+    fermer_session(db, caissier, session.id, montant_reel=10_000)
+    db.flush()
+
+    with pytest.raises(AucuneSessionOuverteError):
+        resoudre_session_active(db, caissier.user_id)
+
+
+def test_resoudre_session_active_ignore_la_session_dun_autre_caissier(db: Session) -> None:
+    """Filtre bien sur CE caissier — la session ouverte d'un collègue, même poste, même
+    agence, ne doit jamais être rendue à sa place."""
+    agence = _agence(db, "CXE4")
+    caissier_a = _courant(_utilisateur(db, agence, "54"), agence)
+    caissier_b_user = _utilisateur(db, agence, "55")
+    _ouvrir(db, caissier_a, agence, fonds_initial=10_000)
+    db.flush()
+
+    with pytest.raises(AucuneSessionOuverteError):
+        resoudre_session_active(db, caissier_b_user.id)
