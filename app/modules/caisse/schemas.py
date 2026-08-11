@@ -7,8 +7,14 @@ from pydantic import BaseModel, Field
 
 
 class OuvertureSession(BaseModel):
-    """Fonds initial compté PHYSIQUEMENT par le caissier à l'ouverture."""
+    """Fonds initial compté PHYSIQUEMENT par le caissier à l'ouverture. `poste_id` TOUJOURS
+    obligatoire (Bloc C) — jamais déduit côté serveur, même quand l'acteur n'a qu'un seul poste
+    assigné : un contrat à deux formes (obligatoire si plusieurs postes, optionnel sinon) serait
+    plus fragile, et un raccourci valable aujourd'hui deviendrait un trou silencieux le jour où
+    l'agence gagne un second poste. Le pré-remplissage (un seul poste assigné -> présélectionné)
+    est un confort d'ÉCRAN, jamais une valeur implicite acceptée côté serveur sans confirmation."""
 
+    poste_id: uuid.UUID
     fonds_initial: int = Field(ge=0)
 
 

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
-from app.modules.caisse.models import CaisseSession, Poste
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.service import (
     RattachementManquantError,
     SessionDejaOuverteError,
@@ -185,6 +185,48 @@ def _utilisateur(db: Session, agence: Agency, suffixe: str, role_code: str = "CA
     return user
 
 
+def _poste_principal(db: Session, agence: Agency) -> Poste:
+    """Le poste que `_agence()` a créé (code "01", Bloc A)."""
+    return db.execute(
+        select(Poste).where(Poste.agency_id == agence.id, Poste.code == "01")
+    ).scalar_one()
+
+
+def _assigner(db: Session, poste: Poste, user_id: uuid.UUID) -> None:
+    """Idempotent : plusieurs appels pour le même (poste, utilisateur) — par exemple un caissier
+    qui rouvre une session après en avoir fermé une précédente — ne doivent pas tenter une
+    seconde ligne sur la même clé composite."""
+    deja = db.execute(
+        select(PosteAssignation).where(
+            PosteAssignation.poste_id == poste.id, PosteAssignation.user_id == user_id
+        )
+    ).scalar_one_or_none()
+    if deja is None:
+        db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+        db.flush()
+
+
+def _ouvrir(
+    db: Session, courant: UtilisateurCourant, agence: Agency, *, fonds_initial: int
+) -> CaisseSession:
+    """Assigne l'acteur au poste principal de l'agence (précondition Bloc C) puis ouvre une
+    session — centralise la paire assignation+ouverture répétée par presque tous les tests de ce
+    fichier. `ouvrir_session()` reste testé nu là où la résolution du poste EST le point (ex.
+    `test_ouverture_sans_compte_caisse_rattache_refuse`)."""
+    poste = _poste_principal(db, agence)
+    _assigner(db, poste, courant.user_id)
+    return ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=fonds_initial)
+
+
+def _poste_id_assigne(db: Session, agence: Agency, user: User) -> uuid.UUID:
+    """Pour les tests HTTP : assigne l'utilisateur au poste principal et renvoie son id, à
+    inclure dans le corps JSON de `POST /caisse/sessions` (`poste_id` désormais obligatoire,
+    Bloc C)."""
+    poste = _poste_principal(db, agence)
+    _assigner(db, poste, user.id)
+    return poste.id
+
+
 def _courant(user: User, agence: Agency) -> UtilisateurCourant:
     return UtilisateurCourant(
         user_id=user.id,
@@ -262,7 +304,7 @@ def test_solde_theorique_egale_fonds_initial_plus_mouvements_reels_de_la_fenetre
     db.execute(text("ALTER TABLE comptabilite.journal_entries ENABLE TRIGGER trg_entry_immuable"))
     db.flush()
 
-    session = ouvrir_session(db, caissier, fonds_initial=100_000)
+    session = _ouvrir(db, caissier, agence, fonds_initial=100_000)
     db.flush()
 
     # Les SEULS mouvements qui doivent compter : APRÈS l'ouverture, PAR CE caissier.
@@ -294,7 +336,7 @@ def test_solde_theorique_avant_toute_operation_egale_le_fonds_initial(db: Sessio
     caissier_user = _utilisateur(db, agence, "3")
     caissier = _courant(caissier_user, agence)
 
-    session = ouvrir_session(db, caissier, fonds_initial=42_000)
+    session = _ouvrir(db, caissier, agence, fonds_initial=42_000)
     db.flush()
 
     assert calculer_solde_theorique(db, session) == 42_000
@@ -307,11 +349,11 @@ def test_deux_sessions_ouvertes_pour_le_meme_caissier_refuse(db: Session) -> Non
     agence = _agence(db, "CXA3")
     caissier_user = _utilisateur(db, agence, "4")
     caissier = _courant(caissier_user, agence)
-    ouvrir_session(db, caissier, fonds_initial=10_000)
+    _ouvrir(db, caissier, agence, fonds_initial=10_000)
     db.flush()
 
     with pytest.raises(SessionDejaOuverteError):
-        ouvrir_session(db, caissier, fonds_initial=20_000)
+        _ouvrir(db, caissier, agence, fonds_initial=20_000)
 
 
 def test_le_garde_fou_mord_meme_en_base_index_unique_partiel(db: Session) -> None:
@@ -321,7 +363,7 @@ def test_le_garde_fou_mord_meme_en_base_index_unique_partiel(db: Session) -> Non
     agence = _agence(db, "CXA4")
     caissier_user = _utilisateur(db, agence, "5")
     caissier = _courant(caissier_user, agence)
-    ouvrir_session(db, caissier, fonds_initial=10_000)
+    _ouvrir(db, caissier, agence, fonds_initial=10_000)
     db.flush()
 
     with pytest.raises(Exception, match=r"uq_caisse_sessions_caissier_ouverte|duplicate key"):
@@ -337,21 +379,30 @@ def test_le_garde_fou_mord_meme_en_base_index_unique_partiel(db: Session) -> Non
 
 
 def test_ouverture_sans_compte_caisse_rattache_refuse(db: Session) -> None:
+    """Distinct de `PosteIntrouvableError` (Bloc C) : le poste EXISTE, est actif, et l'acteur y
+    est assigné — seul le rattachement comptable manque. Un poste absent/inactif/non-assigné est
+    couvert ailleurs (`test_caisse_postes.py`)."""
     agence = Agency(code="CXA5", name="Agence sans caisse")  # compte_caisse_id NULL, exprès
     db.add(agence)
     db.flush()
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse sans compte", compte_caisse_id=None
+    )
+    db.add(poste)
+    db.flush()
     caissier_user = _utilisateur(db, agence, "6")
     caissier = _courant(caissier_user, agence)
+    _assigner(db, poste, caissier_user.id)
 
     with pytest.raises(RattachementManquantError):
-        ouvrir_session(db, caissier, fonds_initial=10_000)
+        ouvrir_session(db, caissier, poste_id=poste.id, fonds_initial=10_000)
 
 
 def test_fermer_la_session_dun_autre_caissier_refuse_404_pas_403(db: Session) -> None:
     agence = _agence(db, "CXA6")
     proprietaire = _courant(_utilisateur(db, agence, "7"), agence)
     intrus = _courant(_utilisateur(db, agence, "8"), agence)
-    session = ouvrir_session(db, proprietaire, fonds_initial=10_000)
+    session = _ouvrir(db, proprietaire, agence, fonds_initial=10_000)
     db.flush()
 
     with pytest.raises(SessionIntrouvableError):  # -> 404 côté router, jamais 403 (IDOR)
@@ -364,7 +415,7 @@ def test_fermeture_ne_bloque_jamais_meme_avec_un_ecart_enorme(db: Session) -> No
     réel, décision déjà actée."""
     agence = _agence(db, "CXA7")
     caissier = _courant(_utilisateur(db, agence, "9"), agence)
-    session = ouvrir_session(db, caissier, fonds_initial=10_000)
+    session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
     db.flush()
 
     resultat = fermer_session(db, caissier, session.id, montant_reel=999_999_999)
@@ -385,7 +436,7 @@ def test_fermeture_fige_lecart_et_le_calcul_ne_bouge_plus_apres(db: Session) -> 
     caissier_user = _utilisateur(db, agence, "10")
     caissier = _courant(caissier_user, agence)
 
-    session = ouvrir_session(db, caissier, fonds_initial=10_000)
+    session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
     db.flush()
     deposer(db, caissier, compte.id, 5_000)
     resultat = fermer_session(db, caissier, session.id, montant_reel=15_000)
@@ -393,7 +444,7 @@ def test_fermeture_fige_lecart_et_le_calcul_ne_bouge_plus_apres(db: Session) -> 
     assert resultat.ecart == 0
 
     # Une NOUVELLE session, un NOUVEAU dépôt — ne doit rien changer à la session déjà fermée.
-    ouvrir_session(db, caissier, fonds_initial=0)
+    _ouvrir(db, caissier, agence, fonds_initial=0)
     db.flush()
     deposer(db, caissier, compte.id, 1_000)
 
@@ -408,19 +459,20 @@ def test_deux_caissiers_meme_agence_sessions_simultanees_independantes(db: Sessi
 
     Bloc A : un poste n'a plus qu'une session ouverte à la fois (`uq_caisse_sessions_poste_
     ouverte`) — deux caissiers ne peuvent plus partager le MÊME poste simultanément (un
-    guichet physique n'a qu'un tiroir). `ouvrir_session()` ne résout encore qu'un poste
-    unique par agence (Bloc C, sélection explicite, pas construit) : on pose donc ici un
-    second poste directement (pas de CRUD Bloc B), sur le MÊME compte, pour isoler ce que ce
-    test veut PROUVER — l'isolation par caissier dans `calculer_solde_theorique` — du choix du
-    poste, qui a ses propres tests dédiés."""
+    guichet physique n'a qu'un tiroir). Bloc C : chaque caissier ouvre sur SON propre poste,
+    explicitement choisi — l'agence en a deux, un second posé ici (pas de CRUD Bloc B, hors
+    périmètre), sur le MÊME compte, pour isoler ce que ce test veut PROUVER — l'isolation par
+    caissier dans `calculer_solde_theorique` — du choix du poste, qui a ses propres tests
+    dédiés."""
     agence = _agence(db, "CXA9")
     tier_id = _tier(db, agence, "11")
     produit_epargne = _produit_epargne(db)
     compte = _compte_epargne(db, agence, tier_id, produit_epargne)
     a = _courant(_utilisateur(db, agence, "11"), agence)
-    b = _courant(_utilisateur(db, agence, "12"), agence)
+    b_user = _utilisateur(db, agence, "12")
+    b = _courant(b_user, agence)
 
-    session_a = ouvrir_session(db, a, fonds_initial=1_000)
+    session_a = _ouvrir(db, a, agence, fonds_initial=1_000)
     poste_a = db.get(Poste, session_a.poste_id)
     poste_b = Poste(
         agency_id=agence.id,
@@ -430,17 +482,8 @@ def test_deux_caissiers_meme_agence_sessions_simultanees_independantes(db: Sessi
     )
     db.add(poste_b)
     db.flush()
-    session_b = CaisseSession(
-        agency_id=agence.id,
-        caissier_id=b.user_id,
-        poste_id=poste_b.id,
-        compte_caisse_id=poste_b.compte_caisse_id,
-        fonds_initial=2_000,
-        created_by=b.user_id,
-        updated_by=b.user_id,
-    )
-    db.add(session_b)
-    db.flush()
+    _assigner(db, poste_b, b_user.id)
+    session_b = ouvrir_session(db, b, poste_id=poste_b.id, fonds_initial=2_000)
 
     deposer(db, a, compte.id, 500)
     deposer(db, b, compte.id, 300)
@@ -456,8 +499,13 @@ def test_endpoint_ouverture_puis_fermeture_bout_en_bout(client: TestClient, db: 
     agence = _agence(db, "CXB1")
     caissier_user = _utilisateur(db, agence, "20")
     entete = _entete(caissier_user, agence)
+    poste_id = _poste_id_assigne(db, agence, caissier_user)
 
-    ouverture = client.post("/caisse/sessions", json={"fonds_initial": 20_000}, headers=entete)
+    ouverture = client.post(
+        "/caisse/sessions",
+        json={"fonds_initial": 20_000, "poste_id": str(poste_id)},
+        headers=entete,
+    )
     assert ouverture.status_code == 201
     session_id = ouverture.json()["id"]
     assert ouverture.json()["status"] == "ouverte"
@@ -488,7 +536,13 @@ def test_endpoint_sans_permission_403(client: TestClient, db: Session) -> None:
     db.flush()
     entete = _entete(user, agence, role_code="AUDITEUR_INTERNE")
 
-    reponse = client.post("/caisse/sessions", json={"fonds_initial": 1_000}, headers=entete)
+    # poste_id syntaxiquement valide mais non résolu : la permission doit refuser avant même
+    # que le poste soit examiné — un UUID quelconque suffit à isoler ce que ce test prouve.
+    reponse = client.post(
+        "/caisse/sessions",
+        json={"fonds_initial": 1_000, "poste_id": str(uuid.uuid4())},
+        headers=entete,
+    )
     assert reponse.status_code == 403
 
 
@@ -496,7 +550,7 @@ def test_endpoint_fermer_la_session_dun_autre_404(client: TestClient, db: Sessio
     agence = _agence(db, "CXB3")
     proprietaire = _utilisateur(db, agence, "21")
     intrus = _utilisateur(db, agence, "22")
-    ouvrir_session(db, _courant(proprietaire, agence), fonds_initial=5_000)
+    _ouvrir(db, _courant(proprietaire, agence), agence, fonds_initial=5_000)
     db.commit()
     session_id = db.execute(
         select(CaisseSession.id).where(CaisseSession.caissier_id == proprietaire.id)
@@ -533,8 +587,13 @@ def test_endpoint_session_courante_reflete_un_mouvement_en_direct(
     compte = _compte_epargne(db, agence, tier_id, produit_epargne)
     caissier_user = _utilisateur(db, agence, "24")
     entete = _entete(caissier_user, agence)
+    poste_id = _poste_id_assigne(db, agence, caissier_user)
 
-    ouverture = client.post("/caisse/sessions", json={"fonds_initial": 10_000}, headers=entete)
+    ouverture = client.post(
+        "/caisse/sessions",
+        json={"fonds_initial": 10_000, "poste_id": str(poste_id)},
+        headers=entete,
+    )
     assert ouverture.status_code == 201
     assert ouverture.json()["solde_theorique_actuel"] == 10_000
     assert ouverture.json()["status"] == "ouverte"
@@ -563,13 +622,18 @@ def test_endpoint_session_courante_reflete_un_mouvement_en_direct(
 
 
 def _session_fermee(
-    db: Session, courant: UtilisateurCourant, *, fonds_initial: int, montant_reel: int
+    db: Session,
+    courant: UtilisateurCourant,
+    agence: Agency,
+    *,
+    fonds_initial: int,
+    montant_reel: int,
 ) -> CaisseSession:
     """Une session ouverte puis fermée, SANS mouvement réel : le solde théorique reste égal au
     fonds initial, donc `montant_reel` pilote directement le signe de l'écart — suffisant pour
     les tests de PÉRIMÈTRE ci-dessous (le calcul du solde théorique lui-même est prouvé plus
     haut, pas à reprouver ici)."""
-    session = ouvrir_session(db, courant, fonds_initial=fonds_initial)
+    session = _ouvrir(db, courant, agence, fonds_initial=fonds_initial)
     db.flush()
     resultat = fermer_session(db, courant, session.id, montant_reel=montant_reel)
     db.flush()
@@ -579,7 +643,7 @@ def _session_fermee(
 def test_lire_session_responsable_meme_agence_autre_caissier(db: Session) -> None:
     agence = _agence(db, "CXC1")
     caissier = _courant(_utilisateur(db, agence, "30"), agence)
-    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+    session = _session_fermee(db, caissier, agence, fonds_initial=10_000, montant_reel=8_000)
 
     responsable_user = _utilisateur(db, agence, "31", role_code="RESPONSABLE_AGENCE")
     responsable = _courant_role(
@@ -596,7 +660,7 @@ def test_lire_session_responsable_agence_differente_refuse(db: Session) -> None:
     agence_a = _agence(db, "CXC2")
     agence_b = _agence(db, "CXC3")
     caissier = _courant(_utilisateur(db, agence_a, "32"), agence_a)
-    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+    session = _session_fermee(db, caissier, agence_a, fonds_initial=10_000, montant_reel=8_000)
 
     responsable_user = _utilisateur(db, agence_b, "33", role_code="RESPONSABLE_AGENCE")
     responsable = _courant_role(
@@ -611,7 +675,7 @@ def test_lire_session_responsable_agence_differente_refuse(db: Session) -> None:
 def test_lire_session_auditeur_reseau_entier(db: Session) -> None:
     agence = _agence(db, "CXC4")
     caissier = _courant(_utilisateur(db, agence, "34"), agence)
-    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
+    session = _session_fermee(db, caissier, agence, fonds_initial=10_000, montant_reel=8_000)
 
     autre_agence = _agence(db, "CXC5")
     auditeur_user = _utilisateur(db, autre_agence, "35", role_code="AUDITEUR_INTERNE")
@@ -632,7 +696,7 @@ def test_lire_session_caissier_sans_autres_ne_lit_pas_celle_dun_collegue(db: Ses
     à part, pas un sous-produit implicite de caisse.session.read."""
     agence = _agence(db, "CXC6")
     proprietaire = _courant(_utilisateur(db, agence, "36"), agence)
-    session = _session_fermee(db, proprietaire, fonds_initial=10_000, montant_reel=8_000)
+    session = _session_fermee(db, proprietaire, agence, fonds_initial=10_000, montant_reel=8_000)
 
     collegue = _courant(_utilisateur(db, agence, "37"), agence)  # caisse.session.read seul
 
@@ -646,7 +710,7 @@ def test_endpoint_lire_session_responsable_lit_celle_dun_autre_caissier(
     agence = _agence(db, "CXC7")
     caissier_user = _utilisateur(db, agence, "38")
     caissier = _courant(caissier_user, agence)
-    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=7_000)
+    session = _session_fermee(db, caissier, agence, fonds_initial=10_000, montant_reel=7_000)
     db.commit()
 
     role = db.execute(select(Role).where(Role.code == "RESPONSABLE_AGENCE")).scalar_one()
@@ -676,8 +740,8 @@ def test_lister_manquants_caissier_voit_les_siennes_seulement(db: Session) -> No
     agence = _agence(db, "CXD1")
     a = _courant(_utilisateur(db, agence, "40"), agence)
     b = _courant(_utilisateur(db, agence, "41"), agence)
-    session_a = _session_fermee(db, a, fonds_initial=10_000, montant_reel=8_000)
-    _session_fermee(db, b, fonds_initial=10_000, montant_reel=6_000)  # pas la sienne
+    session_a = _session_fermee(db, a, agence, fonds_initial=10_000, montant_reel=8_000)
+    _session_fermee(db, b, agence, fonds_initial=10_000, montant_reel=6_000)  # pas la sienne
 
     page = lister_sessions_manquantes(db, a)
 
@@ -689,8 +753,8 @@ def test_lister_manquants_responsable_voit_toute_son_agence(db: Session) -> None
     agence = _agence(db, "CXD2")
     a = _courant(_utilisateur(db, agence, "42"), agence)
     b = _courant(_utilisateur(db, agence, "43"), agence)
-    session_a = _session_fermee(db, a, fonds_initial=10_000, montant_reel=8_000)
-    session_b = _session_fermee(db, b, fonds_initial=10_000, montant_reel=6_000)
+    session_a = _session_fermee(db, a, agence, fonds_initial=10_000, montant_reel=8_000)
+    session_b = _session_fermee(db, b, agence, fonds_initial=10_000, montant_reel=6_000)
 
     responsable_user = _utilisateur(db, agence, "44", role_code="RESPONSABLE_AGENCE")
     responsable = _courant_role(
@@ -707,11 +771,15 @@ def test_lister_manquants_responsable_voit_toute_son_agence(db: Session) -> None
 def test_lister_manquants_exclut_excedent_et_ecart_nul(db: Session) -> None:
     agence = _agence(db, "CXD3")
     caissier = _courant(_utilisateur(db, agence, "45"), agence)
-    session_manquant = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=8_000)
-    _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=10_000)  # nul
+    session_manquant = _session_fermee(
+        db, caissier, agence, fonds_initial=10_000, montant_reel=8_000
+    )
+    _session_fermee(db, caissier, agence, fonds_initial=10_000, montant_reel=10_000)  # nul
 
     autre_caissier = _courant(_utilisateur(db, agence, "46"), agence)
-    _session_fermee(db, autre_caissier, fonds_initial=10_000, montant_reel=12_000)  # excédent
+    _session_fermee(
+        db, autre_caissier, agence, fonds_initial=10_000, montant_reel=12_000
+    )  # excédent
 
     # Périmètre réseau : voit toutes les sessions fermées de la base, seul le filtre écart<0
     # doit exclure le nul et l'excédent.
@@ -734,7 +802,7 @@ def test_lister_manquants_pagination(db: Session) -> None:
     agence = _agence(db, "CXD4")
     caissier = _courant(_utilisateur(db, agence, "48"), agence)
     for _ in range(3):
-        _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=9_000)
+        _session_fermee(db, caissier, agence, fonds_initial=10_000, montant_reel=9_000)
 
     page = lister_sessions_manquantes(db, caissier, page=1, taille=2)
 
@@ -781,7 +849,7 @@ def test_endpoint_manquants_caissier_retrouve_sa_propre_session(
     agence = _agence(db, "CXD7")
     caissier_user = _utilisateur(db, agence, "50")
     caissier = _courant(caissier_user, agence)
-    session = _session_fermee(db, caissier, fonds_initial=10_000, montant_reel=7_500)
+    session = _session_fermee(db, caissier, agence, fonds_initial=10_000, montant_reel=7_500)
     db.commit()
 
     reponse = client.get(

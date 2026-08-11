@@ -28,12 +28,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, or_, select, text
-from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
-from app.modules.caisse.models import CaisseSession, Poste
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.postes import PosteIntrouvableError
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
@@ -61,20 +61,14 @@ class SessionDejaFermeeError(Exception):
 
 
 class RattachementManquantError(Exception):
-    """L'agence de l'acteur n'a pas de compte de caisse rattaché (paramétrage)."""
-
-
-class PosteAmbiguError(Exception):
-    """Plusieurs postes actifs existent pour cette agence : la SÉLECTION explicite (Bloc C)
-    n'est pas encore construite. Échec propre et clair plutôt qu'une exception SQLAlchemy
-    brute — ce cas devient atteignable depuis le Bloc B (un responsable d'agence peut créer un
-    second poste actif)."""
+    """Le poste choisi n'a pas de compte de caisse rattaché (paramétrage)."""
 
 
 def ouvrir_session(
     db: Session,
     courant: UtilisateurCourant,
     *,
+    poste_id: uuid.UUID,
     fonds_initial: int,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> CaisseSession:
@@ -83,15 +77,18 @@ def ouvrir_session(
     lui (message clair ; l'index unique partiel est le dernier rempart en base si ce contrôle
     était contourné par un appel concurrent).
 
-    `poste_id`/`compte_caisse_id` sont ANCRÉS ici, copiés depuis le POSTE de l'agence COURANTE
-    de l'acteur à cet instant — jamais recalculés ensuite, même si le rattachement change après
-    coup.
+    `poste_id` TOUJOURS soumis par le client (Bloc C) — jamais déduit ici, même quand l'acteur
+    n'a qu'un seul poste assigné (voir `schemas.OuvertureSession`, motif détaillé). Le poste
+    doit être ACTIF, ASSIGNÉ à l'acteur (`PosteAssignation`) ET dans l'agence COURANTE de sa
+    session (`courant.agency_id`, pas seulement une agence où il est habilité — une session de
+    caisse s'ouvre POUR l'agence où l'on travaille aujourd'hui) : filtré par un id FIXE (clé
+    primaire), la requête ne peut plus jamais rendre deux lignes — l'ancienne ambiguïté du
+    Bloc A/B (résolution automatique sur toute l'agence) disparaît structurellement, pas par un
+    garde-fou en plus. Hors périmètre ou inexistant -> `PosteIntrouvableError` (404, jamais
+    403 : IDOR, on ne révèle pas qu'un poste hors de portée existe).
 
-    Bloc A/B (structurels) : cette résolution ne gère encore qu'UN SEUL poste actif par agence
-    — miroir provisoire du comportement d'avant (une agence, un compte), le temps que la
-    SÉLECTION explicite parmi plusieurs postes assignés (Bloc C) existe. Depuis le Bloc B, un
-    responsable d'agence PEUT créer un second poste actif : `PosteAmbiguError` refuse alors
-    proprement plutôt que de laisser fuir une exception SQLAlchemy brute."""
+    `compte_caisse_id` est ANCRÉ ici, copié depuis le POSTE choisi à cet instant — jamais
+    recalculé ensuite, même si le rattachement change après coup."""
     deja = db.execute(
         select(CaisseSession.id).where(
             CaisseSession.caissier_id == courant.user_id, CaisseSession.status == "ouverte"
@@ -103,18 +100,21 @@ def ouvrir_session(
             "une nouvelle."
         )
 
-    try:
-        poste = db.execute(
-            select(Poste).where(Poste.agency_id == courant.agency_id, Poste.is_active.is_(True))
-        ).scalar_one_or_none()
-    except MultipleResultsFound:
-        raise PosteAmbiguError(
-            "votre agence a plusieurs postes de caisse actifs : le choix explicite n'est pas "
-            "encore disponible, contactez votre administrateur"
-        ) from None
-    if poste is None or poste.compte_caisse_id is None:
+    poste = db.execute(
+        select(Poste)
+        .join(PosteAssignation, PosteAssignation.poste_id == Poste.id)
+        .where(
+            Poste.id == poste_id,
+            Poste.agency_id == courant.agency_id,
+            Poste.is_active.is_(True),
+            PosteAssignation.user_id == courant.user_id,
+        )
+    ).scalar_one_or_none()
+    if poste is None:
+        raise PosteIntrouvableError()
+    if poste.compte_caisse_id is None:
         raise RattachementManquantError(
-            "votre agence n'a pas de compte de caisse rattaché (paramétrage)"
+            "ce poste de caisse n'a pas de compte rattaché (paramétrage)"
         )
 
     session = CaisseSession(

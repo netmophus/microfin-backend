@@ -37,10 +37,10 @@ class Poste(Base):
     CRUD (créer/renommer/(dés)activer) + rattachement comptable + assignation des guichetiers :
     `postes.py` (Bloc B), réservés respectivement à `caisse.poste.manage` et `compta.plan.manage`.
 
-    `ouvrir_session()` résout ENCORE le poste unique actif de l'agence, provisoirement (miroir
-    du comportement d'avant Bloc A, une agence = un compte) : la SÉLECTION explicite parmi
-    plusieurs postes assignés est Bloc C, à venir — un second poste actif rend cette résolution
-    ambiguë (`PosteAmbiguError`, service.py), géré proprement mais pas encore résolu."""
+    `ouvrir_session()` (Bloc C) exige désormais un `poste_id` explicite, TOUJOURS soumis par le
+    client — jamais déduit du côté serveur, même quand l'acteur n'a qu'un seul poste assigné.
+    Le poste doit être actif, assigné à l'acteur (`PosteAssignation`) et dans l'agence courante
+    de sa session."""
 
     __tablename__ = "postes"
     __table_args__: tuple[Any, ...] = (

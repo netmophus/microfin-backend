@@ -3,8 +3,11 @@
 Trois périmètres distincts, vus MORDRE :
   - caisse.poste.manage (RESPONSABLE_AGENCE) : CRUD + assignation, jamais hors de SON agence.
   - compta.plan.manage (existant) : rattachement comptable SEUL, institution entière.
-  - PosteAmbiguError (service.py) : un second poste actif rend ouvrir_session() ambigu, refus
-    propre plutôt qu'une exception SQLAlchemy brute — devenu atteignable depuis ce bloc.
+  - poste non assigné à l'acteur (Bloc C, `ouvrir_session()`) : un poste actif et rattaché de
+    SON agence, mais où il n'a jamais été affecté, refuse par `PosteIntrouvableError` — même
+    discipline IDOR que le reste (404, jamais 403). L'ancienne ambiguïté « deux postes actifs »
+    (PosteAmbiguError) a disparu structurellement avec la sélection explicite : filtrer sur
+    `Poste.id == poste_id` (clé primaire) ne peut plus jamais rendre deux lignes.
 """
 
 import uuid
@@ -25,7 +28,7 @@ from app.modules.caisse.postes import (
     PosteIntrouvableError,
     UtilisateurHorsPerimetreError,
 )
-from app.modules.caisse.service import PosteAmbiguError, ouvrir_session
+from app.modules.caisse.service import ouvrir_session
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.jwt import creer_access_token
@@ -186,7 +189,7 @@ def test_desactiver_poste_avec_session_ouverte_refuse(db: Session) -> None:
     caissier_user = _utilisateur(db, agence, "4c", "CAISSIER")
     postes_service.assigner(db, responsable, poste, user_id=caissier_user.id)
     caissier = _caissier(caissier_user, agence)
-    ouvrir_session(db, caissier, fonds_initial=10_000)
+    ouvrir_session(db, caissier, poste_id=poste.id, fonds_initial=10_000)
     db.flush()
 
     with pytest.raises(PosteEnUsageError):
@@ -383,25 +386,24 @@ def test_revoquer_absente_idempotent(db: Session) -> None:
     postes_service.revoquer(db, responsable, poste, user_id=caissier.id)  # jamais assigné
 
 
-# --- PosteAmbiguError : un second poste actif rend ouvrir_session() ambigu --------------------
+# --- Bloc C : poste choisi mais non assigné à l'acteur -----------------------------------------
 
 
-def test_ouvrir_session_deux_postes_actifs_refuse_proprement(db: Session) -> None:
-    agence = _agence(db, "CXS1", avec_compte=False)
+def test_ouvrir_session_poste_non_assigne_refuse(db: Session) -> None:
+    """Le poste existe, est actif, rattaché, dans SA propre agence — mais l'acteur n'y a jamais
+    été affecté (`postes_service.assigner` jamais appelé). Même discipline IDOR que le reste :
+    `PosteIntrouvableError` (404), jamais une exception qui révélerait que le poste existe."""
+    agence = _agence(db, "CXS1")
     responsable = _responsable(_utilisateur(db, agence, "31", "RESPONSABLE_AGENCE"), agence)
-    poste_1 = postes_service.creer(db, responsable, code="01", libelle="Un", motif="init")
-    poste_2 = postes_service.creer(db, responsable, code="02", libelle="Deux", motif="init")
+    poste = postes_service.creer(db, responsable, code="01", libelle="Principal", motif="init")
     postes_service.rattacher_compte(
-        db, responsable, poste_1, compte_caisse_number="101111", motif="init"
-    )
-    postes_service.rattacher_compte(
-        db, responsable, poste_2, compte_caisse_number="101111", motif="init"
+        db, responsable, poste, compte_caisse_number="101111", motif="init"
     )
     caissier_user = _utilisateur(db, agence, "32", "CAISSIER")
     caissier = _caissier(caissier_user, agence)
 
-    with pytest.raises(PosteAmbiguError):
-        ouvrir_session(db, caissier, fonds_initial=10_000)
+    with pytest.raises(PosteIntrouvableError):
+        ouvrir_session(db, caissier, poste_id=poste.id, fonds_initial=10_000)
 
 
 # --- Routeur : permissions, bout en bout -------------------------------------------------------
@@ -457,7 +459,7 @@ def test_endpoint_activation_poste_avec_session_ouverte_422(
     )
     caissier_user = _utilisateur(db, agence, "35", "CAISSIER")
     postes_service.assigner(db, responsable, poste, user_id=caissier_user.id)
-    ouvrir_session(db, _caissier(caissier_user, agence), fonds_initial=10_000)
+    ouvrir_session(db, _caissier(caissier_user, agence), poste_id=poste.id, fonds_initial=10_000)
     db.commit()
 
     reponse = client.patch(
@@ -515,24 +517,22 @@ def test_endpoint_assignations_bout_en_bout(client: TestClient, db: Session) -> 
     assert liste.json() == []
 
 
-def test_endpoint_ouverture_deux_postes_actifs_422(client: TestClient, db: Session) -> None:
-    agence = _agence(db, "CXT6", avec_compte=False)
+def test_endpoint_ouverture_poste_non_assigne_404(client: TestClient, db: Session) -> None:
+    """Pendant HTTP de `test_ouvrir_session_poste_non_assigne_refuse` : poste réel, actif,
+    rattaché — jamais assigné au caissier qui tente de l'ouvrir. 404, jamais 403 (IDOR)."""
+    agence = _agence(db, "CXT6")
     responsable = _responsable(_utilisateur(db, agence, "39", "RESPONSABLE_AGENCE"), agence)
-    poste_1 = postes_service.creer(db, responsable, code="01", libelle="Un", motif="init")
-    poste_2 = postes_service.creer(db, responsable, code="02", libelle="Deux", motif="init")
+    poste = postes_service.creer(db, responsable, code="01", libelle="Principal", motif="init")
     postes_service.rattacher_compte(
-        db, responsable, poste_1, compte_caisse_number="101111", motif="init"
-    )
-    postes_service.rattacher_compte(
-        db, responsable, poste_2, compte_caisse_number="101111", motif="init"
+        db, responsable, poste, compte_caisse_number="101111", motif="init"
     )
     caissier_user = _utilisateur(db, agence, "40", "CAISSIER")
     db.commit()
 
     reponse = client.post(
         "/caisse/sessions",
-        json={"fonds_initial": 10_000},
+        json={"fonds_initial": 10_000, "poste_id": str(poste.id)},
         headers=_entete(caissier_user, agence, "CAISSIER"),
     )
 
-    assert reponse.status_code == 422
+    assert reponse.status_code == 404

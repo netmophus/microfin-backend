@@ -1,5 +1,6 @@
 """Endpoints HTTP du module Caisse — CA1 : ouverture, fermeture, lecture ; CA-lettre : consulter
-la session d'un autre caissier (manquant), lister les manquants.
+la session d'un autre caissier (manquant), lister les manquants ; Bloc C : sélection explicite
+du poste à l'ouverture.
 
 Permissions (exige) : ouvrir -> caisse.session.open ; fermer -> caisse.session.close. Lire une
 session par id, et lister les manquants, acceptent caisse.session.read OU
@@ -10,8 +11,9 @@ caisse/service.py::_condition_lecture.
 TABLE DES ERREURS :
   - permission absente                          -> 403 (exige()/exige_une_de(), en amont)
   - session hors périmètre ou inexistante        -> 404 (jamais 403 : IDOR, on ne révèle rien)
+  - poste hors périmètre, inactif, ou non assigné à l'acteur -> 404 (même discipline IDOR)
   - session déjà ouverte / déjà fermée           -> 422
-  - agence sans compte de caisse rattaché        -> 422
+  - poste sans compte de caisse rattaché         -> 422
 """
 
 import uuid
@@ -47,7 +49,6 @@ from app.modules.caisse.schemas import (
 from app.modules.caisse.service import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
-    PosteAmbiguError,
     RattachementManquantError,
     SessionDejaFermeeError,
     SessionDejaOuverteError,
@@ -118,13 +119,23 @@ def ouvrir_session_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> SessionCaisse:
     """Ouvre une session pour L'ACTEUR — `caissier_id` n'est jamais dans le corps de la requête,
-    toujours dérivé du jeton."""
+    toujours dérivé du jeton. `poste_id`, lui, est TOUJOURS soumis par le client (Bloc C) —
+    jamais déduit ici."""
     try:
         session = ouvrir_session(
-            db, courant, fonds_initial=corps.fonds_initial, contexte=_contexte(request)
+            db,
+            courant,
+            poste_id=corps.poste_id,
+            fonds_initial=corps.fonds_initial,
+            contexte=_contexte(request),
         )
         db.commit()
-    except (SessionDejaOuverteError, RattachementManquantError, PosteAmbiguError) as erreur:
+    except PosteIntrouvableError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    except (SessionDejaOuverteError, RattachementManquantError) as erreur:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
