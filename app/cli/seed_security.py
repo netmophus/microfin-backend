@@ -298,6 +298,15 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission(
         "caisse.session.read.autres", "caisse", "Consulter la session de caisse d'un autre caissier"
     ),
+    # Bloc B : CRUD des postes de caisse (créer/renommer/(dés)activer/assigner un guichetier) —
+    # décision d'ORGANISATION de l'agence, réservée RESPONSABLE_AGENCE, cloisonnée à SON agence
+    # (condition_perimetre). Le rattachement COMPTABLE d'un poste reste compta.plan.manage,
+    # existant, institution entière — décision comptable, pas celle-ci.
+    Permission(
+        "caisse.poste.manage",
+        "caisse",
+        "Gérer les postes de caisse d'une agence (création, assignation)",
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -422,6 +431,9 @@ MATRICE: dict[str, frozenset[str]] = {
             # Contrôle des manquants de caisse de SON agence (lettre de demande d'explication) —
             # cloisonné, jamais perimetre.reseau (voir plus haut : c'est tout l'intérêt du rôle).
             "caisse.session.read.autres",
+            # Bloc B : postes de caisse de SON agence (création, assignation des guichetiers) —
+            # décision d'organisation d'agence, pas comptable (voir la permission elle-même).
+            "caisse.poste.manage",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

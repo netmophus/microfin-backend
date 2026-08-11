@@ -34,10 +34,13 @@ class Poste(Base):
     backfill). `compte_caisse_id` nullable, même discipline que l'ancien
     `Agency.compte_caisse_id` : un poste sans compte rattaché est un état légitime.
 
-    AUCUN CRUD ici (Bloc B, pas construit) — cette table n'existe pour l'instant que via le
-    backfill de la migration. `ouvrir_session()` résout le poste unique actif de l'agence,
-    provisoirement (miroir exact du comportement actuel, une agence = un compte) : la
-    SÉLECTION explicite parmi plusieurs postes assignés est Bloc C, à venir."""
+    CRUD (créer/renommer/(dés)activer) + rattachement comptable + assignation des guichetiers :
+    `postes.py` (Bloc B), réservés respectivement à `caisse.poste.manage` et `compta.plan.manage`.
+
+    `ouvrir_session()` résout ENCORE le poste unique actif de l'agence, provisoirement (miroir
+    du comportement d'avant Bloc A, une agence = un compte) : la SÉLECTION explicite parmi
+    plusieurs postes assignés est Bloc C, à venir — un second poste actif rend cette résolution
+    ambiguë (`PosteAmbiguError`, service.py), géré proprement mais pas encore résolu."""
 
     __tablename__ = "postes"
     __table_args__: tuple[Any, ...] = (
@@ -65,6 +68,34 @@ class Poste(Base):
 
     def __repr__(self) -> str:
         return f"<Poste {self.agency_id} {self.code}>"
+
+
+class PosteAssignation(Base):
+    """Affectation d'un guichetier à un poste (Bloc B) — mirroring EXACT de
+    `security.UserAgency` (habilitation réseau, C6), même forme, précédent déjà en production.
+    Association pure, clé composite, pas de surrogate id.
+
+    Distincte de l'HABILITATION (`user_agencies` : qui peut se connecter où) — ceci est
+    l'AFFECTATION opérationnelle (qui travaille à quel poste aujourd'hui), délibérément dans le
+    schéma `caisse`, pas `security`."""
+
+    __tablename__ = "poste_assignations"
+    __table_args__: tuple[Any, ...] = (
+        sa.Index("ix_caisse_poste_assignations_user", "user_id"),
+        {"schema": "caisse"},
+    )
+
+    poste_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("caisse.postes.id"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey(FK_USER, ondelete="CASCADE"), primary_key=True
+    )
+    granted_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<PosteAssignation {self.poste_id} {self.user_id}>"
 
 
 class CaisseSession(Base):

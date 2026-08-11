@@ -22,13 +22,27 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.caisse.models import CaisseSession
+from app.modules.caisse import postes
+from app.modules.caisse.models import CaisseSession, Poste
+from app.modules.caisse.postes import (
+    CodeDejaUtiliseError,
+    PosteEnUsageError,
+    PosteIntrouvableError,
+    UtilisateurHorsPerimetreError,
+)
 from app.modules.caisse.schemas import (
+    ActivationPoste,
+    AssignationCreation,
+    CreationPoste,
     FermetureSession,
     LigneSessionManquante,
+    ModificationPoste,
     OuvertureSession,
     PageSessionsManquantes,
+    PosteCaisse,
+    RattachementComptePoste,
     SessionCaisse,
+    UtilisateurAssigne,
 )
 from app.modules.caisse.service import (
     TAILLE_PAGE_DEFAUT,
@@ -45,6 +59,7 @@ from app.modules.caisse.service import (
     ouvrir_session,
     session_ouverte_de_lacteur,
 )
+from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
@@ -55,6 +70,7 @@ router = APIRouter(tags=["caisse"])
 
 MESSAGE_SESSION_INTROUVABLE = "Session de caisse introuvable."
 MESSAGE_MANQUANT_SEUL = "Seul manquant=true est pris en charge pour l'instant."
+MESSAGE_POSTE_INTROUVABLE = "Poste de caisse introuvable."
 
 
 def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
@@ -220,3 +236,234 @@ def fermer_session_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
         ) from None
     return _vers_schema(db, resultat.session)
+
+
+# --- Postes de caisse (Bloc B) ---------------------------------------------------------------
+# CRUD (création/renommage/(dés)activation/assignation) : caisse.poste.manage, SON agence.
+# Rattachement comptable : compta.plan.manage (existant), institution entière — comme les 3
+# autres écrans Bloc 5.
+
+
+def _vers_schema_poste(db: Session, poste: Poste) -> PosteCaisse:
+    agence_nom = db.execute(select(Agency.name).where(Agency.id == poste.agency_id)).scalar_one()
+    compte = db.get(Account, poste.compte_caisse_id) if poste.compte_caisse_id else None
+    return PosteCaisse(
+        id=poste.id,
+        agency_id=poste.agency_id,
+        agency_nom=agence_nom,
+        code=poste.code,
+        libelle=poste.libelle,
+        compte_caisse_number=compte.account_number if compte else None,
+        compte_caisse_name=compte.name if compte else None,
+        is_active=poste.is_active,
+    )
+
+
+def _vers_schema_utilisateur(user: User) -> UtilisateurAssigne:
+    nom = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username
+    return UtilisateurAssigne(
+        id=user.id, matricule=user.matricule, username=user.username, nom_complet=nom
+    )
+
+
+@router.get("/caisse/postes", response_model=list[PosteCaisse])
+def lister_postes_endpoint(
+    courant: Annotated[
+        UtilisateurCourant, Depends(exige_une_de("caisse.poste.manage", "compta.plan.manage"))
+    ],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PosteCaisse]:
+    """Institution entière pour compta.plan.manage (comme les autres écrans Bloc 5) ; SON
+    agence sinon (RESPONSABLE_AGENCE)."""
+    return [_vers_schema_poste(db, p) for p in postes.lister(db, courant)]
+
+
+@router.post("/caisse/postes", response_model=PosteCaisse, status_code=status.HTTP_201_CREATED)
+def creer_poste_endpoint(
+    corps: CreationPoste,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.poste.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PosteCaisse:
+    """Crée un poste pour l'agence COURANTE de l'acteur — jamais une agence soumise par le
+    client."""
+    try:
+        poste = postes.creer(
+            db,
+            courant,
+            code=corps.code,
+            libelle=corps.libelle,
+            motif=corps.motif,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CodeDejaUtiliseError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_schema_poste(db, poste)
+
+
+@router.patch("/caisse/postes/{poste_id}", response_model=PosteCaisse)
+def modifier_poste_endpoint(
+    poste_id: uuid.UUID,
+    corps: ModificationPoste,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.poste.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PosteCaisse:
+    try:
+        poste = postes.charger_poste_gere(db, courant, poste_id)
+    except PosteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    try:
+        postes.renommer(
+            db,
+            courant,
+            poste,
+            code=corps.code,
+            libelle=corps.libelle,
+            motif=corps.motif,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CodeDejaUtiliseError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_schema_poste(db, poste)
+
+
+@router.patch("/caisse/postes/{poste_id}/activation", response_model=PosteCaisse)
+def activation_poste_endpoint(
+    poste_id: uuid.UUID,
+    corps: ActivationPoste,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.poste.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PosteCaisse:
+    """(Dés)active — la désactivation refuse si une session est actuellement ouverte dessus."""
+    try:
+        poste = postes.charger_poste_gere(db, courant, poste_id)
+    except PosteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    try:
+        postes.changer_activation(
+            db,
+            courant,
+            poste,
+            is_active=corps.is_active,
+            motif=corps.motif,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except PosteEnUsageError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_schema_poste(db, poste)
+
+
+@router.patch("/caisse/postes/{poste_id}/compte-caisse", response_model=PosteCaisse)
+def rattacher_compte_poste_endpoint(
+    poste_id: uuid.UUID,
+    corps: RattachementComptePoste,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PosteCaisse:
+    """Institution entière : le comptable configure le plan de comptes du réseau, pas une seule
+    agence — même portée que les 3 autres écrans de rattachement Bloc 5."""
+    try:
+        poste = postes.charger_poste_pour_rattachement(db, poste_id)
+    except PosteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    try:
+        postes.rattacher_compte(
+            db,
+            courant,
+            poste,
+            compte_caisse_number=corps.compte_caisse,
+            motif=corps.motif,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CompteInvalideRattachementError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_schema_poste(db, poste)
+
+
+@router.get("/caisse/postes/{poste_id}/assignations", response_model=list[UtilisateurAssigne])
+def lister_assignations_endpoint(
+    poste_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.poste.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[UtilisateurAssigne]:
+    try:
+        poste = postes.charger_poste_gere(db, courant, poste_id)
+    except PosteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    return [_vers_schema_utilisateur(u) for u in postes.lister_assignations(db, poste)]
+
+
+@router.post(
+    "/caisse/postes/{poste_id}/assignations",
+    response_model=list[UtilisateurAssigne],
+    status_code=status.HTTP_201_CREATED,
+)
+def assigner_endpoint(
+    poste_id: uuid.UUID,
+    corps: AssignationCreation,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.poste.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[UtilisateurAssigne]:
+    try:
+        poste = postes.charger_poste_gere(db, courant, poste_id)
+    except PosteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    try:
+        postes.assigner(db, courant, poste, user_id=corps.user_id, contexte=_contexte(request))
+        db.commit()
+    except UtilisateurHorsPerimetreError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return [_vers_schema_utilisateur(u) for u in postes.lister_assignations(db, poste)]
+
+
+@router.delete(
+    "/caisse/postes/{poste_id}/assignations/{user_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def revoquer_endpoint(
+    poste_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.poste.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    try:
+        poste = postes.charger_poste_gere(db, courant, poste_id)
+    except PosteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        ) from None
+    postes.revoquer(db, courant, poste, user_id=user_id, contexte=_contexte(request))
+    db.commit()

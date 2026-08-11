@@ -67,3 +67,59 @@ class PageSessionsManquantes(BaseModel):
     total: int
     page: int
     taille: int
+
+
+# --- Postes de caisse (Bloc B) --------------------------------------------------------------
+# Nommage « PosteCaisse » (pas « Poste ») pour ne pas entrer en collision avec le modèle ORM
+# `Poste` — même convention que SessionCaisse/CaisseSession.
+
+
+class PosteCaisse(BaseModel):
+    """Un poste — `agency_nom`/`compte_caisse_number`/`compte_caisse_name` résolus en clair,
+    jamais un UUID nu à l'écran."""
+
+    id: uuid.UUID
+    agency_id: uuid.UUID
+    agency_nom: str
+    code: str
+    libelle: str
+    compte_caisse_number: str | None
+    compte_caisse_name: str | None
+    is_active: bool
+
+
+class CreationPoste(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    libelle: str = Field(min_length=1, max_length=150)
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ModificationPoste(BaseModel):
+    code: str = Field(min_length=1, max_length=20)
+    libelle: str = Field(min_length=1, max_length=150)
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ActivationPoste(BaseModel):
+    is_active: bool
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class RattachementComptePoste(BaseModel):
+    """Vider le rattachement (`compte_caisse=None`) est une action légitime, pas une erreur."""
+
+    compte_caisse: str | None
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class UtilisateurAssigne(BaseModel):
+    """Un guichetier assigné à un poste — identité en clair, jamais un UUID nu."""
+
+    id: uuid.UUID
+    matricule: str
+    username: str
+    nom_complet: str
+
+
+class AssignationCreation(BaseModel):
+    user_id: uuid.UUID

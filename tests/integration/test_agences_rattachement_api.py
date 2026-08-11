@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import Poste
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.jwt import creer_access_token
@@ -230,3 +231,63 @@ def test_compte_desactive_soumis_directement_est_refuse(client: TestClient, db: 
         db.execute(select(Agency.compte_caisse_id).where(Agency.id == agence.id)).scalar_one()
         is None
     )
+
+
+# --- Coexistence Bloc A/B : divergence entre le rattachement agence et les postes ----------
+
+
+def test_pas_de_divergence_quand_les_comptes_concordent(client: TestClient, db: Session) -> None:
+    caisse = _compte(db, "5T9A7", normal_side="D")
+    agence = _agence(db, code="AG-OK", compte_caisse_id=caisse.id)
+    db.add(Poste(agency_id=agence.id, code="01", libelle="Principal", compte_caisse_id=caisse.id))
+    db.flush()
+    comptable = _entete_auth(db, "COMPTABLE")
+
+    reponse = client.get("/agencies/rattachements", headers=comptable)
+
+    ligne = next(a for a in reponse.json() if a["code"] == "AG-OK")
+    assert ligne["postes_divergents"] == []
+
+
+def test_divergence_signalee_quand_le_poste_pointe_ailleurs(
+    client: TestClient, db: Session
+) -> None:
+    """Le point que la coexistence Bloc A/B expose au risque de dérive silencieuse : un
+    comptable qui repointe ce rattachement doit voir, ici même, que le poste « 01 » diverge."""
+    ancien = _compte(db, "5T9A8", normal_side="D")
+    nouveau = _compte(db, "5T9A9", normal_side="D")
+    agence = _agence(db, code="AG-DIV", compte_caisse_id=nouveau.id)
+    db.add(
+        Poste(agency_id=agence.id, code="01", libelle="Principal", compte_caisse_id=ancien.id)
+    )
+    db.flush()
+    comptable = _entete_auth(db, "COMPTABLE")
+
+    reponse = client.get("/agencies/rattachements", headers=comptable)
+
+    ligne = next(a for a in reponse.json() if a["code"] == "AG-DIV")
+    assert len(ligne["postes_divergents"]) == 1
+    assert ligne["postes_divergents"][0]["code"] == "01"
+    assert ligne["postes_divergents"][0]["compte_caisse"]["account_number"] == "5T9A8"
+
+
+def test_poste_inactif_ninfluence_pas_la_divergence(client: TestClient, db: Session) -> None:
+    ancien = _compte(db, "5T9B1", normal_side="D")
+    nouveau = _compte(db, "5T9B2", normal_side="D")
+    agence = _agence(db, code="AG-INACT", compte_caisse_id=nouveau.id)
+    db.add(
+        Poste(
+            agency_id=agence.id,
+            code="01",
+            libelle="Fermé",
+            compte_caisse_id=ancien.id,
+            is_active=False,
+        )
+    )
+    db.flush()
+    comptable = _entete_auth(db, "COMPTABLE")
+
+    reponse = client.get("/agencies/rattachements", headers=comptable)
+
+    ligne = next(a for a in reponse.json() if a["code"] == "AG-INACT")
+    assert ligne["postes_divergents"] == []

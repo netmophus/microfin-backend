@@ -12,6 +12,16 @@ La vraie protection reste sur les écritures (POST /tiers revalide le périmètr
 EXCEPTION scopée (Bloc 5 du paramétrage comptable) : le rattachement comptable de la caisse
 d'une agence (`compte_caisse_id`) se lit/s'écrit désormais ici, réservé à compta.plan.read/
 manage — écriture NARROW (un seul champ), pas le CRUD complet des agences.
+
+COEXISTENCE AVEC LE MODULE CAISSE (Bloc A/B) : `Agency.compte_caisse_id` et les postes de
+caisse (`caisse.postes`) sont deux colonnes INDÉPENDANTES depuis la migration 0041 — rien ne
+les synchronise. Modifier ce rattachement ici n'affecte QUE les guichets pas encore migrés
+(épargne, décaissement/remboursement crédit, souscription parts comptant) ; le module Caisse
+(sessions, `ouvrir_session()`) lit désormais le compte du POSTE, pas celui-ci. Une divergence
+serait silencieuse sans le signal ci-dessous (`postes_divergents`) : `_postes_divergents`
+compare, pour chaque agence, les postes ACTIFS dont le compte diffère de celui affiché ici —
+informatif, jamais bloquant (ce rattachement reste légitimement modifiable tant que les
+guichets cités en dépendent).
 """
 
 import uuid
@@ -23,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.caisse.models import Poste
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
 from app.modules.parameters import rattachements
@@ -88,11 +99,22 @@ class CompteRattachementAgence(BaseModel):
     name: str
 
 
+class PosteDivergent(BaseModel):
+    """Un poste ACTIF de cette agence dont le compte diffère de `compte_caisse` ci-dessus —
+    signal de dérive entre l'ancien rattachement (agence) et le nouveau (poste), voir docstring
+    du module."""
+
+    code: str
+    libelle: str
+    compte_caisse: CompteRattachementAgence | None
+
+
 class AgenceRattachement(BaseModel):
     id: uuid.UUID
     code: str
     name: str
     compte_caisse: CompteRattachementAgence | None
+    postes_divergents: list[PosteDivergent]
 
 
 class ModificationRattachementCaisse(BaseModel):
@@ -111,12 +133,30 @@ def _compte_rattachement_agence(
     return CompteRattachementAgence(account_number=compte.account_number, name=compte.name)
 
 
+def _postes_divergents(db: Session, agence: Agency) -> list[PosteDivergent]:
+    """Postes ACTIFS de l'agence dont le compte diffère de `Agency.compte_caisse_id` — voir
+    COEXISTENCE dans la docstring du module. None vs un compte réel compte comme divergent."""
+    postes = db.execute(
+        select(Poste).where(Poste.agency_id == agence.id, Poste.is_active.is_(True))
+    ).scalars()
+    return [
+        PosteDivergent(
+            code=poste.code,
+            libelle=poste.libelle,
+            compte_caisse=_compte_rattachement_agence(db, poste.compte_caisse_id),
+        )
+        for poste in postes
+        if poste.compte_caisse_id != agence.compte_caisse_id
+    ]
+
+
 def _vers_rattachement_agence(db: Session, agence: Agency) -> AgenceRattachement:
     return AgenceRattachement(
         id=agence.id,
         code=agence.code,
         name=agence.name,
         compte_caisse=_compte_rattachement_agence(db, agence.compte_caisse_id),
+        postes_divergents=_postes_divergents(db, agence),
     )
 
 

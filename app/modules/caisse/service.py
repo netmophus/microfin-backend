@@ -87,12 +87,11 @@ def ouvrir_session(
     de l'acteur à cet instant — jamais recalculés ensuite, même si le rattachement change après
     coup.
 
-    Bloc A (structurel) : une agence rattachée n'a, pour l'instant, jamais plus d'UN poste actif
-    (backfill de la migration 0041) — cette résolution en profite pour rester le miroir exact du
-    comportement d'avant (une agence, un compte), le temps que la SÉLECTION explicite parmi
-    plusieurs postes assignés (Bloc C) et l'assignation elle-même (Bloc B) existent. Plus d'un
-    poste actif est une situation non gérée ici par construction — elle ne peut pas encore se
-    produire sans le CRUD de Bloc B, absent."""
+    Bloc A/B (structurels) : cette résolution ne gère encore qu'UN SEUL poste actif par agence
+    — miroir provisoire du comportement d'avant (une agence, un compte), le temps que la
+    SÉLECTION explicite parmi plusieurs postes assignés (Bloc C) existe. Depuis le Bloc B, un
+    responsable d'agence PEUT créer un second poste actif : `PosteAmbiguError` refuse alors
+    proprement plutôt que de laisser fuir une exception SQLAlchemy brute."""
     deja = db.execute(
         select(CaisseSession.id).where(
             CaisseSession.caissier_id == courant.user_id, CaisseSession.status == "ouverte"
