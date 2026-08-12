@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from app.core.database import engine
 from app.core.engagements import verificateurs_enregistres
 from app.modules.audit.service import CONTEXTE_VIDE
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.engagements import enregistrer, verifier_engagements_credit
@@ -102,7 +104,41 @@ def _cadre(db: Session, suffixe: str) -> tuple[uuid.UUID, Product, uuid.UUID]:
     return agency_id, produit, tier_id
 
 
+def _ouvrir_session_caisse(db: Session, agency_id: uuid.UUID) -> uuid.UUID:
+    """Poste + session de caisse OUVERTE pour un caissier fictif (Bloc C5) : le décaissement en
+    mode 'caisse' (défaut) exige désormais SA session. Idempotent (même uid réutilisé par
+    `security.users LIMIT 1`). Réutilise le poste déjà backfillé de CETTE agence partagée
+    (`_cadre` pioche une agence EXISTANTE, pas une nouvelle) — jamais un second poste "01", qui
+    violerait `uq_caisse_postes_agency_code`."""
+    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    deja_ouverte = db.execute(
+        select(CaisseSession.id).where(
+            CaisseSession.caissier_id == uid, CaisseSession.status == "ouverte"
+        )
+    ).first()
+    if deja_ouverte is None:
+        poste = db.execute(
+            select(Poste).where(Poste.agency_id == agency_id, Poste.is_active.is_(True))
+        ).scalars().first()
+        assert poste is not None  # backfillé par la migration 0041 (agence a compte_caisse_id)
+        deja_assigne = db.execute(
+            select(PosteAssignation).where(
+                PosteAssignation.poste_id == poste.id, PosteAssignation.user_id == uid
+            )
+        ).scalar_one_or_none()
+        if deja_assigne is None:
+            db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
+            db.flush()
+        courant = UtilisateurCourant(
+            user_id=uid, roles=(), permissions=frozenset(),
+            primary_agency_id=agency_id, agency_id=agency_id, voit_tout=True,
+        )
+        ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+    return uid
+
+
 def _decaisser_credit(db: Session, agency_id: uuid.UUID, produit: Product, tier_id: uuid.UUID):
+    par = _ouvrir_session_caisse(db, agency_id)
     demande = creer_demande(
         db, tier_id=tier_id, agency_id=agency_id, product_id=produit.id,
         montant_demande=200000, duree_echeances=6, objet="Test", par=None,
@@ -110,7 +146,7 @@ def _decaisser_credit(db: Session, agency_id: uuid.UUID, produit: Product, tier_
     decider(
         db, demande, decision="approuve", montant_decide=200000, motif="OK", par=None
     )
-    decaisser(db, demande, par=None, contexte=CONTEXTE_VIDE)
+    decaisser(db, demande, par=par, contexte=CONTEXTE_VIDE)
     db.flush()
     return demande
 
@@ -171,12 +207,13 @@ def test_desactivation_refusee_si_echeance_partiellement_payee(db: Session) -> N
     le versement partiel posé (elle est 'partiellement_paye'), et la désactivation serait
     acceptée à tort — le point précis que la sélection status != 'paye' corrige."""
     agency_id, produit, tier_id = _cadre(db, "PART")
+    par = _ouvrir_session_caisse(db, agency_id)
     demande = creer_demande(
         db, tier_id=tier_id, agency_id=agency_id, product_id=produit.id,
         montant_demande=100000, duree_echeances=1, objet="Test partiel", par=None,
     )
     decider(db, demande, decision="approuve", montant_decide=100000, motif="OK", par=None)
-    decaisser(db, demande, par=None, contexte=CONTEXTE_VIDE)
+    decaisser(db, demande, par=par, contexte=CONTEXTE_VIDE)
     db.flush()
 
     seule = db.execute(

@@ -177,7 +177,10 @@ def _demande_decaissee(
         par=None,
     )
     decider(db, demande, decision="approuve", montant_decide=montant, motif="OK", par=None)
-    decaisser(db, demande, par=None)
+    # Bloc C5 : le décaissement en mode 'caisse' (défaut) exige une session de caisse OUVERTE
+    # — celle du même caissier fictif que `_caissier()` (idempotent, réutilise l'existante).
+    caissier = _caissier(db, agence)
+    decaisser(db, demande, par=caissier.user_id)
     db.commit()
     return demande
 

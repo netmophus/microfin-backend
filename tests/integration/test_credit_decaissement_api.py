@@ -20,10 +20,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Application, Installment, Product
 from app.modules.parameters.models import Agency
-from app.modules.security.jwt import creer_access_token
+from app.modules.security.autorisation import UtilisateurCourant
+from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 
@@ -122,6 +125,29 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {jeton}"}
 
 
+def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+    """Poste + session de caisse OUVERTE pour l'acteur de `entete` (Bloc C5) : le décaissement
+    en mode 'caisse' (défaut) exige désormais SA session, plus la seule agence."""
+    jeton = entete["Authorization"].removeprefix("Bearer ")
+    user_id = decoder_access_token(jeton).sub
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse principale",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+    db.flush()
+    ouvrir_session(
+        db,
+        UtilisateurCourant(
+            user_id=user_id, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        poste_id=poste.id, fonds_initial=0,
+    )
+
+
 def _demande_approuvee(
     db: Session,
     agence: Agency,
@@ -164,6 +190,7 @@ def test_decaissement_pose_la_piece_et_persiste_lecheancier(
     produit = _produit(db)
     demande_id = _demande_approuvee(db, agence, tier_id, produit, montant_demande=300000)
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence, responsable)
 
     reponse = client.post(f"/credit/demandes/{demande_id}/decaissement", headers=responsable)
 
@@ -211,6 +238,7 @@ def test_routage_client_utilise_le_compte_client(client: TestClient, db: Session
     produit = _produit(db)
     demande_id = _demande_approuvee(db, agence, tier_id, produit)
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence, responsable)
 
     reponse = client.post(f"/credit/demandes/{demande_id}/decaissement", headers=responsable)
 
@@ -228,6 +256,7 @@ def test_le_routage_reste_fige_meme_si_le_statut_membre_change_ensuite(
     produit = _produit(db)
     demande_id = _demande_approuvee(db, agence, tier_id, produit)
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence, responsable)
 
     reponse = client.post(f"/credit/demandes/{demande_id}/decaissement", headers=responsable)
     assert reponse.json()["compte_credit_number"] == "202211"
@@ -322,6 +351,7 @@ def test_decaissement_deux_fois_refuse(client: TestClient, db: Session) -> None:
     produit = _produit(db)
     demande_id = _demande_approuvee(db, agence, tier_id, produit)
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence, responsable)
 
     premier = client.post(f"/credit/demandes/{demande_id}/decaissement", headers=responsable)
     assert premier.status_code == 200
@@ -346,6 +376,7 @@ def test_echeancier_impossible_ne_laisse_rien_persister(client: TestClient, db: 
         db, agence, tier_id, produit, montant_demande=5, montant_decide=5, duree_echeances=10
     )
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence, responsable)
 
     reponse = client.post(f"/credit/demandes/{demande_id}/decaissement", headers=responsable)
 

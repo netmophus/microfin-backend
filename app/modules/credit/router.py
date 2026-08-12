@@ -27,6 +27,7 @@ TABLE DES ERREURS (un seul endroit) :
   - demande déjà décidée / montant décidé invalide -> 422
   - demande non approuvée, rattachement comptable manquant, échéancier impossible -> 422
   - compte choisi invalide (mode 'epargne' : hors tiers, hors périmètre, fermé) -> 422
+  - aucune session de caisse ouverte (décaissement mode 'caisse' seulement) -> 422
   - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
   - code/seuil de palier déjà utilisé par un autre palier, compte de rattachement invalide -> 422
   - palier encore classé sur un dossier (suppression refusée) -> 422
@@ -40,6 +41,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
 from app.modules.credit import consultation, delinquency_parametres
@@ -354,8 +356,9 @@ def decaisser_endpoint(
     transaction unique. Réservé au responsable d'agence (séparation des tâches avec le
     chargé de prêt qui a monté le dossier).
 
-    `corps.mode` : 'caisse' (espèces, défaut) ou 'epargne' (crédit direct sur un compte du
-    tiers choisi — n'importe quel produit epargne.accounts, `corps.compte_epargne_id`)."""
+    `corps.mode` : 'caisse' (espèces, défaut — exige une session de caisse OUVERTE pour
+    l'acteur, Bloc C5) ou 'epargne' (crédit direct sur un compte du tiers choisi — n'importe
+    quel produit epargne.accounts, `corps.compte_epargne_id`, aucune session requise)."""
     ligne = consultation.lire_demande(db, courant, application_id)
     if ligne is None:
         raise HTTPException(
@@ -382,6 +385,7 @@ def decaisser_endpoint(
         RattachementManquantError,
         EcheancierImpossibleError,
         CompteInvalideError,
+        AucuneSessionOuverteError,
     ) as erreur:
         db.rollback()
         raise HTTPException(

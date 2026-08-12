@@ -147,23 +147,23 @@ def ouvrir_session(
     return session
 
 
-def resoudre_session_active(db: Session, caissier_id: uuid.UUID) -> CaisseSession:
+def resoudre_session_active(db: Session, caissier_id: uuid.UUID | None) -> CaisseSession:
     """LE point de contrôle centralisé (Bloc C2) que chaque guichet (parts C3, épargne C4,
-    crédit décaissement C5, crédit remboursement C6) appellera dans la branche où IL résout
+    crédit décaissement C5, crédit remboursement C6) appelle dans la branche où IL résout
     lui-même le compte de caisse (ex. `compte_debit is None`) — jamais en tête de fonction.
-    C'est cette place, pas une autre, qui exemptera structurellement le prélèvement
-    automatique (CR5d) : il fournit toujours `compte_source_id`/`compte_debit` explicitement
-    et n'atteindra jamais cette branche, donc jamais cet appel — pas un cas spécial ajouté
-    après coup, une conséquence de où le contrôle est posé.
+    C'est cette place, pas une autre, qui exempte structurellement le prélèvement automatique
+    (CR5d) : il fournit toujours `compte_source_id`/`compte_debit` explicitement et n'atteint
+    jamais cette branche, donc jamais cet appel — pas un cas spécial ajouté après coup, une
+    conséquence de où le contrôle est posé.
 
-    Prend `caissier_id: uuid.UUID`, pas `UtilisateurCourant` : `decaisser()` et `rembourser()`
-    ne portent pas ce type aujourd'hui (l'un l'a en option, l'autre pas du tout — `par:
-    uuid.UUID` seulement) ; élargir leur signature publique pour ce seul besoin aurait été un
-    changement plus large que nécessaire.
-
-    ISOLÉE ici (Bloc C2) : RIEN NE L'APPELLE ENCORE. Le câblage guichet par guichet vient aux
-    blocs suivants (C3 à C6), un commit séparé par guichet, la suite complète relancée à
-    chaque bascule.
+    Prend `caissier_id: uuid.UUID | None`, pas `UtilisateurCourant` : `decaisser()` et
+    `rembourser()` portent `par: uuid.UUID | None` (jamais un `UtilisateurCourant` complet en
+    mode 'caisse') ; élargir leur signature publique pour ce seul besoin aurait été un
+    changement plus large que nécessaire. `None` -> AUCUNE session ne peut lui correspondre
+    (`caissier_id` n'est jamais NULL en base) : un décaissement/remboursement sans acteur
+    identifié est refusé au même titre qu'une session réellement absente — un mouvement de
+    caisse anonyme n'a pas de sens (en production, le routeur fournit toujours
+    `courant.user_id`, jamais `None`).
 
     `compte_caisse_id` de la session retournée est déjà ANCRÉ (voir `ouvrir_session`) — jamais
     recalculé ici, même si le rattachement du poste a changé depuis l'ouverture.

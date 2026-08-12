@@ -18,10 +18,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Installment, Product
 from app.modules.parameters.models import Agency
-from app.modules.security.jwt import creer_access_token
+from app.modules.security.autorisation import UtilisateurCourant
+from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 
@@ -118,6 +121,29 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {jeton}"}
 
 
+def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+    """Poste + session de caisse OUVERTE pour l'acteur de `entete` (Bloc C5) : le décaissement
+    en mode 'caisse' (défaut) exige désormais SA session, plus la seule agence."""
+    jeton = entete["Authorization"].removeprefix("Bearer ")
+    user_id = decoder_access_token(jeton).sub
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse principale",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+    db.flush()
+    ouvrir_session(
+        db,
+        UtilisateurCourant(
+            user_id=user_id, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        poste_id=poste.id, fonds_initial=0,
+    )
+
+
 def _demande_approuvee(
     db: Session,
     agence: Agency,
@@ -212,6 +238,7 @@ def test_apercu_et_decaissement_reel_le_meme_jour_sont_identiques(
     produit = _produit(db)
     demande_id = _demande_approuvee(db, agence, tier_id, produit, montant_demande=420000)
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence, responsable)
 
     apercu = client.get(
         f"/credit/demandes/{demande_id}/echeancier-apercu", headers=responsable

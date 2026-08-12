@@ -4,12 +4,16 @@ CR6b — aperçu PUR de l'échéancier (même moteur, rien n'est écrit) : voir 
 
 DEUX MODES au décaissement, choisis par le responsable (aucun n'est réglementaire — voir
 conformite-credit.md) :
-  - 'caisse' (par défaut) : D CREDIT / C CAISSE — inchangé depuis CR3.
+  - 'caisse' (par défaut) : D CREDIT / C CAISSE — de l'argent physique sort du tiroir. Bloc C5 :
+    exige une session de caisse OUVERTE pour le caissier (`par`), et c'est le compte ANCRÉ de
+    CETTE session (jamais recalculé) qui reçoit l'écriture, jamais celui de l'agence.
   - 'epargne' : D CREDIT / C le compte epargne.accounts CHOISI du tiers (n'importe quel
     produit — EAV/DAT/EPR), sans transiter par la caisse. Journal OD (virement comptable
     interne, aucun argent physique ne bouge — même distinction que la souscription-engagement
-    des parts sociales). Le mouvement sur ce compte porte operation_type='decaissement_credit'
-    (voir epargne/operations.py::enregistrer_credit_externe), identifiable dans son historique.
+    des parts sociales, voir tiers/parts.py). Le mouvement sur ce compte porte
+    operation_type='decaissement_credit' (voir epargne/operations.py::enregistrer_credit_externe),
+    identifiable dans son historique. AUCUNE session de caisse requise : ce mode ne touche
+    JAMAIS un compte de caisse (voir CAISSE côté modèle d'écriture), pas de gate ici.
 `mode_decaissement`/`compte_destination_id` sont figés sur la demande dans LES DEUX cas.
 
 TRANSACTION UNIQUE : la pièce comptable, les échéances, le crédit du compte du tiers (si
@@ -34,10 +38,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.caisse.service import resoudre_session_active
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.comptabilite.schemas_ecriture import poser_depuis_schema
 from app.modules.credit.demandes import (
@@ -54,7 +59,6 @@ from app.modules.epargne.operations import (
     enregistrer_credit_externe,
     resoudre_compte_collectif,
 )
-from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 
 CODE_DECAISSEMENT = "credit.decaissement"
@@ -129,11 +133,15 @@ def decaisser(
     epargne.operations.charger_compte_pour_credit_externe) ; `courant` est fourni par le
     routeur dans ce cas, jamais par un appel service direct en mode 'caisse'.
 
+    mode='caisse' (Bloc C5) exige une session de caisse OUVERTE pour `par` — sans session,
+    refus (AucuneSessionOuverteError, non capturée ici — même famille que
+    DemandeNonApprouveeError, laissée au routeur appelant de traduire en 422).
+
     Refuse si la demande n'est pas approuvée, si le tiers n'est plus actif, si le produit est
     devenu indisponible, si un rattachement comptable manque, si le compte choisi (mode
-    'epargne') est invalide, ou si les paramètres produisent un échéancier impossible
-    (EcheancierImpossibleError, non capturée ici — elle remonte telle quelle, la transaction
-    reste non commitée)."""
+    'epargne') est invalide, si aucune session de caisse n'est ouverte (mode 'caisse'), ou si
+    les paramètres produisent un échéancier impossible (EcheancierImpossibleError, non
+    capturée ici — elle remonte telle quelle, la transaction reste non commitée)."""
     if demande.status != "approuve":
         raise DemandeNonApprouveeError(
             f"Cette demande ({demande.application_number}) n'est pas approuvée "
@@ -194,13 +202,11 @@ def decaisser(
             f"(compte {compte_epargne.account_number})"
         )
     else:
-        compte_destination = db.execute(
-            select(Agency.compte_caisse_id).where(Agency.id == demande.agency_id)
-        ).scalar_one()
-        if compte_destination is None:
-            raise RattachementManquantError(
-                "l'agence de cette demande n'a pas de compte de caisse rattaché"
-            )
+        # Bloc C5 : de l'argent physique sort du tiroir — exige une session de caisse OUVERTE
+        # pour le caissier (`par`), et c'est le compte ANCRÉ de CETTE session qui reçoit
+        # l'écriture, jamais celui de l'agence. Ne concerne QUE ce mode : mode='epargne'
+        # (ci-dessus) est un virement comptable interne, aucun compte de caisse en jeu.
+        compte_destination = resoudre_session_active(db, par).compte_caisse_id
         code_ecriture = CODE_DECAISSEMENT
         description = f"Décaissement crédit {demande.application_number}"
 

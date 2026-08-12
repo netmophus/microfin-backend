@@ -19,12 +19,15 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Installment
 from app.modules.credit.models import Product as CreditProduct
 from app.modules.credit.remboursement import rembourser
 from app.modules.parameters.models import Agency
+from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
@@ -123,6 +126,36 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {jeton}"}
 
 
+def _ouvrir_session_caisse(db: Session, agence: Agency) -> uuid.UUID:
+    """Poste + session de caisse OUVERTE pour un caissier fictif (Bloc C5) : le décaissement en
+    mode 'caisse' (défaut) exige désormais SA session. Idempotent (même uid réutilisé par
+    `security.users LIMIT 1`)."""
+    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    deja_ouverte = db.execute(
+        select(CaisseSession.id).where(
+            CaisseSession.caissier_id == uid, CaisseSession.status == "ouverte"
+        )
+    ).first()
+    if deja_ouverte is None:
+        poste = Poste(
+            agency_id=agence.id, code="01", libelle="Caisse principale",
+            compte_caisse_id=agence.compte_caisse_id,
+        )
+        db.add(poste)
+        db.flush()
+        db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
+        db.flush()
+        ouvrir_session(
+            db,
+            UtilisateurCourant(
+                user_id=uid, roles=(), permissions=frozenset(),
+                primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+            ),
+            poste_id=poste.id, fonds_initial=0,
+        )
+    return uid
+
+
 def _credit_decaisse(
     db: Session, agence: Agency, tier_id: uuid.UUID, produit: CreditProduct, montant: int = 300000
 ):
@@ -131,7 +164,8 @@ def _credit_decaisse(
         montant_demande=montant, duree_echeances=6, objet="Test recherche remboursement", par=None,
     )
     decider(db, demande, decision="approuve", montant_decide=montant, motif="OK", par=None)
-    decaisser(db, demande, par=None)
+    par = _ouvrir_session_caisse(db, agence)
+    decaisser(db, demande, par=par)
     db.commit()
     return demande
 
