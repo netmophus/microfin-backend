@@ -20,6 +20,8 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Application, Installment, PrelevementTentative
@@ -126,8 +128,10 @@ def _compte_epargne(
 
 
 def _caissier(db: Session, agence: Agency) -> UtilisateurCourant:
+    """Idempotent : appelé plusieurs fois par test avec LA MÊME agence (dépôt de financement
+    répété) — n'ouvre qu'UNE session (Bloc C4), la réutilise sinon."""
     uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
-    return UtilisateurCourant(
+    courant = UtilisateurCourant(
         user_id=uid,
         roles=("CAISSIER",),
         permissions=frozenset({"epargne.operation.deposit"}),
@@ -135,6 +139,22 @@ def _caissier(db: Session, agence: Agency) -> UtilisateurCourant:
         agency_id=agence.id,
         voit_tout=False,
     )
+    deja_ouverte = db.execute(
+        select(CaisseSession.id).where(
+            CaisseSession.caissier_id == uid, CaisseSession.status == "ouverte"
+        )
+    ).first()
+    if deja_ouverte is None:
+        poste = Poste(
+            agency_id=agence.id, code="01", libelle="Caisse principale",
+            compte_caisse_id=agence.compte_caisse_id,
+        )
+        db.add(poste)
+        db.flush()
+        db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
+        db.flush()
+        ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+    return courant
 
 
 def _demande_decaissee(

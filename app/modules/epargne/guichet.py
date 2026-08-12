@@ -22,6 +22,12 @@ zéro. Les deux sont des PARAMÈTRES PRODUIT provisoires (l'expert dira les vale
 
 CLOISONNEMENT (4) : le compte est chargé DANS le périmètre de l'acteur (le caissier n'opère que
 sur son agence) ; hors périmètre -> 404 (n'existe pas de son point de vue), jamais 403.
+
+SESSION DE CAISSE (Bloc C4) : dépôt et retrait exigent une session OUVERTE pour l'acteur — la
+CAISSE créditée/débitée est celle de SA session (compte ANCRÉ à l'ouverture), jamais celle de
+l'agence. Sans session ouverte, refus (AucuneSessionOuverteError -> 422) : le tiroir doit être
+ouvert avant tout mouvement. `fermer_compte` (restitution du solde à la clôture) est un acte de
+GESTION, pas de guichet — pas concerné, ne passe pas par `_operer`.
 """
 
 import uuid
@@ -31,6 +37,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.caisse.service import resoudre_session_active
 from app.modules.epargne import service
 from app.modules.epargne.models import Product, SavingsAccount, SavingsMovement
 from app.modules.epargne.operations import TYPE_DEPOT, TYPE_RETRAIT, poser_ecriture_operation
@@ -157,7 +164,12 @@ def _operer(
     action_audit: str,
     contexte: ContexteRequete,
 ) -> ResultatOperation:
-    """Tronc commun dépôt/retrait : verrou, contrôles, pièce + mouvement + solde, audit, commit."""
+    """Tronc commun dépôt/retrait : verrou, contrôles, pièce + mouvement + solde, audit, commit.
+
+    Bloc C4 : dépôt ET retrait sont tous deux des mouvements de caisse (D 5721/C 3111 ou
+    l'inverse) — exige une session de caisse OUVERTE pour l'acteur, et c'est le compte ANCRÉ de
+    CETTE session qui reçoit l'écriture, jamais celui de l'agence."""
+    compte_caisse_id = resoudre_session_active(db, courant.user_id).compte_caisse_id
     compte = _charger_compte_verrou(db, courant, compte_id)
     _controler(db, compte, montant)
 
@@ -188,7 +200,8 @@ def _operer(
 
     # GÉNÉRAL : la pièce comptable équilibrée (peut lever si rattachement manquant -> refus propre).
     piece = poser_ecriture_operation(
-        db, compte, code_operation, montant, courant.user_id, contexte=contexte
+        db, compte, code_operation, montant, courant.user_id,
+        compte_caisse_id=compte_caisse_id, contexte=contexte,
     )
 
     nouveau_solde = compte.balance + signe * montant

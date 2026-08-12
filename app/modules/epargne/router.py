@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
 from app.modules.epargne import consultation, rattachements
@@ -310,14 +311,18 @@ def deposer_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("epargne.operation.deposit"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ResultatOperation:
-    """Dépôt au guichet (caissier, cloisonné). Le service commet la transaction unique."""
+    """Dépôt au guichet (caissier, cloisonné). Le service commet la transaction unique. Exige
+    une session de caisse OUVERTE pour l'acteur (Bloc C4) : la CAISSE créditée est celle de SA
+    session, pas celle de l'agence."""
     try:
         resultat = deposer(db, courant, compte_id, corps.montant, contexte=_contexte(request))
     except CompteIntrouvableError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
         ) from None
-    except (MontantInvalideError, OperationGeleeError, CompteClotureError) as erreur:
+    except (
+        MontantInvalideError, OperationGeleeError, CompteClotureError, AucuneSessionOuverteError,
+    ) as erreur:
         raise _422(erreur) from None
     return ResultatOperation(
         account_number=resultat.account_number,
@@ -442,7 +447,9 @@ def retirer_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("epargne.operation.withdraw"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ResultatOperation:
-    """Retrait au guichet. Refus parlant si solde insuffisant / membre suspendu / compte fermé."""
+    """Retrait au guichet. Refus parlant si solde insuffisant / membre suspendu / compte fermé.
+    Exige une session de caisse OUVERTE pour l'acteur (Bloc C4) : la CAISSE débitée est celle de
+    SA session, pas celle de l'agence."""
     try:
         resultat = retirer(db, courant, compte_id, corps.montant, contexte=_contexte(request))
     except CompteIntrouvableError:
@@ -454,6 +461,7 @@ def retirer_endpoint(
         MontantInvalideError,
         OperationGeleeError,
         CompteClotureError,
+        AucuneSessionOuverteError,
     ) as erreur:
         raise _422(erreur) from None
     return ResultatOperation(

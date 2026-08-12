@@ -14,11 +14,13 @@ from dataclasses import dataclass
 from datetime import date
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.epargne import interets, service
 from app.modules.epargne.guichet import deposer, fermer_compte
 from app.modules.epargne.interets import (
@@ -137,6 +139,25 @@ def _cadre(db: Session, suffixe: str, *, depot: int = 100000) -> Cadre:
         db, tier_id=tier_id, product_id=produit.id, agency_id=agence.id, par=None
     )
     if depot:
+        # Poste + session de caisse OUVERTE pour l'acteur (Bloc C4) : le dépôt de financement
+        # exige désormais SA session, plus la seule agence. Idempotent : `_caissier` réutilise
+        # TOUJOURS le même uid (`security.users LIMIT 1`) — un second `_cadre()` dans le même
+        # test ne doit pas tenter d'ouvrir une seconde session pour ce caissier.
+        deja_ouverte = db.execute(
+            select(CaisseSession.id).where(
+                CaisseSession.caissier_id == caissier.user_id, CaisseSession.status == "ouverte"
+            )
+        ).first()
+        if deja_ouverte is None:
+            poste = Poste(
+                agency_id=agence.id, code="01", libelle="Caisse principale",
+                compte_caisse_id=agence.compte_caisse_id,
+            )
+            db.add(poste)
+            db.flush()
+            db.add(PosteAssignation(poste_id=poste.id, user_id=caissier.user_id))
+            db.flush()
+            ouvrir_session(db, caissier, poste_id=poste.id, fonds_initial=0)
         deposer(db, caissier, compte.id, depot)
     return Cadre(compte, caissier, agence.id, produit.id)
 

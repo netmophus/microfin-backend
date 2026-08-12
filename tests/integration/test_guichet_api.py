@@ -16,10 +16,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.epargne import service
 from app.modules.epargne.models import Product, SavingsAccount
 from app.modules.parameters.models import Agency
-from app.modules.security.jwt import creer_access_token
+from app.modules.security.autorisation import UtilisateurCourant
+from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 
@@ -114,6 +117,29 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {jeton}"}
 
 
+def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+    """Poste + session de caisse OUVERTE pour l'acteur de `entete` (Bloc C4) : dépôt et retrait
+    exigent désormais SA session, plus la seule agence."""
+    jeton = entete["Authorization"].removeprefix("Bearer ")
+    user_id = decoder_access_token(jeton).sub
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse principale",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+    db.flush()
+    ouvrir_session(
+        db,
+        UtilisateurCourant(
+            user_id=user_id, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        poste_id=poste.id, fonds_initial=0,
+    )
+
+
 def test_recherche_par_numero_renvoie_le_nom_du_membre(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-G1")
     compte = _compte(db, agence)
@@ -131,6 +157,7 @@ def test_depot_puis_retrait(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-G2")
     compte = _compte(db, agence)
     entete = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, entete)
 
     depot = client.post(
         f"/epargne/comptes/{compte.id}/depot", json={"montant": 10000}, headers=entete
@@ -148,6 +175,7 @@ def test_retrait_solde_insuffisant_422_avec_disponible(client: TestClient, db: S
     agence = _agence(db, "AG-G3")
     compte = _compte(db, agence)
     entete = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, entete)
     client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 1000}, headers=entete)
 
     reponse = client.post(
@@ -165,6 +193,7 @@ def test_operation_membre_suspendu_422(client: TestClient, db: Session) -> None:
         {"t": compte.tier_id},
     )
     entete = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, entete)
 
     reponse = client.post(
         f"/epargne/comptes/{compte.id}/depot", json={"montant": 1000}, headers=entete
@@ -180,6 +209,7 @@ def test_operation_compte_ferme_422(client: TestClient, db: Session) -> None:
         text("UPDATE epargne.accounts SET status = 'cloture' WHERE id = :a"), {"a": compte.id}
     )
     entete = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, entete)
 
     reponse = client.post(
         f"/epargne/comptes/{compte.id}/depot", json={"montant": 1000}, headers=entete
@@ -191,6 +221,7 @@ def test_montant_invalide_422(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-G6")
     compte = _compte(db, agence)
     entete = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, entete)
 
     reponse = client.post(
         f"/epargne/comptes/{compte.id}/depot", json={"montant": 0}, headers=entete
@@ -215,6 +246,7 @@ def test_compte_hors_agence_404(client: TestClient, db: Session) -> None:
     agence_b = _agence(db, "AG-GB")
     compte = _compte(db, agence_a)
     entete_b = _entete(db, agence_b, "CAISSIER")
+    _ouvrir_session_caisse(db, agence_b, entete_b)
 
     reponse = client.post(
         f"/epargne/comptes/{compte.id}/depot", json={"montant": 1000}, headers=entete_b
@@ -229,6 +261,7 @@ def test_fermeture_restitue_et_ferme(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-F1")
     compte = _compte(db, agence)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, caissier)
     client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 5000}, headers=caissier)
     resp = _entete(db, agence, "RESPONSABLE_AGENCE")
 
@@ -285,6 +318,7 @@ def test_apercu_interets_montre_le_total_et_le_detail(client: TestClient, db: Se
     agence = _agence(db, "AG-I1")
     compte = _compte_remunere(db, agence)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, caissier)
     client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 100000}, headers=caissier)
     direction = _entete(db, agence, "DIRECTION_GENERALE")
 
@@ -314,6 +348,7 @@ def test_versement_puis_apercu_dit_deja_verse(client: TestClient, db: Session) -
     agence = _agence(db, "AG-I2")
     compte = _compte_remunere(db, agence)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, caissier)
     client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 100000}, headers=caissier)
     direction = _entete(db, agence, "DIRECTION_GENERALE")
     bornes = {"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"}
@@ -346,6 +381,7 @@ def test_rapprochement_concordant_apres_depot(client: TestClient, db: Session) -
     agence = _agence(db, "AG-R1")
     compte = _compte(db, agence)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, caissier)
     client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 40000}, headers=caissier)
     auditeur = _entete(db, agence, "AUDITEUR_INTERNE")
 

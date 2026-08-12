@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal, engine
 from app.modules.audit.service import CONTEXTE_VIDE
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.epargne import service
 from app.modules.epargne.engagements import enregistrer
 from app.modules.epargne.guichet import (
@@ -113,7 +115,19 @@ def _cadre(db: Session, suffixe: str) -> tuple[SavingsAccount, UtilisateurCouran
     compte = service.ouvrir_compte(
         db, tier_id=tier_id, product_id=produit.id, agency_id=agence, par=None
     )
-    return compte, _acteur(db, agence)
+    resp = _acteur(db, agence)
+    # Poste + session de caisse OUVERTE pour l'acteur (Bloc C4) : dépôt/retrait exigent
+    # désormais SA session, plus la seule agence.
+    poste = Poste(
+        agency_id=agence, code="01", libelle="Caisse principale",
+        compte_caisse_id=_cid(db, "101111"),
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=resp.user_id))
+    db.flush()
+    ouvrir_session(db, resp, poste_id=poste.id, fonds_initial=0)
+    return compte, resp
 
 
 # --- Les trois cas de solde ---------------------------------------------------------

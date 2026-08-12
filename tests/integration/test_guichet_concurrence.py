@@ -63,12 +63,37 @@ def donnees() -> Generator[dict[str, uuid.UUID], None, None]:
         {"p": prod, "t": tid, "a": ag},
     ).scalar_one()
     uid = s.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    # Poste + session de caisse OUVERTE pour l'acteur (Bloc C4) : dépôt/retrait exigent
+    # désormais SA session, plus la seule agence — committé comme le reste de ce décor
+    # (vraies connexions, pas un savepoint).
+    poste = s.execute(
+        text(
+            "INSERT INTO caisse.postes (agency_id, code, libelle, compte_caisse_id) "
+            "VALUES (:a, '01', 'Caisse principale', :c) RETURNING id"
+        ),
+        {"a": ag, "c": caisse},
+    ).scalar_one()
+    s.execute(
+        text("INSERT INTO caisse.poste_assignations (poste_id, user_id) VALUES (:p, :u)"),
+        {"p": poste, "u": uid},
+    )
+    session_caisse = s.execute(
+        text(
+            "INSERT INTO caisse.sessions "
+            "(agency_id, caissier_id, poste_id, compte_caisse_id, fonds_initial) "
+            "VALUES (:a, :u, :p, :c, 0) RETURNING id"
+        ),
+        {"a": ag, "u": uid, "p": poste, "c": caisse},
+    ).scalar_one()
     s.commit()
     s.close()
     try:
         yield {"agence": ag, "produit": prod, "tier": tid, "compte": acc, "user": uid}
     finally:
         c = SessionLocal()
+        c.execute(text("DELETE FROM caisse.sessions WHERE id = :s"), {"s": session_caisse})
+        c.execute(text("DELETE FROM caisse.poste_assignations WHERE poste_id = :p"), {"p": poste})
+        c.execute(text("DELETE FROM caisse.postes WHERE id = :p"), {"p": poste})
         c.execute(text("DELETE FROM epargne.movements WHERE account_id = :a"), {"a": acc})
         c.execute(text("DELETE FROM epargne.accounts WHERE id = :a"), {"a": acc})
         c.execute(text("DELETE FROM tiers.tiers WHERE id = :t"), {"t": tid})

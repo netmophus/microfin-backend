@@ -19,10 +19,12 @@ from collections.abc import Generator
 from datetime import date
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
+from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.epargne import service
 from app.modules.epargne.guichet import deposer
 from app.modules.epargne.interets import verser_interets
@@ -56,8 +58,10 @@ def _cid(db: Session, numero: str) -> uuid.UUID:
 
 
 def _caissier(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
+    """Idempotent : `security.users LIMIT 1` renvoie TOUJOURS le même uid — n'ouvre qu'UNE
+    session de caisse (Bloc C4) pour ce caissier fictif, la réutilise sinon."""
     uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
-    return UtilisateurCourant(
+    courant = UtilisateurCourant(
         user_id=uid,
         roles=("CAISSIER",),
         permissions=frozenset({"epargne.operation.deposit"}),
@@ -65,6 +69,25 @@ def _caissier(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
         agency_id=agency_id,
         voit_tout=True,
     )
+    deja_ouverte = db.execute(
+        select(CaisseSession.id).where(
+            CaisseSession.caissier_id == uid, CaisseSession.status == "ouverte"
+        )
+    ).first()
+    if deja_ouverte is None:
+        compte_caisse_id = db.execute(
+            select(Agency.compte_caisse_id).where(Agency.id == agency_id)
+        ).scalar_one()
+        poste = Poste(
+            agency_id=agency_id, code="01", libelle="Caisse principale",
+            compte_caisse_id=compte_caisse_id,
+        )
+        db.add(poste)
+        db.flush()
+        db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
+        db.flush()
+        ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+    return courant
 
 
 def _tier(db: Session, agency_id: uuid.UUID, suffixe: str, *, membre: bool) -> uuid.UUID:

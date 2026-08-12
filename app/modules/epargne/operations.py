@@ -2,7 +2,9 @@
 
 Résout les rôles du modèle d'écriture depuis le compte d'épargne concerné :
   - EPARGNE -> le compte de dette du PRODUIT (product.compte_epargne_id, le 3111 collectif) ;
-  - CAISSE  -> le compte de caisse de l'AGENCE (agency.compte_caisse_id, le 5721).
+  - CAISSE  -> le compte de caisse de l'AGENCE (agency.compte_caisse_id, le 5721) PAR DÉFAUT,
+    sauf `compte_caisse_id` fourni par l'appelant (Bloc C4 — guichet dépôt/retrait : le compte
+    ANCRÉ de la session de caisse ouverte du caissier, jamais recalculé).
 Si l'un de ces rattachements manque (provisoire non renseigné), on REFUSE proprement
 (RattachementManquantError) : rien n'est écrit, message clair.
 
@@ -170,7 +172,9 @@ def enregistrer_debit_externe(
     return mouvement
 
 
-def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
+def _resolveur(
+    db: Session, compte: SavingsAccount, *, compte_caisse_id: uuid.UUID | None = None
+) -> ResolveurRole:
     compte_epargne, compte_charge_interet = db.execute(
         select(Product.compte_epargne_id, Product.compte_charge_interet_id).where(
             Product.id == compte.product_id
@@ -181,9 +185,6 @@ def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
     # comportement historique intact. Toutes les opérations du compte (dépôt, retrait, clôture,
     # intérêts) suivent le MÊME collectif : un compte ne s'éclate jamais entre 3111 et 3112.
     collectif = compte.compte_collectif_id or compte_epargne
-    compte_caisse = db.execute(
-        select(Agency.compte_caisse_id).where(Agency.id == compte.agency_id)
-    ).scalar_one()
 
     def resoudre(role: str) -> uuid.UUID:
         if role == "EPARGNE":
@@ -193,6 +194,14 @@ def _resolveur(db: Session, compte: SavingsAccount) -> ResolveurRole:
                 )
             return collectif
         if role == "CAISSE":
+            # ANCRÉ (Bloc C4, guichet dépôt/retrait) prime sur l'agence : l'appelant a déjà
+            # résolu la session de caisse ouverte du caissier. Sans override (clôture,
+            # versement d'intérêts), comportement inchangé.
+            compte_caisse = compte_caisse_id
+            if compte_caisse is None:
+                compte_caisse = db.execute(
+                    select(Agency.compte_caisse_id).where(Agency.id == compte.agency_id)
+                ).scalar_one()
             if compte_caisse is None:
                 raise RattachementManquantError(
                     "l'agence de ce compte n'a pas de compte de caisse rattaché"
@@ -217,12 +226,16 @@ def poser_ecriture_operation(
     par: uuid.UUID | None,
     *,
     entry_date: object | None = None,
+    compte_caisse_id: uuid.UUID | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> JournalEntry:
     """Pose la pièce comptable équilibrée d'une opération sur `compte`.
 
     entry_date : date de la pièce (par défaut aujourd'hui). Le versement d'intérêts la date en FIN
     de période. Ne touche pas au solde du membre : l'appelant s'en charge, dans la même transaction.
+
+    compte_caisse_id : ANCRÉ, fourni par l'appelant (Bloc C4 — guichet dépôt/retrait, voir
+    en-tête de module) ; `None` pour toute autre opération, comportement inchangé.
     """
     jour = entry_date
     if jour is None:
@@ -231,7 +244,7 @@ def poser_ecriture_operation(
         db,
         code=code_operation,
         montant=montant,
-        resoudre_role=_resolveur(db, compte),
+        resoudre_role=_resolveur(db, compte, compte_caisse_id=compte_caisse_id),
         entry_date=jour,
         par=par,
         description=f"{code_operation} {compte.account_number}",

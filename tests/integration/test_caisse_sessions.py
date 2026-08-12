@@ -287,8 +287,15 @@ def test_solde_theorique_egale_fonds_initial_plus_mouvements_reels_de_la_fenetre
     # PIÈGE 1 — mouvement AVANT l'ouverture, gros et rond pour sauter aux yeux si compté à tort.
     # Backdaté EXPLICITEMENT : dans UNE seule transaction (comme ce test), NOW() de Postgres est
     # figé à l'heure de début de transaction — un simple ordre chronologique d'appels ne suffit
-    # PAS à produire deux instants différents (piège trouvé en écrivant ce test lui-même).
+    # PAS à produire deux instants différents (piège trouvé en écrivant ce test lui-même). Le
+    # dépôt exige désormais SA PROPRE session (Bloc C4) : une session JETABLE, ouverte puis
+    # refermée avant la VRAIE session testée — seul `posted_at` compte pour le filtre de
+    # `calculer_solde_theorique`, pas la session sous laquelle le mouvement a été posé.
+    session_jetable = _ouvrir(db, caissier, agence, fonds_initial=0)
+    db.flush()
     deposer(db, caissier, compte.id, 999_999)
+    fermer_session(db, caissier, session_jetable.id, montant_reel=999_999)
+    db.flush()
     # Une pièce VALIDÉE est immuable (trigger) — désactivé le temps de CE backdatage simulé,
     # comme la purge base_vierge de test_creer_admin.py (transaction annulée au rollback ;
     # aucun effet sur la garantie réelle d'immuabilité). trg_entry_equilibre est une contrainte
@@ -317,9 +324,20 @@ def test_solde_theorique_egale_fonds_initial_plus_mouvements_reels_de_la_fenetre
     )  # -80 000
     rembourser(db, demande, montant=15_000, par=caissier_user.id)  # +15 000
 
-    # PIÈGE 2 — un AUTRE caissier, MÊME agence, MÊME compte de caisse, PENDANT la fenêtre.
+    # PIÈGE 2 — un AUTRE caissier, MÊME agence, MÊME compte de caisse, PENDANT la fenêtre. Son
+    # propre poste (un poste n'a qu'une session ouverte à la fois, `caissier` occupe déjà le
+    # poste principal) — même compte de caisse sous-jacent, pour que le piège reste sur LE
+    # compte que `calculer_solde_theorique` regarde.
     autre_user = _utilisateur(db, agence, "2")
     autre = _courant(autre_user, agence)
+    poste_autre = Poste(
+        agency_id=agence.id, code="02", libelle="Caisse 2",
+        compte_caisse_id=session.compte_caisse_id,
+    )
+    db.add(poste_autre)
+    db.flush()
+    _assigner(db, poste_autre, autre_user.id)
+    ouvrir_session(db, autre, poste_id=poste_autre.id, fonds_initial=0)
     deposer(db, autre, compte.id, 777_777)
     db.flush()
 
