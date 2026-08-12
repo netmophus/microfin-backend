@@ -16,8 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.parameters.models import Agency
-from app.modules.security.jwt import creer_access_token
+from app.modules.security.autorisation import UtilisateurCourant
+from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 
@@ -97,9 +100,34 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {jeton}"}
 
 
+def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+    """Poste + session de caisse OUVERTE pour l'acteur de `entete` (Bloc C3) : la souscription
+    au comptant exige désormais SA session, plus la seule agence — même compte que
+    `Agency.compte_caisse_id`, miroir du backfill de la migration 0041."""
+    jeton = entete["Authorization"].removeprefix("Bearer ")
+    user_id = decoder_access_token(jeton).sub
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse principale",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+    db.flush()
+    ouvrir_session(
+        db,
+        UtilisateurCourant(
+            user_id=user_id, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        poste_id=poste.id, fonds_initial=0,
+    )
+
+
 def test_comptant_par_caissier_rend_membre(client: TestClient, db: Session) -> None:
     agence, tier_id = _cadre(db, "C1")
     caissier = _entete(db, agence, "CAISSIER")  # a tiers.shares.pay
+    _ouvrir_session_caisse(db, agence, caissier)
 
     reponse = client.post(
         f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 10}, headers=caissier
@@ -173,6 +201,7 @@ def test_remboursement_total_par_responsable_redevient_client(
 ) -> None:
     agence, tier_id = _cadre(db, "RB")
     resp = _entete(db, agence, "RESPONSABLE_AGENCE")  # a pay + refund
+    _ouvrir_session_caisse(db, agence, resp)
     client.post(
         f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 10}, headers=resp
     )
@@ -192,6 +221,7 @@ def test_engagements_desactivation_avant_apres_remboursement(
     vide (message actionnable avec le capital en francs) ; après remboursement total -> vide."""
     agence, tier_id = _cadre(db, "EN")
     resp = _entete(db, agence, "RESPONSABLE_AGENCE")  # a tiers.deactivate + pay + refund
+    _ouvrir_session_caisse(db, agence, resp)
     client.post(
         f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 10}, headers=resp
     )
@@ -212,6 +242,7 @@ def test_charge_ne_peut_pas_rembourser_403(client: TestClient, db: Session) -> N
     agence, tier_id = _cadre(db, "RX")
     resp = _entete(db, agence, "RESPONSABLE_AGENCE")
     charge = _entete(db, agence, "CHARGE_CLIENTELE")  # PAS de refund
+    _ouvrir_session_caisse(db, agence, resp)
     client.post(
         f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 5}, headers=resp
     )

@@ -1,7 +1,9 @@
 """Pont Parts sociales -> comptabilité : traduire une opération de parts en pièce équilibrée.
 
 Résout les rôles du modèle d'écriture (même mécanisme que l'Épargne) :
-  - CAISSE            -> compte de caisse de l'AGENCE (agency.compte_caisse_id, 5721) ;
+  - CAISSE            -> compte de caisse de l'AGENCE (agency.compte_caisse_id, 5721) PAR
+    DÉFAUT, sauf `compte_caisse_id` fourni par l'appelant (Bloc C3 — souscription au comptant :
+    le compte ANCRÉ de la session de caisse ouverte du caissier, jamais recalculé) ;
   - PARTS_LIBEREES    -> compte des parts libérées (config, 1021) ;
   - PARTS_NON_LIBEREES-> compte des parts souscrites non libérées (config, 1022).
 Si un rattachement manque (provisoire non renseigné), on REFUSE proprement — rien n'est écrit.
@@ -37,18 +39,23 @@ def _resolveur(
     agency_id: uuid.UUID,
     compte_liberees_id: uuid.UUID | None,
     compte_non_liberees_id: uuid.UUID | None,
+    compte_caisse_id: uuid.UUID | None = None,
 ) -> ResolveurRole:
-    compte_caisse = db.execute(
-        select(Agency.compte_caisse_id).where(Agency.id == agency_id)
-    ).scalar_one()
-
     def resoudre(role: str) -> uuid.UUID:
         if role == "CAISSE":
-            if compte_caisse is None:
+            # ANCRÉ (Bloc C3, souscription au comptant) prime sur l'agence : l'appelant a déjà
+            # résolu la session de caisse ouverte du caissier. Sans override, comportement
+            # inchangé pour les autres opérations (libération, remboursement, annulation).
+            compte = compte_caisse_id
+            if compte is None:
+                compte = db.execute(
+                    select(Agency.compte_caisse_id).where(Agency.id == agency_id)
+                ).scalar_one()
+            if compte is None:
                 raise RattachementPartsManquantError(
                     "l'agence de cette opération n'a pas de compte de caisse rattaché"
                 )
-            return compte_caisse
+            return compte
         if role == "PARTS_LIBEREES":
             if compte_liberees_id is None:
                 raise RattachementPartsManquantError(
@@ -76,10 +83,14 @@ def poser_ecriture_parts(
     compte_liberees_id: uuid.UUID | None,
     compte_non_liberees_id: uuid.UUID | None,
     libelle: str,
+    compte_caisse_id: uuid.UUID | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> JournalEntry:
     """Pose la pièce équilibrée d'une opération de parts (date du jour). Ne touche ni cache ni
-    registre : l'appelant s'en charge, dans la même transaction."""
+    registre : l'appelant s'en charge, dans la même transaction.
+
+    `compte_caisse_id` : ANCRÉ, fourni par l'appelant (Bloc C3 — souscription au comptant,
+    voir en-tête de module) ; `None` pour toute autre opération, comportement inchangé."""
     jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
     return poser_depuis_schema(
         db,
@@ -90,6 +101,7 @@ def poser_ecriture_parts(
             agency_id=agency_id,
             compte_liberees_id=compte_liberees_id,
             compte_non_liberees_id=compte_non_liberees_id,
+            compte_caisse_id=compte_caisse_id,
         ),
         entry_date=jour,
         par=par,

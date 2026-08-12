@@ -28,6 +28,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.caisse.service import resoudre_session_active
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.models import MemberShares, ShareParameters, ShareSubscription, Tier
 from app.modules.tiers.parts_operations import (
@@ -258,6 +259,7 @@ def _operer(
     code_operation: str,
     action_audit: str,
     exiger_actif: bool = True,
+    compte_caisse_id: uuid.UUID | None = None,
     contexte: ContexteRequete,
 ) -> ResultatParts:
     """Tronc commun de TOUTES les opérations de parts : périmètre + gate, verrou, contrôles, pièce
@@ -303,6 +305,7 @@ def _operer(
         compte_liberees_id=config.compte_parts_liberees_id,
         compte_non_liberees_id=config.compte_parts_non_liberees_id,
         libelle=f"{code_operation} {shares_count} parts",
+        compte_caisse_id=compte_caisse_id,
         contexte=contexte,
     )
 
@@ -374,11 +377,18 @@ def souscrire(
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> ResultatParts:
     """Souscrit des parts. `comptant` (défaut) : paiement immédiat au guichet -> D CAISSE / C 1021,
-    parts libérées. Sinon : engagement sans paiement -> D 1022 / C 1021, parts non libérées."""
+    parts libérées — la CAISSE est celle de la session de caisse OUVERTE du caissier (compte
+    ANCRÉ à l'ouverture, Bloc C3), jamais celle de l'agence ; sans session ouverte, refus (le
+    tiroir doit être ouvert avant d'encaisser). Sinon : engagement sans paiement -> D 1022 /
+    C 1021, parts non libérées — aucune caisse en jeu, aucune session requise."""
     code = TYPE_SOUSCRIPTION_COMPTANT if comptant else TYPE_SOUSCRIPTION
+    compte_caisse_id = None
+    if comptant:
+        compte_caisse_id = resoudre_session_active(db, courant.user_id).compte_caisse_id
     return _operer(
         db, courant, tier_id, shares_count,
-        code_operation=code, action_audit=ActionsAudit.SOUSCRIPTION, contexte=contexte,
+        code_operation=code, action_audit=ActionsAudit.SOUSCRIPTION,
+        compte_caisse_id=compte_caisse_id, contexte=contexte,
     )
 
 

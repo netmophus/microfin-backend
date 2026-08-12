@@ -19,6 +19,8 @@ from sqlalchemy.orm import Session
 from app.core.database import engine
 from app.core.engagements import verificateurs_enregistres
 from app.modules.audit.service import CONTEXTE_VIDE
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers import parts, parts_parametres
@@ -105,6 +107,18 @@ def _cadre(
         {"u": unit_value, "m": minimum, "mo": membership_on},
     )
     courant = _courant(db, agence.id)
+    # Poste + session de caisse OUVERTE pour l'acteur (Bloc C3) : la souscription au comptant
+    # exige désormais SA session, plus la seule agence — même compte que l'ancien
+    # Agency.compte_caisse_id, miroir du backfill de la migration 0041.
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse principale",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=courant.user_id))
+    db.flush()
+    ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
     db.commit()
     return courant, tier_id
 

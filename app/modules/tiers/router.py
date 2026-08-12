@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.engagements import engagements_bloquants
+from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
 from app.modules.security.autorisation import UtilisateurCourant, exige
@@ -584,7 +585,9 @@ def souscrire_comptant_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> ResultatParts:
     """Souscription AU COMPTANT (souscrire + payer d'un geste) — le caissier encaisse.
-    D 5721 / C 1021 ; le membre devient sociétaire immédiatement."""
+    D 5721 / C 1021 ; le membre devient sociétaire immédiatement. Exige une session de caisse
+    OUVERTE pour l'acteur (Bloc C3) : la CAISSE créditée est celle de SA session, pas celle
+    de l'agence."""
     try:
         resultat = souscrire(db, courant, tier_id, corps.shares_count, comptant=True,
                              contexte=_contexte(request))
@@ -592,7 +595,7 @@ def souscrire_comptant_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError) as erreur:
+    except (PartsError, RattachementPartsManquantError, AucuneSessionOuverteError) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 
