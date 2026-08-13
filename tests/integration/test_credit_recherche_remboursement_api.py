@@ -170,7 +170,10 @@ def _credit_decaisse(
     return demande
 
 
-def _solder(db: Session, demande) -> None:
+def _solder(db: Session, agence: Agency, demande) -> None:
+    # Remboursement au guichet (Bloc C6) : exige une session de caisse OUVERTE, celle du même
+    # caissier fictif que `_credit_decaisse` (idempotent, réutilise l'existante).
+    par = _ouvrir_session_caisse(db, agence)
     while True:
         echeance = db.execute(
             select(Installment)
@@ -180,7 +183,7 @@ def _solder(db: Session, demande) -> None:
         ).scalar_one_or_none()
         if echeance is None:
             return
-        rembourser(db, demande, montant=echeance.total, par=None)
+        rembourser(db, demande, montant=echeance.total, par=par)
         db.commit()
 
 
@@ -226,7 +229,8 @@ def test_recherche_trouve_echeance_partiellement_payee_avec_le_solde_du(
         )
     ).scalar_one()
     versement = premiere.total // 2
-    rembourser(db, demande, montant=versement, par=None)
+    par = _ouvrir_session_caisse(db, agence)
+    rembourser(db, demande, montant=versement, par=par)
     db.commit()
 
     caissier = _entete(db, agence, "CAISSIER")
@@ -286,7 +290,7 @@ def test_dossier_solde_apparait_sans_prochaine_echeance(client: TestClient, db: 
     tier_id = _tier(db, agence)
     produit = _produit_credit(db)
     demande = _credit_decaisse(db, agence, tier_id, produit, montant=100000)
-    _solder(db, demande)
+    _solder(db, agence, demande)
     caissier = _entete(db, agence, "CAISSIER")
 
     reponse = client.get(

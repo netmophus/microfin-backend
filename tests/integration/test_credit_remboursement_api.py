@@ -27,7 +27,7 @@ from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Application, Installment, Product, Repayment
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.security.jwt import creer_access_token
+from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 
@@ -158,6 +158,32 @@ def _ouvrir_session_caisse(db: Session, agence: Agency) -> uuid.UUID:
     return uid
 
 
+def _ouvrir_session_caisse_acteur(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+    """Poste + session de caisse OUVERTE pour l'acteur HTTP de `entete` (Bloc C6) : le
+    remboursement au guichet (complet ou partiel, MÊME chemin) exige désormais SA session, plus
+    la seule agence. Poste DISTINCT (code "02") de celui de `_ouvrir_session_caisse` (code "01",
+    caissier de mise en situation du décaissement) — un poste n'a qu'une session ouverte à la
+    fois, les deux caissiers de ce fichier ne peuvent pas partager le même."""
+    jeton = entete["Authorization"].removeprefix("Bearer ")
+    user_id = decoder_access_token(jeton).sub
+    poste = Poste(
+        agency_id=agence.id, code="02", libelle="Caisse remboursement",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+    db.flush()
+    ouvrir_session(
+        db,
+        UtilisateurCourant(
+            user_id=user_id, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        poste_id=poste.id, fonds_initial=0,
+    )
+
+
 def _demande_decaissee(
     db: Session,
     agence: Agency,
@@ -194,6 +220,7 @@ def test_remboursement_pose_trois_lignes_quand_linteret_est_non_nul(
     produit = _produit(db, taux_bp=1200)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -252,6 +279,7 @@ def test_ligne_interets_omise_quand_le_taux_est_nul(client: TestClient, db: Sess
     produit = _produit(db, taux_bp=0, avec_compte_interets=False)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -292,6 +320,7 @@ def test_rembourser_guichet_defaut_reste_caisse_journal_ca(client: TestClient, d
     produit = _produit(db, taux_bp=1200)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -391,6 +420,7 @@ def test_aucune_echeance_a_regler_si_deja_solde(client: TestClient, db: Session)
     produit = _produit(db, taux_bp=0)
     demande = _demande_decaissee(db, agence, tier_id, produit, montant=60000, duree_echeances=2)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     for _ in range(2):
         echeance = db.execute(
@@ -422,6 +452,7 @@ def test_remboursement_partiel_bascule_partiellement_paye(client: TestClient, db
     produit = _produit(db, taux_bp=1200)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -456,6 +487,7 @@ def test_remboursement_complete_apres_partiel_bascule_paye(client: TestClient, d
     produit = _produit(db, taux_bp=1200)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -510,6 +542,7 @@ def test_remboursement_depasse_le_solde_du_refuse_meme_sous_le_total(
     produit = _produit(db, taux_bp=1200)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -552,6 +585,7 @@ def test_ventilation_interets_dabord_puis_capital(client: TestClient, db: Sessio
     produit = _produit(db, taux_bp=1200)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
 
     premiere = db.execute(
         select(Installment)
@@ -596,6 +630,7 @@ def test_echeancier_expose_montant_paye_et_solde_du_apres_versement_partiel(
     produit = _produit(db)
     demande = _demande_decaissee(db, agence, tier_id, produit)
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
 
     premiere = db.execute(
@@ -634,6 +669,9 @@ def test_transaction_interrompue_apres_la_piece_ne_laisse_rien(
     tier_id = _tier(db, agence)
     produit = _produit(db)
     demande = _demande_decaissee(db, agence, tier_id, produit)
+    # Réutilise la session du caissier de mise en situation du décaissement (idempotent) —
+    # le remboursement au guichet exige lui aussi une session ouverte (Bloc C6).
+    par = _ouvrir_session_caisse(db, agence)
 
     premiere = db.execute(
         select(Installment)
@@ -652,7 +690,7 @@ def test_transaction_interrompue_apres_la_piece_ne_laisse_rien(
     ).scalar_one()
 
     with pytest.raises(RuntimeError):
-        remboursement_module.rembourser(db, demande, montant=premiere.total, par=None)
+        remboursement_module.rembourser(db, demande, montant=premiere.total, par=par)
     db.rollback()
 
     entrees_apres = db.execute(

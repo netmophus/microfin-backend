@@ -23,6 +23,14 @@ intérêts-d'abord, `compte_encours_courant` (CR5c) et le registre Repayment son
 les deux cas — c'est tout l'intérêt de réutiliser cette fonction plutôt que d'en écrire une
 seconde (décision CR5d : « pas une nouvelle logique »).
 
+SESSION DE CAISSE (Bloc C6) : le guichet volontaire (`compte_source_id is None`) exige une
+session OUVERTE pour `par` — le compte ANCRÉ de CETTE session reçoit le débit, jamais celui de
+l'agence. Le prélèvement automatique fournit TOUJOURS `compte_source_id`, donc n'atteint
+structurellement JAMAIS cette branche, donc jamais ce gate — pas un cas spécial ajouté après
+coup, une CONSÉQUENCE de où le contrôle est posé (même principe que `resoudre_session_active`,
+voir caisse/service.py). Un versement PARTIEL (CR5b) passe par le MÊME appel que le versement
+complet : rien ne distingue les deux ici, le gate s'applique pareil aux deux.
+
 PIÈCE CONSTRUITE DIRECTEMENT (ecritures.creer_brouillon/valider), PAS via le moteur générique
 poser_depuis_schema : ce dernier applique un même montant à toutes les lignes d'un modèle à
 nombre de lignes fixe — un remboursement a des montants DIFFÉRENTS par ligne (capital ≠
@@ -56,13 +64,13 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.caisse.service import resoudre_session_active
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE, CreditError
 from app.modules.credit.models import Application, DelinquencyTier, Installment, Product, Repayment
-from app.modules.parameters.models import Agency
 
 CODE_JOURNAL = "CA"  # journal de caisse — même journal que le décaissement
 
@@ -151,11 +159,13 @@ def rembourser(
 
     Refuse si le crédit n'est pas décaissé ou déjà entièrement soldé (aucune échéance non
     'paye'), si le montant dépasse le solde restant dû (message actionnable, nommant CE solde),
-    ou si un rattachement comptable manque (compte de caisse ou, si ce versement couvre des
-    intérêts, compte produits d'intérêts du produit).
+    si un rattachement comptable manque (compte d'encours ou, si ce versement couvre des
+    intérêts, compte produits d'intérêts du produit), ou — guichet volontaire seulement,
+    `compte_source_id is None` — si aucune session de caisse n'est ouverte pour `par` (Bloc C6).
 
     compte_source_id/journal_code : réservés à un appelant EXTERNE (CR5d, voir docstring module)
-    — None/CODE_JOURNAL (défaut) préserve EXACTEMENT le comportement du guichet CR6d."""
+    — None/CODE_JOURNAL (défaut) préserve EXACTEMENT le comportement du guichet CR6d, ET
+    n'atteint jamais le gate de session (voir docstring module)."""
     if demande.status != "decaisse":
         raise AucuneEcheanceAReglerError(
             f"Cette demande ({demande.application_number}) n'est pas décaissée : "
@@ -184,17 +194,17 @@ def rembourser(
     part_capital = montant - part_interets
 
     # D CAISSE (guichet, défaut) ou D le compte fourni par l'appelant (CR5d : le collectif
-    # épargne du tiers) — voir docstring module.
+    # épargne du tiers) — voir docstring module. Bloc C6 : le guichet volontaire (cette
+    # branche SEULE) exige une session de caisse OUVERTE pour le caissier (`par`), et c'est le
+    # compte ANCRÉ de CETTE session qui reçoit le débit, jamais celui de l'agence. Le
+    # prélèvement automatique (CR5d) fournit TOUJOURS `compte_source_id` explicitement et
+    # n'entre structurellement JAMAIS dans cette branche — donc jamais ce gate — même pour un
+    # paiement partiel (aucune distinction ici entre versement complet et partiel : c'est le
+    # MÊME appel, la même branche, quel que soit `montant`).
     compte_debit = compte_source_id
     prefixe_libelle = "Remboursement crédit"
     if compte_debit is None:
-        compte_debit = db.execute(
-            select(Agency.compte_caisse_id).where(Agency.id == demande.agency_id)
-        ).scalar_one()
-        if compte_debit is None:
-            raise RattachementManquantError(
-                "l'agence de cette demande n'a pas de compte de caisse rattaché"
-            )
+        compte_debit = resoudre_session_active(db, par).compte_caisse_id
     else:
         prefixe_libelle = "Prélèvement automatique crédit"
 

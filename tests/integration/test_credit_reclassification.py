@@ -334,7 +334,10 @@ def test_credit_souffrance_puis_solde_redevient_sain_provision_reprise(db: Sessi
 
     # 2) Le client rembourse intégralement — rembourser() crédite le compte COURANT de
     #    l'encours (le palier, PAS l'ancrage 202221), donc 292SB s'apure tout seul ici.
-    resultat = rembourser(db, demande, montant=100000, par=None)
+    # Remboursement au guichet (Bloc C6) : réutilise la session du même caissier fictif que
+    # `_demande_decaissee_un_versement` (idempotent).
+    par = _ouvrir_session_caisse(db, agence)
+    resultat = rembourser(db, demande, montant=100000, par=par)
     db.commit()
     assert resultat.echeance_soldee is True
     assert _solde_compte(db, souffrance.compte_encours_id) == 0  # déjà vidé par le remboursement

@@ -27,7 +27,7 @@ TABLE DES ERREURS (un seul endroit) :
   - demande déjà décidée / montant décidé invalide -> 422
   - demande non approuvée, rattachement comptable manquant, échéancier impossible -> 422
   - compte choisi invalide (mode 'epargne' : hors tiers, hors périmètre, fermé) -> 422
-  - aucune session de caisse ouverte (décaissement mode 'caisse' seulement) -> 422
+  - aucune session de caisse ouverte (décaissement mode 'caisse', remboursement au guichet) -> 422
   - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
   - code/seuil de palier déjà utilisé par un autre palier, compte de rattachement invalide -> 422
   - palier encore classé sur un dossier (suppression refusée) -> 422
@@ -508,8 +508,10 @@ def rembourser_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("credit.remboursement.create"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> RemboursementRecu:
-    """Règle la prochaine échéance impayée, pour son montant EXACT. Aucun gate KYC (encaisser
-    de l'argent qui rentre ne présente aucun risque)."""
+    """Règle la prochaine échéance impayée, pour son montant EXACT (ou un versement partiel,
+    CR5b). Aucun gate KYC (encaisser de l'argent qui rentre ne présente aucun risque). Exige une
+    session de caisse OUVERTE pour l'acteur (Bloc C6, guichet volontaire seulement) : la CAISSE
+    débitée est celle de SA session, pas celle de l'agence."""
     ligne = consultation.lire_demande(db, courant, application_id)
     if ligne is None:
         raise HTTPException(
@@ -527,6 +529,7 @@ def rembourser_endpoint(
         AucuneEcheanceAReglerError,
         MontantIncorrectError,
         RattachementManquantError,
+        AucuneSessionOuverteError,
     ) as erreur:
         db.rollback()
         raise HTTPException(

@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine
 from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
-from app.modules.caisse.service import ouvrir_session
+from app.modules.caisse.service import fermer_session, ouvrir_session
+from app.modules.credit import remboursement as remboursement_module
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Application, Installment, PrelevementTentative
@@ -314,6 +315,74 @@ def test_prelevement_complet_quand_le_solde_suffit(db: Session) -> None:
         text("SELECT balance FROM epargne.accounts WHERE id = :c"), {"c": compte.id}
     ).scalar_one()
     assert solde == 0
+
+
+# --- Bloc C6 : le prélèvement automatique est structurellement EXEMPTÉ du gate de session ----
+
+
+def test_prelevement_automatique_passe_sans_aucune_session_de_caisse_ouverte(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LE test le plus important de ce bloc : le prélèvement automatique tourne SANS AUCUN
+    humain connecté, et ne doit JAMAIS dépendre d'une session de caisse — ni celle d'un
+    caissier de guichet, ni celle d'un responsable. Double preuve, pas une affirmation :
+
+    1) La session ouverte pour la mise en situation du décaissement (Bloc C5, `_caissier()`
+       dans `_demande_decaissee`) est explicitement REFERMÉE avant l'appel, et le compte
+       épargne est financé par SQL brut plutôt que par le guichet (`deposer()` exigerait LUI-
+       MÊME une session, Bloc C4 — hors sujet, ce n'est pas le mécanisme sous test) : à
+       l'instant de l'appel, AUCUNE session de caisse n'est ouverte nulle part dans la base.
+    2) `resoudre_session_active` est remplacée par une fonction qui LÈVE si appelée : le lot
+       doit réussir MALGRÉ ça — la preuve que le prélèvement ne l'appelle structurellement
+       JAMAIS (compte_source_id est toujours fourni, voir remboursement.py, docstring module),
+       pas seulement qu'une session se trouvait par chance déjà ouverte."""
+    agence = _agence(db, "PRC1")
+    tier_id = _tier(db, agence)
+    produit_credit = _produit_credit(db)
+    produit_epargne = _produit_epargne(db)
+    compte = _compte_epargne(db, agence, tier_id, produit_epargne)
+    demande = _demande_decaissee(db, agence, tier_id, produit_credit, montant=300000)
+    echeance = _premiere_echeance(db, demande)
+
+    # (1a) Referme la session ouverte pour le décaissement de mise en situation.
+    caissier = _caissier(db, agence)
+    session_ouverte = db.execute(
+        select(CaisseSession).where(
+            CaisseSession.caissier_id == caissier.user_id, CaisseSession.status == "ouverte"
+        )
+    ).scalar_one()
+    fermer_session(db, caissier, session_ouverte.id, montant_reel=0)
+    aucune_pour_ce_caissier = db.execute(
+        select(CaisseSession.id).where(
+            CaisseSession.caissier_id == caissier.user_id, CaisseSession.status == "ouverte"
+        )
+    ).first()
+    assert aucune_pour_ce_caissier is None  # bien refermée, pas juste tentée
+
+    # (1b) Finance le compte SANS passer par le guichet épargne.
+    db.execute(
+        text("UPDATE epargne.accounts SET balance = :m WHERE id = :a"),
+        {"m": echeance.total, "a": compte.id},
+    )
+    configurer_prelevement(db, demande, compte.id, par=None)
+    db.commit()
+
+    # (2) La preuve structurelle : la fonction qui exigerait une session lève si on l'appelle.
+    def _leve_si_appelee(*args: object, **kwargs: object) -> object:
+        raise AssertionError(
+            "resoudre_session_active() a été appelée par le prélèvement automatique — elle ne "
+            "doit JAMAIS l'être : compte_source_id est toujours fourni pour ce chemin."
+        )
+
+    monkeypatch.setattr(remboursement_module, "resoudre_session_active", _leve_si_appelee)
+
+    rapport = executer_prelevement(db, date_echeance=echeance.due_date)
+
+    assert rapport.dossiers_evalues == 1
+    assert rapport.prelevements == 1
+    assert rapport.total_preleve == echeance.total
+    echeance_apres = db.get(Installment, echeance.id)
+    assert echeance_apres.status == "paye"
 
 
 def test_prelevement_partiel_quand_le_solde_est_insuffisant(db: Session) -> None:

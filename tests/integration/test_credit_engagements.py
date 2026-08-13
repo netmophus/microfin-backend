@@ -156,6 +156,9 @@ def _desactiver(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID):
 
 
 def _solder_toutes_les_echeances(db: Session, demande) -> None:
+    # Remboursement au guichet (Bloc C6) : exige une session de caisse OUVERTE, celle du même
+    # caissier fictif que `_decaisser_credit` (idempotent, réutilise l'existante).
+    par = _ouvrir_session_caisse(db, demande.agency_id)
     while True:
         echeance = db.execute(
             select(Installment)
@@ -165,7 +168,7 @@ def _solder_toutes_les_echeances(db: Session, demande) -> None:
         ).scalar_one_or_none()
         if echeance is None:
             return
-        rembourser(db, demande, montant=echeance.total, par=None, contexte=CONTEXTE_VIDE)
+        rembourser(db, demande, montant=echeance.total, par=par, contexte=CONTEXTE_VIDE)
         db.flush()
 
 
@@ -219,7 +222,7 @@ def test_desactivation_refusee_si_echeance_partiellement_payee(db: Session) -> N
     seule = db.execute(
         select(Installment).where(Installment.application_id == demande.id)
     ).scalar_one()
-    rembourser(db, demande, montant=seule.total // 2, par=None, contexte=CONTEXTE_VIDE)
+    rembourser(db, demande, montant=seule.total // 2, par=par, contexte=CONTEXTE_VIDE)
     db.flush()
 
     with pytest.raises(EngagementsOuvertsError):
