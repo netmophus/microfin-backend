@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import Base, SessionLocal, engine
 from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
-from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, PosteAssignation
 from app.modules.comptabilite.models import (
     Account,
     EntrySchema,
@@ -172,6 +172,8 @@ TABLES_ATTENDUES = frozenset(
         "caisse.postes",
         # Caisse Bloc B — assignation guichetier <-> poste (migration 0042).
         "caisse.poste_assignations",
+        # Caisse CA2 — seuil de tolérance sur l'écart, singleton (migration 0043).
+        "caisse.parametres",
     }
 )
 
@@ -233,6 +235,7 @@ MODELES = [
     CaisseSession,
     Poste,
     PosteAssignation,
+    CaisseParametres,
 ]
 
 

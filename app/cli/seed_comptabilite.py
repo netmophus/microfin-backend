@@ -233,6 +233,22 @@ def seed_parametres_parts(db: Session) -> int:
     return 1
 
 
+def seed_parametres_caisse(db: Session) -> int:
+    """Installe la config PROVISOIRE du seuil de tolérance de caisse (CA2, une ligne) — même
+    patron que `seed_parametres_parts`. Idempotent et non destructif : crée la ligne si aucune
+    n'existe (500 F, le défaut proposé lors de l'analyse initiale) ; ne touche à rien si une
+    ligne existe déjà (contrairement à `seed_parametres_parts`, il n'y a pas de rattachement
+    comptable à compléter ici — CA3 s'en chargera séparément). Renvoie 1 si la ligne a été
+    créée, 0 sinon."""
+    existe = db.execute(text("SELECT count(*) FROM caisse.parametres")).scalar_one()
+    if existe:
+        return 0
+    db.execute(
+        text("INSERT INTO caisse.parametres (seuil_tolerance, is_provisional) VALUES (500, TRUE)")
+    )
+    return 1
+
+
 class ExerciceChevauchantError(Exception):
     """Un exercice existant recouvre déjà la période demandée."""
 

@@ -430,15 +430,17 @@ def test_fermer_la_session_dun_autre_caissier_refuse_404_pas_403(db: Session) ->
 
 
 def test_fermeture_ne_bloque_jamais_meme_avec_un_ecart_enorme(db: Session) -> None:
-    """CA1 : aucune politique de tolérance/blocage n'existe encore (CA2). La fermeture doit
-    réussir même face à un écart énorme — empêcher un caissier de rentrer chez lui a un coût
-    réel, décision déjà actée."""
+    """CA2 : un motif est EXIGÉ au-delà du seuil de tolérance, mais rien ne BLOQUE jamais la
+    fermeture elle-même — motif fourni, un écart énorme passe sans encombre. Empêcher un
+    caissier de rentrer chez lui a un coût réel, décision déjà actée."""
     agence = _agence(db, "CXA7")
     caissier = _courant(_utilisateur(db, agence, "9"), agence)
     session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
     db.flush()
 
-    resultat = fermer_session(db, caissier, session.id, montant_reel=999_999_999)
+    resultat = fermer_session(
+        db, caissier, session.id, montant_reel=999_999_999, motif="Erreur de comptage massive"
+    )
 
     assert resultat.session.status == "fermee"
     assert resultat.ecart == 999_999_999 - 10_000
@@ -652,10 +654,13 @@ def _session_fermee(
     """Une session ouverte puis fermée, SANS mouvement réel : le solde théorique reste égal au
     fonds initial, donc `montant_reel` pilote directement le signe de l'écart — suffisant pour
     les tests de PÉRIMÈTRE ci-dessous (le calcul du solde théorique lui-même est prouvé plus
-    haut, pas à reprouver ici)."""
+    haut, pas à reprouver ici). Motif TOUJOURS fourni (CA2) : inoffensif sous le seuil, ce
+    helper sert des tests de périmètre qui ne veulent pas se soucier de la valeur du seuil."""
     session = _ouvrir(db, courant, agence, fonds_initial=fonds_initial)
     db.flush()
-    resultat = fermer_session(db, courant, session.id, montant_reel=montant_reel)
+    resultat = fermer_session(
+        db, courant, session.id, montant_reel=montant_reel, motif="Test — écart de mise en situation"
+    )
     db.flush()
     return resultat.session
 

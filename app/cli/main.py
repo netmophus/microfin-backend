@@ -15,6 +15,7 @@ from app.cli.seed_comptabilite import (
     executer_seed_schemas,
     ouvrir_exercice,
     rattacher_caisse_agences,
+    seed_parametres_caisse,
     seed_parametres_parts,
 )
 from app.cli.seed_credit import executer_seed_paliers_souffrance, executer_seed_produits_credit
@@ -196,6 +197,7 @@ def seed_comptabilite() -> None:
         nb_schemas = executer_seed_schemas(db)
         nb_caisses = rattacher_caisse_agences(db)
         seed_parametres_parts(db)
+        seed_parametres_caisse(db)
         db.commit()
     typer.echo("")
     typer.secho(

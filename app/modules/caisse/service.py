@@ -1,6 +1,13 @@
 """Caisse CA1 — ouverture, fermeture, calcul de l'écart. AUCUNE écriture comptable posée ici
-(CA3, une fois le compte d'écart validé par l'expert), AUCUN blocage sur écart (CA2), AUCUNE
-tolérance/seuil (CA2, `caisse.parametres` pas encore créée).
+(CA3, une fois le compte d'écart validé par l'expert).
+
+CA2 (migration 0043) : seuil de tolérance (`caisse.parametres`, voir `parametres.py`), motif
+obligatoire au-delà, validation a posteriori du responsable. NE BLOQUE TOUJOURS PAS la fermeture
+— décision actée dès l'analyse initiale, jamais remise en cause : empêcher un caissier de
+rentrer chez lui a un coût opérationnel réel qu'un motif à saisir n'a pas. Le statut « à
+valider » n'est JAMAIS stocké — il se DÉRIVE (fermée + `abs(ecart) > seuil` + `valide_le IS
+NULL`), même philosophie que `calculer_solde_theorique` : un calcul, jamais un cache qui
+pourrait diverger du seuil courant si celui-ci change après coup.
 
 LE CALCUL CENTRAL (`calculer_solde_theorique`) est un calcul DÉRIVÉ, jamais un solde stocké
 qu'on relit — même discipline que `epargne.rapprochement.rapprocher()` : on interroge les
@@ -32,7 +39,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
-from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
+from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.postes import PosteIntrouvableError
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
@@ -67,6 +74,43 @@ class RattachementManquantError(Exception):
 class AucuneSessionOuverteError(Exception):
     """Aucun guichet ne peut opérer en espèces sans une session de caisse ouverte pour ce
     caissier — le tiroir doit être ouvert avant tout mouvement."""
+
+
+class MotifRequisError(Exception):
+    """L'écart dépasse le seuil de tolérance (CA2) : un motif est requis pour fermer la
+    session. Ne bloque PAS la fermeture — le caissier resoumet avec un motif, rien de plus."""
+
+
+class SessionDejaValideeError(Exception):
+    """L'écart de cette session a déjà été validé — on ne valide pas deux fois."""
+
+
+class EcartNonSignificatifError(Exception):
+    """Cette session n'a pas d'écart au-delà du seuil de tolérance : rien à valider."""
+
+
+def seuil_tolerance(db: Session) -> int:
+    """Le seuil de tolérance courant (CA2). 500 F si `caisse.parametres` n'a pas encore été
+    seedée — cohérent avec le défaut posé par la migration 0043 elle-même (`server_default`),
+    jamais un nombre magique recopié à la main : si le défaut de la migration change un jour,
+    celui-ci doit changer avec lui, pas être découvert en désaccord silencieux."""
+    seuil = db.execute(select(CaisseParametres.seuil_tolerance).limit(1)).scalar_one_or_none()
+    return seuil if seuil is not None else 500
+
+
+def session_a_valider(session: CaisseSession, seuil: int) -> bool:
+    """LE calcul dérivé (CA2) : une session est « à valider » si elle est FERMÉE, que son écart
+    dépasse le seuil de tolérance (manquant ET excédent comptent — la matérialité comptable ne
+    connaît pas de sens), et qu'elle n'a pas déjà été validée. Fonction PURE, réutilisée par le
+    filtre SQL de `lister_sessions_a_valider` ET par `_vers_schema` (router) pour exposer le
+    même booléen sur la fiche d'une session unique — un seul endroit qui sait ce qu'« à valider »
+    veut dire, jamais deux implémentations qui pourraient diverger."""
+    return (
+        session.status == "fermee"
+        and session.ecart is not None
+        and abs(session.ecart) > seuil
+        and session.valide_le is None
+    )
 
 
 def ouvrir_session(
@@ -258,12 +302,17 @@ def fermer_session(
     session_id: uuid.UUID,
     *,
     montant_reel: int,
+    motif: str | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> ResultatFermeture:
     """Ferme la session de L'ACTEUR : calcule et FIGE le solde théorique et l'écart, à cet
-    instant précis. NE BLOQUE JAMAIS (CA2 : la politique de tolérance/motif viendra plus tard,
-    sans jamais empêcher la fermeture elle-même — un caissier ne reste pas coincé au guichet).
-    NE POSE AUCUNE ÉCRITURE (CA3)."""
+    instant précis. NE BLOQUE JAMAIS sur l'écart (CA2) — un caissier ne reste jamais coincé au
+    guichet. NE POSE AUCUNE ÉCRITURE (CA3).
+
+    `motif` (CA2) : optionnel si `abs(ecart) <= seuil_tolerance`, OBLIGATOIRE au-delà —
+    `MotifRequisError` sinon, AVANT toute mutation (refus propre, rien n'est écrit). Le seuil est
+    lu à CET instant (`seuil_tolerance`), jamais mis en cache : un changement de seuil par le
+    comptable s'applique immédiatement aux fermetures suivantes."""
     session = _charger_session_de_lacteur(db, courant, session_id, verrou=True)
     if session.status != "ouverte":
         raise SessionDejaFermeeError(
@@ -274,10 +323,19 @@ def fermer_session(
     theorique = calculer_solde_theorique(db, session, jusqu_a=maintenant)
     ecart = montant_reel - theorique
 
+    seuil = seuil_tolerance(db)
+    motif_propre = motif.strip() if motif else None
+    if abs(ecart) > seuil and not motif_propre:
+        raise MotifRequisError(
+            f"Écart de {abs(ecart)} F, au-delà du seuil de tolérance de {seuil} F : un motif "
+            "est requis pour fermer cette session."
+        )
+
     avant = {"status": session.status}
     session.montant_reel_cloture = montant_reel
     session.solde_theorique_cloture = theorique
     session.ecart = ecart
+    session.motif_ecart = motif_propre
     session.closed_at = maintenant
     session.status = "fermee"
     session.updated_by = courant.user_id
@@ -298,9 +356,64 @@ def fermer_session(
             "montant_reel_cloture": montant_reel,
             "solde_theorique_cloture": theorique,
             "ecart": ecart,
+            "motif_ecart": motif_propre,
         },
     )
     return ResultatFermeture(session=session, solde_theorique=theorique, ecart=ecart)
+
+
+def valider_ecart(
+    db: Session,
+    courant: UtilisateurCourant,
+    session_id: uuid.UUID,
+    *,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> CaisseSession:
+    """Valide A POSTERIORI l'écart d'une session FERMÉE, au-delà du seuil de tolérance (CA2) —
+    une TRACE consultable, jamais un blocage : ne change rien d'autre que `valide_le`/
+    `valide_par`, aucune écriture, aucun effet sur le calcul de la session.
+
+    Périmètre vérifié ICI, au niveau de l'OBJET (IDOR) — `caisse.session.valider` est déjà
+    exigé par le routeur, mais un responsable ne valide que les sessions de SON périmètre.
+    Hors périmètre ou inexistante -> `SessionIntrouvableError` (404, jamais 403). Déjà validée
+    -> `SessionDejaValideeError`. Écart sous le seuil -> `EcartNonSignificatifError` (rien à
+    valider — ce n'est pas un état auquel l'écran devrait pouvoir mener, mais un appel direct à
+    l'API ne doit pas pouvoir valider n'importe quoi)."""
+    session = db.execute(
+        select(CaisseSession)
+        .where(CaisseSession.id == session_id, courant.condition_perimetre(CaisseSession.agency_id))
+        .with_for_update()
+    ).scalar_one_or_none()
+    if session is None:
+        raise SessionIntrouvableError()
+    if session.valide_le is not None:
+        raise SessionDejaValideeError(
+            f"L'écart de cette session a déjà été validé le {session.valide_le}."
+        )
+    seuil = seuil_tolerance(db)
+    if not session_a_valider(session, seuil):
+        raise EcartNonSignificatifError(
+            "Cette session n'a pas d'écart au-delà du seuil de tolérance : rien à valider."
+        )
+
+    maintenant = db.execute(text("SELECT NOW()")).scalar_one()
+    session.valide_le = maintenant
+    session.valide_par = courant.user_id
+    session.updated_by = courant.user_id
+    db.flush()
+
+    ecrire_audit(
+        db,
+        action="caisse.session.ecart_valide",
+        contexte=contexte,
+        acteur_id=courant.user_id,
+        resource_type=RESSOURCE,
+        resource_id=session.id,
+        agency_id=session.agency_id,
+        old_values={"valide_le": None},
+        new_values={"valide_le": str(maintenant), "ecart": session.ecart},
+    )
+    return session
 
 
 def session_ouverte_de_lacteur(
@@ -425,4 +538,97 @@ def lister_sessions_manquantes(
         total=total,
         page=page,
         taille=taille,
+    )
+
+
+@dataclass(frozen=True)
+class LigneSessionAValider:
+    """Une session fermée dont l'écart dépasse le seuil de tolérance (CA2), pas encore
+    validée — manquant ET excédent comptent ici (contrairement à `LigneSessionManquante`,
+    réservée à la lettre de demande d'explication)."""
+
+    id: uuid.UUID
+    caissier_id: uuid.UUID
+    caissier_nom: str
+    agency_id: uuid.UUID
+    agency_nom: str
+    compte_caisse_number: str
+    fonds_initial: int
+    opened_at: datetime
+    closed_at: datetime
+    montant_reel_cloture: int
+    solde_theorique_cloture: int
+    ecart: int
+    motif_ecart: str | None
+
+
+@dataclass(frozen=True)
+class PageSessionsAValider:
+    lignes: Sequence[LigneSessionAValider]
+    total: int
+    page: int
+    taille: int
+    seuil_tolerance: int
+
+
+def lister_sessions_a_valider(
+    db: Session,
+    courant: UtilisateurCourant,
+    *,
+    page: int = 1,
+    taille: int = TAILLE_PAGE_DEFAUT,
+) -> PageSessionsAValider:
+    """Sessions FERMÉES avec un écart AU-DELÀ DU SEUIL, non encore validées, dans le périmètre
+    de lecture de l'acteur (voir `_condition_lecture`) — la file d'attente du responsable.
+    Le statut « à valider » n'existe dans AUCUNE colonne : il est reconstruit ici par le MÊME
+    calcul que `session_a_valider` (traduit en filtre SQL), pour qu'un changement de seuil par
+    le comptable s'applique immédiatement à cette liste, sans purge ni recalcul de rien.
+    Triée par fermeture la plus RÉCENTE d'abord."""
+    taille = max(1, min(taille, TAILLE_PAGE_MAX))
+    page = max(1, page)
+    seuil = seuil_tolerance(db)
+
+    conditions = (
+        CaisseSession.status == "fermee",
+        func.abs(CaisseSession.ecart) > seuil,
+        CaisseSession.valide_le.is_(None),
+        _condition_lecture(courant),
+    )
+
+    total = db.execute(
+        select(func.count()).select_from(CaisseSession).where(*conditions)
+    ).scalar_one()
+
+    lignes = db.execute(
+        select(
+            CaisseSession.id,
+            CaisseSession.caissier_id,
+            func.concat_ws(" ", User.first_name, User.last_name).label("caissier_nom"),
+            CaisseSession.agency_id,
+            Agency.name.label("agency_nom"),
+            Account.account_number.label("compte_caisse_number"),
+            CaisseSession.fonds_initial,
+            CaisseSession.opened_at,
+            CaisseSession.closed_at,
+            CaisseSession.montant_reel_cloture,
+            CaisseSession.solde_theorique_cloture,
+            CaisseSession.ecart,
+            CaisseSession.motif_ecart,
+        )
+        .select_from(CaisseSession)
+        .join(User, User.id == CaisseSession.caissier_id)
+        .join(Agency, Agency.id == CaisseSession.agency_id)
+        .join(Account, Account.id == CaisseSession.compte_caisse_id)
+        .where(*conditions)
+        .order_by(CaisseSession.closed_at.desc())
+        .offset((page - 1) * taille)
+        .limit(taille)
+    ).all()
+
+    return PageSessionsAValider(
+        lignes=[LigneSessionAValider(**ligne._mapping) for ligne in lignes],
+        total=total,
+        page=page,
+        taille=taille,
+        seuil_tolerance=seuil,
     )

@@ -351,7 +351,10 @@ def test_prelevement_automatique_passe_sans_aucune_session_de_caisse_ouverte(
             CaisseSession.caissier_id == caissier.user_id, CaisseSession.status == "ouverte"
         )
     ).scalar_one()
-    fermer_session(db, caissier, session_ouverte.id, montant_reel=0)
+    fermer_session(
+        db, caissier, session_ouverte.id, montant_reel=0,
+        motif="Mise en situation : compte de caisse jamais réapprovisionné pour ce test",
+    )
     aucune_pour_ce_caissier = db.execute(
         select(CaisseSession.id).where(
             CaisseSession.caissier_id == caissier.user_id, CaisseSession.status == "ouverte"

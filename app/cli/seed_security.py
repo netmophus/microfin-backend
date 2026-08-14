@@ -307,6 +307,15 @@ PERMISSIONS: tuple[Permission, ...] = (
         "caisse",
         "Gérer les postes de caisse d'une agence (création, assignation)",
     ),
+    # CA2 : validation A POSTERIORI d'un écart au-delà du seuil de tolérance — une TRACE,
+    # jamais un blocage (la fermeture n'attend jamais cette validation). Cloisonnée à l'agence
+    # via condition_perimetre, vérifiée à l'objet dans caisse/service.py::valider_ecart —
+    # même discipline que caisse.session.read.autres.
+    Permission(
+        "caisse.session.valider",
+        "caisse",
+        "Valider a posteriori l'écart d'une session de caisse",
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -434,6 +443,9 @@ MATRICE: dict[str, frozenset[str]] = {
             # Bloc B : postes de caisse de SON agence (création, assignation des guichetiers) —
             # décision d'organisation d'agence, pas comptable (voir la permission elle-même).
             "caisse.poste.manage",
+            # CA2 : validation a posteriori des écarts de SON agence — même cloisonnement que
+            # caisse.session.read.autres, jamais perimetre.reseau.
+            "caisse.session.valider",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

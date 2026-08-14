@@ -20,9 +20,15 @@ class OuvertureSession(BaseModel):
 
 class FermetureSession(BaseModel):
     """Montant compté PHYSIQUEMENT par le caissier à la fermeture — comparé au solde théorique
-    calculé par le serveur, jamais saisi par le client."""
+    calculé par le serveur, jamais saisi par le client.
+
+    `motif` : optionnel sous le seuil de tolérance (CA2), OBLIGATOIRE au-delà — contrôle fait en
+    service (le seuil est modifiable, une contrainte figée ici mentirait dès le premier
+    changement). Ne bloque JAMAIS la fermeture : un motif manquant refuse la requête (422,
+    message nommant l'écart et le seuil), le caissier resoumet avec le motif, rien de plus."""
 
     montant_reel: int = Field(ge=0)
+    motif: str | None = Field(None, max_length=500)
 
 
 class SessionCaisse(BaseModel):
@@ -49,6 +55,13 @@ class SessionCaisse(BaseModel):
     solde_theorique_cloture: int | None
     ecart: int | None
     status: str
+    # CA2 : motif saisi à la fermeture, et trace de validation a posteriori (identité en clair,
+    # jamais l'UUID nu — même discipline que caissier_nom/agency_nom). `a_valider` est DÉRIVÉ
+    # (fermée + |ecart| > seuil + non validée), jamais stocké — voir service.py.
+    motif_ecart: str | None
+    valide_le: datetime | None
+    valide_par_nom: str | None
+    a_valider: bool
 
 
 class LigneSessionManquante(BaseModel):
@@ -73,6 +86,49 @@ class PageSessionsManquantes(BaseModel):
     total: int
     page: int
     taille: int
+
+
+# --- Paramètres (CA2) ------------------------------------------------------------------------
+
+
+class ParametresCaisse(BaseModel):
+    seuil_tolerance: int
+    is_provisional: bool
+
+
+class ModificationParametresCaisse(BaseModel):
+    seuil_tolerance: int = Field(ge=0)
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class LigneSessionAValider(BaseModel):
+    """Une session fermée avec un écart AU-DELÀ DU SEUIL, pas encore validée (CA2) — liste de
+    `GET /caisse/sessions?a_valider=true`. Distincte de `LigneSessionManquante` : ici, manquant
+    ET excédent comptent (la matérialité comptable ne connaît pas de sens), contrairement à la
+    lettre de demande d'explication (manquant seul, sans seuil — les deux mécanismes restent
+    volontairement séparés, voir docstring service.py)."""
+
+    id: uuid.UUID
+    caissier_id: uuid.UUID
+    caissier_nom: str
+    agency_id: uuid.UUID
+    agency_nom: str
+    compte_caisse_number: str
+    fonds_initial: int
+    opened_at: datetime
+    closed_at: datetime
+    montant_reel_cloture: int
+    solde_theorique_cloture: int
+    ecart: int
+    motif_ecart: str | None
+
+
+class PageSessionsAValider(BaseModel):
+    lignes: list[LigneSessionAValider]
+    total: int
+    page: int
+    taille: int
+    seuil_tolerance: int
 
 
 # --- Postes de caisse (Bloc B) --------------------------------------------------------------

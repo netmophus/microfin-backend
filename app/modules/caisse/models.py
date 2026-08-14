@@ -1,5 +1,5 @@
-"""Modèles ORM du schéma « caisse » — postes (Bloc A, migration 0041) et sessions (CA0/CA1,
-migration 0040).
+"""Modèles ORM du schéma « caisse » — postes (Bloc A, migration 0041), sessions (CA0/CA1,
+migration 0040) et paramètres (CA2, migration 0043).
 
 Mappent l'existant, ne créent rien. FK et CHECK reflètent EXACTEMENT la migration (exigence
 d'alembic check pour les FK — les CHECK/index partiels ne sont pas comparés, la base les impose).
@@ -9,7 +9,13 @@ fois pour le même caissier — UNIQUE partiel en base, `uq_caisse_sessions_cais
 depuis le Bloc A, PAR POSTE (`uq_caisse_sessions_poste_ouverte` — un poste n'a qu'une session
 ouverte à la fois, quel que soit le caissier). Le solde théorique n'est jamais stocké en
 continu — voir service.py::calculer_solde_theorique, calcul dérivé des écritures validées, même
-philosophie que epargne.accounts.balance (cache, jamais une seconde vérité)."""
+philosophie que epargne.accounts.balance (cache, jamais une seconde vérité).
+
+CA2 (migration 0043) : `CaisseParametres` porte le seuil de tolérance sur l'écart — SINGLETON,
+même patron que `tiers.ShareParameters`. `CaisseSession.motif_ecart`/`valide_le`/`valide_par`
+tracent le motif saisi à la fermeture et la validation a posteriori du responsable — AUCUNE
+colonne de statut « à valider » : ce statut se DÉRIVE (fermée + écart significatif + non
+validée), calculé par service.py, jamais stocké."""
 
 import uuid
 from datetime import datetime
@@ -134,6 +140,9 @@ class CaisseSession(Base):
             "AND solde_theorique_cloture IS NOT NULL AND ecart IS NOT NULL)",
             name="statut_coherent_avec_cloture",
         ),
+        sa.CheckConstraint(
+            "valide_le IS NULL OR status = 'fermee'", name="validation_apres_fermeture"
+        ),
         {"schema": "caisse"},
     )
 
@@ -161,6 +170,47 @@ class CaisseSession(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    # CA2 (migration 0043) : motif saisi à la fermeture (obligatoire si |ecart| > seuil, imposé
+    # par service.py, jamais par un CHECK — le seuil est modifiable) ; validation a posteriori du
+    # responsable, tracée mais jamais un blocage.
+    motif_ecart: Mapped[str | None] = mapped_column(sa.Text)
+    valide_le: Mapped[datetime | None] = mapped_column(TS)
+    valide_par: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
 
     def __repr__(self) -> str:
         return f"<CaisseSession {self.caissier_id} {self.status}>"
+
+
+class CaisseParametres(Base):
+    """Config d'INSTITUTION du module Caisse (CA2, migration 0043) — une ligne, PROVISOIRE,
+    même patron que `tiers.ShareParameters` : `seuil_tolerance` (F) comparé à `abs(ecart)` à la
+    fermeture d'une session. Les rattachements comptables de l'écart (manquant/excédent) sont
+    ajoutés par CA3 (migration séparée), pas ici.
+
+    `singleton` garantit l'unicité de la ligne DÈS LA CRÉATION (CHECK+UNIQUE posés dans la
+    migration elle-même — pas en retrofit comme `share_parameters`, qui l'a reçu après coup en
+    0029). Jamais lu ni écrit depuis Python."""
+
+    __tablename__ = "parametres"
+    __table_args__: tuple[Any, ...] = (
+        sa.CheckConstraint("seuil_tolerance >= 0", name="seuil_tolerance_positif"),
+        sa.CheckConstraint("singleton", name="caisse_parametres_singleton_check"),
+        sa.UniqueConstraint("singleton", name="caisse_parametres_singleton_unique"),
+        {"schema": "caisse"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    seuil_tolerance: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("500")
+    )
+    is_provisional: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.true()
+    )
+    singleton: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, server_default=sa.true())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<CaisseParametres seuil={self.seuil_tolerance}>"
