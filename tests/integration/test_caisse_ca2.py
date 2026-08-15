@@ -411,7 +411,11 @@ def test_parametres_modification_change_le_seuil_immediatement(db: Session) -> N
     agence = _agence(db, "CA2F1")
     caissier = _courant(_utilisateur(db, agence, "50"), agence)
     config = _config(db)
-    modifier_parametres(db, config, seuil_tolerance=1_000, motif="Ajustement test", par=None)
+    modifier_parametres(
+        db, config, seuil_tolerance=1_000,
+        compte_ecart_manquant_number=None, compte_ecart_excedent_number=None,
+        motif="Ajustement test", par=None,
+    )
 
     session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
     db.flush()

@@ -91,13 +91,29 @@ class PageSessionsManquantes(BaseModel):
 # --- Paramètres (CA2) ------------------------------------------------------------------------
 
 
+class CompteRattachementEcart(BaseModel):
+    """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
+
+    account_number: str
+    name: str
+
+
 class ParametresCaisse(BaseModel):
     seuil_tolerance: int
+    # CA3 : DEUX comptes distincts (jamais un signe négatif sur un seul) — None est un état
+    # LÉGITIME (paramétrage incomplet), affiché comme tel, jamais deviné.
+    compte_ecart_manquant: CompteRattachementEcart | None
+    compte_ecart_excedent: CompteRattachementEcart | None
     is_provisional: bool
 
 
 class ModificationParametresCaisse(BaseModel):
+    """Tous les champs TOUJOURS fournis ensemble — même discipline que les autres écrans du
+    Bloc 5 (parts, paliers de souffrance) : l'écran soumet l'état complet du formulaire."""
+
     seuil_tolerance: int = Field(ge=0)
+    compte_ecart_manquant: str | None
+    compte_ecart_excedent: str | None
     motif: str = Field(min_length=3, max_length=500)
 
 

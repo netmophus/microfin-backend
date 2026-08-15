@@ -182,10 +182,13 @@ class CaisseSession(Base):
 
 
 class CaisseParametres(Base):
-    """Config d'INSTITUTION du module Caisse (CA2, migration 0043) — une ligne, PROVISOIRE,
-    même patron que `tiers.ShareParameters` : `seuil_tolerance` (F) comparé à `abs(ecart)` à la
-    fermeture d'une session. Les rattachements comptables de l'écart (manquant/excédent) sont
-    ajoutés par CA3 (migration séparée), pas ici.
+    """Config d'INSTITUTION du module Caisse — une ligne, PROVISOIRE, même patron que
+    `tiers.ShareParameters` : `seuil_tolerance` (F, CA2, migration 0043) comparé à `abs(ecart)`
+    à la fermeture d'une session. `compte_ecart_manquant_id`/`compte_ecart_excedent_id` (CA3,
+    migration 0044) : DEUX comptes distincts, jamais un signe négatif sur un seul — la charge
+    quand le réel est INFÉRIEUR au théorique, le produit quand il est SUPÉRIEUR. Nullable : un
+    rattachement absent est un état LÉGITIME (paramétrage incomplet), refusé proprement par
+    `service.py::poser_ecriture_ecart` au moment de poser l'écriture — jamais deviné.
 
     `singleton` garantit l'unicité de la ligne DÈS LA CRÉATION (CHECK+UNIQUE posés dans la
     migration elle-même — pas en retrofit comme `share_parameters`, qui l'a reçu après coup en
@@ -211,6 +214,12 @@ class CaisseParametres(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    compte_ecart_manquant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    compte_ecart_excedent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
 
     def __repr__(self) -> str:
         return f"<CaisseParametres seuil={self.seuil_tolerance}>"

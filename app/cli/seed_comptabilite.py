@@ -125,6 +125,19 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "credit.decaissement_epargne", "Décaissement de crédit sur compte du tiers", "OD",
         (("CREDIT", "D"), ("EPARGNE", "C")),
     ),
+    # Caisse CA3 (migration 0044) : régularisation de l'écart d'une session, à la VALIDATION
+    # (pas à la fermeture). Journal OD : une régularisation comptable, aucun mouvement de
+    # caisse d'un client à cet instant. Manquant : le théorique baisse jusqu'au réel compté
+    # (D ECART / C CAISSE). Excédent : l'inverse (D CAISSE / C ECART). Deux modèles distincts,
+    # jamais un signe négatif sur un seul compte.
+    ModeleEcriture(
+        "caisse.ecart_manquant", "Régularisation d'écart de caisse (manquant)", "OD",
+        (("ECART", "D"), ("CAISSE", "C")),
+    ),
+    ModeleEcriture(
+        "caisse.ecart_excedent", "Régularisation d'écart de caisse (excédent)", "OD",
+        (("CAISSE", "D"), ("ECART", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(
@@ -234,17 +247,37 @@ def seed_parametres_parts(db: Session) -> int:
 
 
 def seed_parametres_caisse(db: Session) -> int:
-    """Installe la config PROVISOIRE du seuil de tolérance de caisse (CA2, une ligne) — même
-    patron que `seed_parametres_parts`. Idempotent et non destructif : crée la ligne si aucune
-    n'existe (500 F, le défaut proposé lors de l'analyse initiale) ; ne touche à rien si une
-    ligne existe déjà (contrairement à `seed_parametres_parts`, il n'y a pas de rattachement
-    comptable à compléter ici — CA3 s'en chargera séparément). Renvoie 1 si la ligne a été
-    créée, 0 sinon."""
+    """Installe la config PROVISOIRE du seuil de tolérance de caisse (CA2, une ligne) + rattache
+    les comptes de régularisation de l'écart (CA3, migration 0044) — même patron que
+    `seed_parametres_parts` : 6099 (manquant, charge) / 7099 (excédent, produit), la paire
+    trouvée dans le plan RCSFD officiel après avoir écarté 6239 (écarté : explicitement
+    libellé « non financière », mauvais candidat pour un écart de caisse).
+
+    Idempotent et non destructif : crée la ligne si aucune n'existe (500 F, 6099/7099) ;
+    complète seulement les rattachements laissés à NULL sinon (comme `seed_parametres_parts`
+    — jamais n'écrase le choix d'une IMF qui aurait déjà reconfiguré). Renvoie 1 si la ligne a
+    été créée, 0 sinon."""
     existe = db.execute(text("SELECT count(*) FROM caisse.parametres")).scalar_one()
     if existe:
+        db.execute(
+            text(
+                "UPDATE caisse.parametres SET "
+                "compte_ecart_manquant_id = COALESCE(compte_ecart_manquant_id, "
+                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '6099')), "
+                "compte_ecart_excedent_id = COALESCE(compte_ecart_excedent_id, "
+                "  (SELECT id FROM comptabilite.accounts WHERE account_number = '7099')), "
+                "updated_at = NOW()"
+            )
+        )
         return 0
     db.execute(
-        text("INSERT INTO caisse.parametres (seuil_tolerance, is_provisional) VALUES (500, TRUE)")
+        text(
+            "INSERT INTO caisse.parametres "
+            "(seuil_tolerance, is_provisional, compte_ecart_manquant_id, compte_ecart_excedent_id) "
+            "VALUES (500, TRUE, "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number = '6099'), "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number = '7099'))"
+        )
     )
     return 1
 

@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.caisse.ecart_operations import RattachementEcartManquantError, poser_ecriture_ecart
 from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.postes import PosteIntrouvableError
 from app.modules.comptabilite.models import Account
@@ -370,15 +371,19 @@ def valider_ecart(
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> CaisseSession:
     """Valide A POSTERIORI l'écart d'une session FERMÉE, au-delà du seuil de tolérance (CA2) —
-    une TRACE consultable, jamais un blocage : ne change rien d'autre que `valide_le`/
-    `valide_par`, aucune écriture, aucun effet sur le calcul de la session.
+    une TRACE consultable, JAMAIS un blocage de la fermeture (déjà actée). CA3 (migration
+    0044) : pose AUSSI la pièce de régularisation (`ecart_operations.poser_ecriture_ecart`),
+    dans la MÊME transaction que la trace — si le compte de l'écart n'est pas rattaché, TOUT
+    est refusé, y compris la trace de validation elle-même (transaction unique : jamais une
+    session marquée validée sans son écriture posée, et réciproquement).
 
     Périmètre vérifié ICI, au niveau de l'OBJET (IDOR) — `caisse.session.valider` est déjà
     exigé par le routeur, mais un responsable ne valide que les sessions de SON périmètre.
     Hors périmètre ou inexistante -> `SessionIntrouvableError` (404, jamais 403). Déjà validée
     -> `SessionDejaValideeError`. Écart sous le seuil -> `EcartNonSignificatifError` (rien à
     valider — ce n'est pas un état auquel l'écran devrait pouvoir mener, mais un appel direct à
-    l'API ne doit pas pouvoir valider n'importe quoi)."""
+    l'API ne doit pas pouvoir valider n'importe quoi). Compte de l'écart non rattaché ->
+    `RattachementEcartManquantError` (paramétrage incomplet, refus propre)."""
     session = db.execute(
         select(CaisseSession)
         .where(CaisseSession.id == session_id, courant.condition_perimetre(CaisseSession.agency_id))
@@ -396,6 +401,17 @@ def valider_ecart(
             "Cette session n'a pas d'écart au-delà du seuil de tolérance : rien à valider."
         )
 
+    # CA3 : la pièce D'ABORD — si le compte de l'écart manque, RIEN ne doit être marqué validé
+    # (voir docstring). `poser_ecriture_ecart` lève RattachementEcartManquantError le cas
+    # échéant, propagée telle quelle : aucune mutation de la session n'a encore eu lieu ici.
+    config = db.execute(select(CaisseParametres).limit(1)).scalar_one_or_none()
+    if config is None:
+        raise RattachementEcartManquantError(
+            "le seuil de tolérance de caisse n'est pas paramétré : contactez le comptable "
+            "avant de valider cette session."
+        )
+    piece = poser_ecriture_ecart(db, session, config, par=courant.user_id, contexte=contexte)
+
     maintenant = db.execute(text("SELECT NOW()")).scalar_one()
     session.valide_le = maintenant
     session.valide_par = courant.user_id
@@ -411,7 +427,11 @@ def valider_ecart(
         resource_id=session.id,
         agency_id=session.agency_id,
         old_values={"valide_le": None},
-        new_values={"valide_le": str(maintenant), "ecart": session.ecart},
+        new_values={
+            "valide_le": str(maintenant),
+            "ecart": session.ecart,
+            "entry_number": piece.entry_number if piece else None,
+        },
     )
     return session
 

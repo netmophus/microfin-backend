@@ -21,6 +21,7 @@ TABLE DES ERREURS :
   - poste sans compte de caisse rattaché         -> 422
   - écart au-delà du seuil sans motif (CA2)      -> 422
   - écart déjà validé / non significatif (CA2)   -> 422
+  - compte de l'écart non rattaché (CA3)         -> 422
 """
 
 import uuid
@@ -32,7 +33,8 @@ from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
 from app.modules.caisse import postes
-from app.modules.caisse.models import CaisseSession, Poste
+from app.modules.caisse.ecart_operations import RattachementEcartManquantError
+from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste
 from app.modules.caisse.parametres import ParametrageManquantError
 from app.modules.caisse.parametres import lire as lire_parametres
 from app.modules.caisse.parametres import modifier as modifier_parametres
@@ -45,6 +47,7 @@ from app.modules.caisse.postes import (
 from app.modules.caisse.schemas import (
     ActivationPoste,
     AssignationCreation,
+    CompteRattachementEcart,
     CreationPoste,
     FermetureSession,
     LigneSessionAValider,
@@ -135,6 +138,26 @@ def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
         valide_le=session.valide_le,
         valide_par_nom=valide_par_nom,
         a_valider=session_a_valider(session, seuil),
+    )
+
+
+def _compte_rattachement_ecart(
+    db: Session, account_id: uuid.UUID | None
+) -> CompteRattachementEcart | None:
+    if account_id is None:
+        return None
+    compte = db.get(Account, account_id)
+    if compte is None:
+        return None
+    return CompteRattachementEcart(account_number=compte.account_number, name=compte.name)
+
+
+def _vers_schema_parametres(db: Session, config: CaisseParametres) -> ParametresCaisse:
+    return ParametresCaisse(
+        seuil_tolerance=config.seuil_tolerance,
+        compte_ecart_manquant=_compte_rattachement_ecart(db, config.compte_ecart_manquant_id),
+        compte_ecart_excedent=_compte_rattachement_ecart(db, config.compte_ecart_excedent_id),
+        is_provisional=config.is_provisional,
     )
 
 
@@ -291,20 +314,19 @@ def lire_parametres_endpoint(
     ],
     db: Annotated[Session, Depends(get_db)],
 ) -> ParametresCaisse:
-    """Le seuil de tolérance courant (CA2) — LECTURE élargie au caissier (caisse.session.close) :
-    il doit savoir, AVANT de fermer, si son écart franchira le seuil et exigera un motif — ce
-    n'est qu'un nombre, pas une donnée sensible. L'ÉCRITURE reste réservée compta.plan.manage
-    seul (voir modifier_parametres_endpoint), même permission que les autres paramètres du
-    Bloc 5 : c'est le comptable qui gère la config d'institution."""
+    """Le seuil de tolérance courant (CA2) et le rattachement de l'écart (CA3) — LECTURE élargie
+    au caissier (caisse.session.close) : il doit savoir, AVANT de fermer, si son écart
+    franchira le seuil et exigera un motif — ce n'est qu'un nombre, pas une donnée sensible.
+    L'ÉCRITURE reste réservée compta.plan.manage seul (voir modifier_parametres_endpoint),
+    même permission que les autres paramètres du Bloc 5 : c'est le comptable qui gère la
+    config d'institution."""
     try:
         config = lire_parametres(db)
     except ParametrageManquantError as erreur:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(erreur)
         ) from None
-    return ParametresCaisse(
-        seuil_tolerance=config.seuil_tolerance, is_provisional=config.is_provisional
-    )
+    return _vers_schema_parametres(db, config)
 
 
 @router.put("/caisse/parametres", response_model=ParametresCaisse)
@@ -314,25 +336,31 @@ def modifier_parametres_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ParametresCaisse:
-    """Modifie le seuil — motif obligatoire, tracé avant/après (comme tout Bloc 5)."""
+    """Modifie le seuil et/ou le rattachement de l'écart — motif obligatoire, tracé avant/après
+    (comme tout Bloc 5)."""
     try:
         config = lire_parametres(db)
     except ParametrageManquantError as erreur:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(erreur)
         ) from None
-    config = modifier_parametres(
-        db,
-        config,
-        seuil_tolerance=corps.seuil_tolerance,
-        motif=corps.motif,
-        par=courant.user_id,
-        contexte=_contexte(request),
-    )
+    try:
+        config = modifier_parametres(
+            db,
+            config,
+            seuil_tolerance=corps.seuil_tolerance,
+            compte_ecart_manquant_number=corps.compte_ecart_manquant,
+            compte_ecart_excedent_number=corps.compte_ecart_excedent,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+    except CompteInvalideRattachementError as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
     db.commit()
-    return ParametresCaisse(
-        seuil_tolerance=config.seuil_tolerance, is_provisional=config.is_provisional
-    )
+    return _vers_schema_parametres(db, config)
 
 
 @router.get("/caisse/sessions-a-valider", response_model=PageSessionsAValider)
@@ -384,7 +412,9 @@ def valider_ecart_endpoint(
 ) -> SessionCaisse:
     """Validation A POSTERIORI de l'écart par le responsable (CA2) — une TRACE, jamais un
     blocage : ne change rien d'autre que valide_le/valide_par. Réservé au périmètre de l'acteur
-    (vérifié dans le service, au niveau de l'objet)."""
+    (vérifié dans le service, au niveau de l'objet). CA3 : pose AUSSI la pièce de
+    régularisation, dans la MÊME transaction — si le comptable n'a pas encore rattaché le
+    compte de l'écart, tout est refusé (422), y compris la trace de validation elle-même."""
     try:
         session = valider_ecart(db, courant, session_id, contexte=_contexte(request))
         db.commit()
@@ -392,7 +422,11 @@ def valider_ecart_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_SESSION_INTROUVABLE
         ) from None
-    except (SessionDejaValideeError, EcartNonSignificatifError) as erreur:
+    except (
+        SessionDejaValideeError,
+        EcartNonSignificatifError,
+        RattachementEcartManquantError,
+    ) as erreur:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
