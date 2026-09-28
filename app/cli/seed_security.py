@@ -167,6 +167,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("roles.create", "roles", "Créer un rôle personnalisé (jamais un rôle système)"),
     Permission("roles.update", "roles", "Modifier un rôle (jamais un rôle système)"),
     Permission("roles.delete", "roles", "Supprimer un rôle (jamais un rôle système)"),
+    Permission(
+        "roles.permissions.manage",
+        "roles",
+        "Remplacer le jeu de permissions d'un rôle personnalisé",
+    ),
     Permission("roles.assign", "roles", "Affecter ou retirer un rôle à un utilisateur"),
     Permission("sessions.read", "sessions", "Voir les sessions actives"),
     Permission("sessions.revoke", "sessions", "Fermer une ou toutes les sessions"),
@@ -546,6 +551,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "roles.create",
             "roles.update",
             "roles.delete",
+            "roles.permissions.manage",
         }
     ),
 }
