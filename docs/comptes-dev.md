@@ -33,6 +33,7 @@ Tous rattachés à l'agence **siège** (AG-001).
 | `comite`    | MEMBRE_COMITE_CREDIT | Décider une demande de crédit (approuver/refuser) |
 | `comptable` | COMPTABLE            | Plan de comptes, tous les écrans de rattachement (Bloc 5), paliers de souffrance (CR5a) |
 | `direction` | DIRECTION_GENERALE   | Actes d'institution : versement des intérêts, reclassification (aperçu + exécution, CR5c), consultation des paliers en lecture seule, portée réseau |
+| `technique` | ADMIN_TECHNIQUE      | Définir les rôles : catalogue des permissions, permissions d'un rôle, créer/modifier/supprimer un rôle — **sans** pouvoir les attribuer à un utilisateur (`roles.assign` reste sur `ADMIN_FONCTIONNEL`, séparation des pouvoirs) |
 
 Le compte **admin** (ADMIN_FONCTIONNEL) vient de `creer-admin`, séparément (mot de passe généré).
 

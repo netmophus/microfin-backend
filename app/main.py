@@ -15,6 +15,7 @@ from app.modules.parameters.router import (
     router_secteurs,
 )
 from app.modules.security.router import router as auth_router
+from app.modules.security.router_permissions import router as permissions_router
 from app.modules.security.router_roles import router as roles_router
 from app.modules.security.router_users import router as users_router
 from app.modules.tiers.parts_engagements import enregistrer as enregistrer_engagements_parts
@@ -36,6 +37,7 @@ app.include_router(router_currencies)
 app.include_router(router_doctypes)
 app.include_router(router_secteurs)
 app.include_router(roles_router)
+app.include_router(permissions_router)
 app.include_router(audit_router)
 app.include_router(tiers_router)
 app.include_router(epargne_router)

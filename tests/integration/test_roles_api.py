@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.cli.seed_security import executer_seed
 from app.core.database import engine, get_db
 from app.main import app
 from app.modules.parameters.models import Agency
@@ -153,6 +154,126 @@ def test_liste_des_roles_exige_roles_read(client: TestClient, db: Session, agenc
     caissier = _utilisateur(db, "Sans", "CAISSIER", agence)  # pas de roles.read
 
     assert client.get("/roles", headers=_entete(caissier, "CAISSIER")).status_code == 403
+
+
+# --- GET /permissions et GET /roles/{code}/permissions — lot 1, lecture seule -----------
+#
+# executer_seed(db) garantit que la permission roles.permissions.read (et le reste de la
+# matrice courante) existe dans CETTE transaction de test, sans dépendre du moment où le
+# vrai seed aura été rejoué sur la base de dev — idempotent, annulé au rollback du test
+# (même patron que test_roles_systeme.py).
+
+
+def test_liste_les_permissions(client: TestClient, db: Session, agence: Agency) -> None:
+    executer_seed(db)
+    lecteur = _utilisateur(db, "Lecteur", "ADMIN_TECHNIQUE", agence)
+
+    reponse = client.get("/permissions", headers=_entete(lecteur, "ADMIN_TECHNIQUE"))
+
+    assert reponse.status_code == 200
+    lignes = reponse.json()
+    codes = {p["code"] for p in lignes}
+    assert "roles.permissions.read" in codes
+    assert "epargne.account.read" in codes
+    ligne = next(p for p in lignes if p["code"] == "epargne.account.read")
+    assert ligne["module"] == "epargne"
+
+
+def test_liste_des_permissions_exige_roles_permissions_read(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    caissier = _utilisateur(db, "Sans", "CAISSIER", agence)  # pas roles.permissions.read
+
+    assert client.get("/permissions", headers=_entete(caissier, "CAISSIER")).status_code == 403
+
+
+def test_lire_permissions_dun_role(client: TestClient, db: Session, agence: Agency) -> None:
+    executer_seed(db)
+    lecteur = _utilisateur(db, "Lecteur", "ADMIN_TECHNIQUE", agence)
+
+    reponse = client.get(
+        "/roles/CAISSIER/permissions", headers=_entete(lecteur, "ADMIN_TECHNIQUE")
+    )
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["code"] == "CAISSIER"
+    assert corps["is_system"] is True
+    codes = {p["code"] for p in corps["permissions"]}
+    assert "epargne.operation.deposit" in codes
+    assert "caisse.session.open" in codes
+    # Une permission que CAISSIER ne détient PAS ne doit pas apparaître.
+    assert "compta.plan.manage" not in codes
+
+
+def test_lire_permissions_role_inexistant_404(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    lecteur = _utilisateur(db, "Lecteur", "ADMIN_TECHNIQUE", agence)
+
+    reponse = client.get(
+        "/roles/ROLE_FANTOME/permissions", headers=_entete(lecteur, "ADMIN_TECHNIQUE")
+    )
+
+    assert reponse.status_code == 404
+
+
+def test_lire_permissions_dun_role_exige_roles_permissions_read(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    caissier = _utilisateur(db, "Sans", "CAISSIER", agence)
+
+    reponse = client.get("/roles/CAISSIER/permissions", headers=_entete(caissier, "CAISSIER"))
+
+    assert reponse.status_code == 403
+
+
+def test_liste_les_roles_habilitations(client: TestClient, db: Session, agence: Agency) -> None:
+    executer_seed(db)
+    lecteur = _utilisateur(db, "Lecteur", "ADMIN_TECHNIQUE", agence)
+
+    reponse = client.get("/roles/habilitations", headers=_entete(lecteur, "ADMIN_TECHNIQUE"))
+
+    assert reponse.status_code == 200
+    lignes = {r["code"]: r for r in reponse.json()}
+    assert lignes["CAISSIER"]["is_system"] is True
+    assert lignes["CAISSIER"]["nb_permissions"] > 0
+
+
+def test_liste_des_roles_habilitations_exige_roles_permissions_read(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    caissier = _utilisateur(db, "Sans", "CAISSIER", agence)
+
+    assert (
+        client.get("/roles/habilitations", headers=_entete(caissier, "CAISSIER")).status_code
+        == 403
+    )
+
+
+def test_ecran_roles_habilitations_ne_depend_pas_de_roles_read(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    """Régression du 28/09/2026 : ADMIN_TECHNIQUE détient roles.permissions.read mais PAS
+    roles.read — l'écran (liste + détail) doit se charger entièrement quand même. GET /roles
+    (roles.read), lui, reste refusé : la preuve que ce test couvre bien ce scénario, pas un
+    autre où le compte aurait les deux permissions par accident."""
+    executer_seed(db)
+    technique = _utilisateur(db, "Sans roles.read", "ADMIN_TECHNIQUE", agence)
+    entete = _entete(technique, "ADMIN_TECHNIQUE")
+
+    assert client.get("/roles", headers=entete).status_code == 403
+
+    liste = client.get("/roles/habilitations", headers=entete)
+    assert liste.status_code == 200
+    assert any(r["code"] == "CAISSIER" for r in liste.json())
+
+    detail = client.get("/roles/CAISSIER/permissions", headers=entete)
+    assert detail.status_code == 200
 
 
 # --- attribution ------------------------------------------------------------------------

@@ -159,6 +159,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("users.reset_2fa", "users", "Réinitialiser la 2FA (perte de téléphone)"),
     Permission("users.manage_agencies", "users", "Gérer les habilitations d'agences"),
     Permission("roles.read", "roles", "Consulter les rôles"),
+    Permission(
+        "roles.permissions.read",
+        "roles",
+        "Consulter le catalogue des permissions et les habilitations de chaque rôle",
+    ),
     Permission("roles.create", "roles", "Créer un rôle personnalisé (jamais un rôle système)"),
     Permission("roles.update", "roles", "Modifier un rôle (jamais un rôle système)"),
     Permission("roles.delete", "roles", "Supprimer un rôle (jamais un rôle système)"),
@@ -487,9 +492,6 @@ MATRICE: dict[str, frozenset[str]] = {
         {
             "users.read",
             "roles.read",
-            "roles.create",
-            "roles.update",
-            "roles.delete",
             "sessions.read",
             "audit.read",
             "audit.export",
@@ -507,6 +509,9 @@ MATRICE: dict[str, frozenset[str]] = {
             "caisse.session.read.autres",
         }
     ),
+    # Attribue les rôles (roles.assign) mais ne les définit pas : séparation des pouvoirs
+    # avec ADMIN_TECHNIQUE, qui définit sans pouvoir s'auto-attribuer (test_la_separation_
+    # des_pouvoirs_est_respectee).
     "ADMIN_FONCTIONNEL": frozenset(
         {
             "users.read",
@@ -529,8 +534,19 @@ MATRICE: dict[str, frozenset[str]] = {
         }
     ),
     # Administration système, pas administration des personnes : aucun droit sur users.*.
+    # Définit les rôles (roles.permissions.read/create/update/delete) mais ne les attribue
+    # pas : c'est ADMIN_FONCTIONNEL qui détient roles.assign — voir plus haut.
     "ADMIN_TECHNIQUE": frozenset(
-        {"sessions.read", "sessions.revoke", "audit.read", "perimetre.reseau"}
+        {
+            "sessions.read",
+            "sessions.revoke",
+            "audit.read",
+            "perimetre.reseau",
+            "roles.permissions.read",
+            "roles.create",
+            "roles.update",
+            "roles.delete",
+        }
     ),
 }
 

@@ -50,6 +50,10 @@ COMPTES: tuple[CompteDev, ...] = (
     # Distinct du compte réel "anne" (GG001) — celui-ci est un compte de DEV, mot de passe
     # public connu, jamais à confondre avec un compte de production.
     CompteDev("direction", "DIRECTION_GENERALE", "DEV-DIR", "Direction", "Generale"),
+    # Distinct de "sysadmin" (ADMIN_FONCTIONNEL) : ADMIN_TECHNIQUE définit les rôles
+    # (roles.permissions.read/create/update/delete) sans pouvoir les attribuer — ce compte
+    # isole ce rôle pour le tester séparément de sysadmin.
+    CompteDev("technique", "ADMIN_TECHNIQUE", "DEV-TEC", "Admin", "Technique"),
 )
 
 
