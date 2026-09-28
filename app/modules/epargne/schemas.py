@@ -8,6 +8,7 @@ encore validés) pour l'afficher à l'écran.
 
 import uuid
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -156,6 +157,38 @@ class ModificationRattachementsProduit(BaseModel):
     compte_epargne: str | None
     compte_epargne_client: str | None
     compte_charge_interet: str | None
+    motif: str = Field(min_length=3, max_length=500)
+
+
+# --- Paramètres d'intérêt (E5, écran de paramétrage) --------------------------------------
+#
+# `periodicite` existe en base (migration 0023) mais n'est exploitée nulle part dans
+# `interets.py` : le versement se déclenche manuellement par période choisie à l'écran, pas
+# asservi à ce champ. periodicite non exposée — champ non branché au moteur de versement, à
+# exposer quand il le sera. L'endpoint ne la touche donc pas ; elle garde sa valeur actuelle.
+
+
+class ParametresInteretProduit(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    taux_bp: int
+    methode_calcul_solde: str
+    base_jours: int
+    regle_arrondi: str
+    solde_minimum_remunere: int
+    is_provisional: bool
+
+
+class ModificationParametresInteretProduit(BaseModel):
+    """Bornes reproduisant les CHECK constraints SQL de la migration 0023 (Literal) ou le
+    précédent `credit.taux_provision_bp` (points de base, 0-10000)."""
+
+    taux_bp: int = Field(ge=0, le=10000)
+    methode_calcul_solde: Literal["min_periode", "moyen_quotidien", "fin_periode"]
+    base_jours: Literal[360, 365]
+    regle_arrondi: Literal["plus_proche", "plancher"]
+    solde_minimum_remunere: int = Field(ge=0)
     motif: str = Field(min_length=3, max_length=500)
 
 

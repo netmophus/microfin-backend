@@ -22,7 +22,7 @@ from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
-from app.modules.epargne import consultation, rattachements
+from app.modules.epargne import consultation, parametres_interet, rattachements
 from app.modules.epargne.guichet import (
     CompteClotureError,
     CompteIntrouvableError,
@@ -45,10 +45,12 @@ from app.modules.epargne.schemas import (
     CompteRattachement,
     DemandeInterets,
     LigneRapprochement,
+    ModificationParametresInteretProduit,
     ModificationRattachementsProduit,
     MouvementResume,
     OperationGuichet,
     OuvertureCompte,
+    ParametresInteretProduit,
     ProduitEpargne,
     RapportInterets,
     RattachementsProduit,
@@ -164,6 +166,65 @@ def modifier_rattachements_produit_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
         ) from None
     return _vers_rattachements(db, produit)
+
+
+def _vers_parametres_interet(produit: Product) -> ParametresInteretProduit:
+    return ParametresInteretProduit(
+        id=produit.id,
+        code=produit.code,
+        name=produit.name,
+        taux_bp=produit.taux_bp,
+        methode_calcul_solde=produit.methode_calcul_solde,
+        base_jours=produit.base_jours,
+        regle_arrondi=produit.regle_arrondi,
+        solde_minimum_remunere=produit.solde_minimum_remunere,
+        is_provisional=produit.is_provisional,
+    )
+
+
+@router.get(
+    "/epargne/produits/parametres-interet", response_model=list[ParametresInteretProduit]
+)
+def lister_parametres_interet_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ParametresInteretProduit]:
+    """Paramètres d'intérêt des produits ACTIFS — écran du comptable, même paire de permissions
+    (lecture/gestion) que les rattachements et les autres paramètres du Bloc 5."""
+    return [_vers_parametres_interet(p) for p in consultation.lister_produits(db)]
+
+
+@router.patch(
+    "/epargne/produits/{produit_id}/parametres-interet", response_model=ParametresInteretProduit
+)
+def modifier_parametres_interet_endpoint(
+    produit_id: uuid.UUID,
+    corps: ModificationParametresInteretProduit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ParametresInteretProduit:
+    """Règle le taux et les paramètres de calcul. Ne lève PAS `is_provisional` — voir le
+    commentaire de `parametres_interet.modifier_parametres_interet`."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    parametres_interet.modifier_parametres_interet(
+        db,
+        produit,
+        taux_bp=corps.taux_bp,
+        methode_calcul_solde=corps.methode_calcul_solde,
+        base_jours=corps.base_jours,
+        regle_arrondi=corps.regle_arrondi,
+        solde_minimum_remunere=corps.solde_minimum_remunere,
+        motif=corps.motif,
+        par=courant.user_id,
+        contexte=_contexte(request),
+    )
+    db.commit()
+    return _vers_parametres_interet(produit)
 
 
 @router.get("/tiers/{tier_id}/comptes-epargne", response_model=list[CompteEpargneResume])
