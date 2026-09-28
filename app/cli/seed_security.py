@@ -496,6 +496,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.read",
             "tiers.read.basic",
             "tiers.read.deleted",
+            "epargne.account.read",
             "epargne.interet.executer",
             "epargne.rapprochement.read",
             "compta.rapport.read",
