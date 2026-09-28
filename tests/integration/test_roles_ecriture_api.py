@@ -1,13 +1,17 @@
-"""Écritures sur les rôles PERSONNALISÉS (lot 2) — POST/PATCH/DELETE /roles,
-PUT /roles/{code}/permissions.
+"""Écritures sur les rôles (lot 2/4) — POST/PATCH/DELETE /roles, PUT /roles/{code}/permissions,
+POST /roles/{code}/reinitialiser.
 
 Ce que ces tests protègent :
 
-  - RÔLES SYSTÈME HORS PÉRIMÈTRE : les quatre écritures refusent proprement (403) sur un
-    rôle is_system=True — l'édition système est le lot 4, pas celui-ci.
+  - PATCH et PUT .../permissions s'appliquent DÉSORMAIS aux rôles système (lot 4) — et les
+    verrouillent (gere_manuellement=TRUE). Seul DELETE reste interdit sur un rôle système
+    (on n'en supprime jamais un — le trigger DB, migration 0004, le confirme).
   - is_system TOUJOURS FAUX À LA CRÉATION, jamais un paramètre client.
   - LE GARDE-FOU ANTI-BLOCAGE : il doit rester à tout moment au moins un rôle actif qui
-    détient roles.permissions.manage, sur le chemin PUT .../permissions ET sur DELETE.
+    détient roles.permissions.manage, sur PUT .../permissions, DELETE ET réinitialiser.
+  - RÉINITIALISER (lot 4) rejoue le seed pour un rôle système verrouillé, qui redevient
+    alors sous contrôle du seed — recoupé avec le test qui mord du lot 3
+    (test_gere_manuellement_protege_les_trois_convergences).
   - L'AUDIT DIT VRAI : chaque écriture pose une ligne, la lecture n'en pose aucune.
 
 executer_seed(db) garantit que roles.permissions.manage et le reste de la matrice
@@ -17,13 +21,14 @@ seed aura été rejoué en base de dev (même patron que test_roles_api.py).
 
 import uuid
 from collections.abc import Generator
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.cli.seed_security import executer_seed
+from app.cli.seed_security import MATRICE, executer_seed
 from app.core.database import engine, get_db
 from app.main import app
 from app.modules.parameters.models import Agency
@@ -214,17 +219,28 @@ def test_modifier_un_role_personnalise(client: TestClient, db: Session, agence: 
     assert role.gere_manuellement is True
 
 
-def test_modifier_un_role_systeme_refuse(client: TestClient, db: Session, agence: Agency) -> None:
+def test_modifier_un_role_systeme_autorise_et_verrouille(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    """Lot 4 : un rôle système reste modifiable, mais l'édition le verrouille — c'est ce
+    qui rend l'édition sûre (le seed ne l'écrasera plus, voir lot 3)."""
     executer_seed(db)
     technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+    role_avant = db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one()
+    assert role_avant.gere_manuellement is False
 
     reponse = client.patch(
         "/roles/CAISSIER",
-        json={"description": "Tentative"},
+        json={"description": "Description modifiée à l'écran"},
         headers=_entete(technique, "ADMIN_TECHNIQUE"),
     )
 
-    assert reponse.status_code == 403
+    assert reponse.status_code == 200
+    assert reponse.json()["description"] == "Description modifiée à l'écran"
+    assert reponse.json()["gere_manuellement"] is True
+
+    role = db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one()
+    assert role.gere_manuellement is True
 
 
 def test_modifier_un_role_exige_roles_update(
@@ -270,6 +286,7 @@ def test_supprimer_un_role_systeme_refuse(client: TestClient, db: Session, agenc
     reponse = client.delete("/roles/CAISSIER", headers=_entete(technique, "ADMIN_TECHNIQUE"))
 
     assert reponse.status_code == 403
+    assert reponse.json()["detail"] == "Un rôle système ne peut pas être supprimé."
     assert db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one_or_none() is not None
 
 
@@ -320,19 +337,26 @@ def test_remplacer_les_permissions_dun_role_personnalise(
     assert role.gere_manuellement is True
 
 
-def test_remplacer_les_permissions_dun_role_systeme_refuse(
+def test_remplacer_les_permissions_dun_role_systeme_autorise_et_verrouille(
     client: TestClient, db: Session, agence: Agency
 ) -> None:
+    """Lot 4 : PUT .../permissions s'applique aussi aux rôles système, et verrouille."""
     executer_seed(db)
     technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
 
     reponse = client.put(
-        "/roles/CAISSIER/permissions",
-        json={"permission_codes": [], "motif": "Tentative"},
+        "/roles/CHARGE_CLIENTELE/permissions",
+        json={"permission_codes": ["tiers.read.basic"], "motif": "Réduction du périmètre"},
         headers=_entete(technique, "ADMIN_TECHNIQUE"),
     )
 
-    assert reponse.status_code == 403
+    assert reponse.status_code == 200
+    assert reponse.json()["gere_manuellement"] is True
+    codes = {p["code"] for p in reponse.json()["permissions"]}
+    assert codes == {"tiers.read.basic"}
+
+    role = db.execute(select(Role).where(Role.code == "CHARGE_CLIENTELE")).scalar_one()
+    assert role.gere_manuellement is True
 
 
 def test_remplacer_les_permissions_exige_roles_permissions_manage(
@@ -454,3 +478,205 @@ def test_anti_blocage_autorise_si_un_autre_role_reste_gardien(
 
     assert reponse.status_code == 204
     assert db.execute(select(Role).where(Role.id == role_id)).scalar_one_or_none() is None
+
+
+def test_anti_blocage_sur_put_retire_dernier_gardien_admin_technique(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    """Lot 4, demande explicite : PUT .../permissions sur ADMIN_TECHNIQUE lui-même, alors
+    qu'il est le SEUL porteur de roles.permissions.manage, doit être refusé."""
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+
+    reponse = client.put(
+        "/roles/ADMIN_TECHNIQUE/permissions",
+        json={"permission_codes": ["sessions.read"], "motif": "Retrait de mes propres droits"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+
+    assert reponse.status_code == 422
+    assert "gérer les permissions" in reponse.json()["detail"]
+    role = db.execute(select(Role).where(Role.code == "ADMIN_TECHNIQUE")).scalar_one()
+    assert role.gere_manuellement is False  # rien n'a été écrit, y compris le verrou
+
+
+# --- POST /roles/{code}/reinitialiser (lot 4) ----------------------------------------------
+
+
+def test_reinitialiser_un_role_systeme_verrouille(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    """Édite CAISSIER (le verrouille), puis réinitialise : métadonnées ET permissions
+    reviennent EXACTEMENT à ce que déclare la matrice, le verrou se lève."""
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+
+    client.patch(
+        "/roles/CAISSIER",
+        json={"name": "Nom modifié à l'écran", "description": "Description modifiée"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+    client.put(
+        "/roles/CAISSIER/permissions",
+        json={"permission_codes": ["tiers.read.basic"], "motif": "Réduction"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+    role_verrouille = db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one()
+    assert role_verrouille.gere_manuellement is True
+
+    reponse = client.post(
+        "/roles/CAISSIER/reinitialiser",
+        json={},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["gere_manuellement"] is False
+    assert corps["name"] == "Caissier"
+    assert corps["description"] == "Opérations de guichet, encaissements/décaissements"
+    assert {p["code"] for p in corps["permissions"]} == set(MATRICE["CAISSIER"])
+
+    role = db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one()
+    assert role.gere_manuellement is False
+    assert role.name == "Caissier"
+
+    ligne = _audit(db, "role.reset_to_default")
+    assert ligne["resource_id"] == role.id
+
+
+def test_reinitialiser_recoupe_avec_le_test_qui_mord_du_lot_3(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    """Recoupement explicite avec le lot 3 : après réinitialisation, CAISSIER doit être
+    REDEVENU un rôle ordinaire sous contrôle du seed — un executer_seed ultérieur ne doit
+    plus rien y trouver à corriger."""
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+
+    client.patch(
+        "/roles/CAISSIER",
+        json={"name": "Nom modifié"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+    client.post(
+        "/roles/CAISSIER/reinitialiser", json={}, headers=_entete(technique, "ADMIN_TECHNIQUE")
+    )
+
+    executer_seed(db)
+
+    # Auto-contenu : on ne dépend pas de la convergence globale de la base (d'autres rôles
+    # pourraient avoir leurs propres écarts, hors du périmètre de ce test), seulement de
+    # CAISSIER — la preuve qu'IL est redevenu sous contrôle du seed.
+    role = db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one()
+    assert role.name == "Caissier"
+    assert role.gere_manuellement is False
+    codes = set(
+        db.execute(
+            text(
+                "SELECT p.code FROM security.role_permissions rp "
+                "  JOIN security.roles r ON r.id = rp.role_id "
+                "  JOIN security.permissions p ON p.id = rp.permission_id "
+                " WHERE r.code = 'CAISSIER'"
+            )
+        ).scalars()
+    )
+    assert codes == set(MATRICE["CAISSIER"])
+
+
+def test_reinitialiser_role_non_verrouille_refuse(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+
+    reponse = client.post(
+        "/roles/CAISSIER/reinitialiser", json={}, headers=_entete(technique, "ADMIN_TECHNIQUE")
+    )
+
+    assert reponse.status_code == 422
+
+
+def test_reinitialiser_role_personnalise_refuse(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+    _role_personnalise(db, "ROLE_PERSO")
+
+    reponse = client.post(
+        "/roles/ROLE_PERSO/reinitialiser",
+        json={},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+
+    assert reponse.status_code == 422
+
+
+def test_reinitialiser_exige_roles_permissions_manage(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    fonctionnel = _utilisateur(db, "Sans", "ADMIN_FONCTIONNEL", agence)
+
+    reponse = client.post(
+        "/roles/CAISSIER/reinitialiser",
+        json={},
+        headers=_entete(fonctionnel, "ADMIN_FONCTIONNEL"),
+    )
+
+    assert reponse.status_code == 403
+
+
+def test_reinitialiser_motif_facultatif_trace_si_fourni(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+    client.patch(
+        "/roles/CAISSIER",
+        json={"description": "Tentative"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+
+    reponse = client.post(
+        "/roles/CAISSIER/reinitialiser",
+        json={"motif": "Erreur de saisie à corriger"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+
+    assert reponse.status_code == 200
+    ligne = _audit(db, "role.reset_to_default")
+    assert isinstance(ligne["new_values"], dict)
+    assert ligne["new_values"]["motif"] == "Erreur de saisie à corriger"
+
+
+def test_anti_blocage_sur_reinitialiser(
+    client: TestClient, db: Session, agence: Agency
+) -> None:
+    """Matrice future simulée où ADMIN_TECHNIQUE ne détiendrait plus roles.permissions.
+    manage : réinitialiser ADMIN_TECHNIQUE (verrouillé au préalable) doit être refusé,
+    puisque plus personne ne la détiendrait après reconvergence."""
+    executer_seed(db)
+    technique = _utilisateur(db, "Technique", "ADMIN_TECHNIQUE", agence)
+    client.patch(
+        "/roles/ADMIN_TECHNIQUE",
+        json={"description": "Verrouillage préalable"},
+        headers=_entete(technique, "ADMIN_TECHNIQUE"),
+    )
+
+    matrice_sans_gardienne = dict(MATRICE)
+    matrice_sans_gardienne["ADMIN_TECHNIQUE"] = frozenset(
+        MATRICE["ADMIN_TECHNIQUE"] - {"roles.permissions.manage"}
+    )
+
+    with patch("app.modules.security.roles_ecriture.MATRICE", matrice_sans_gardienne):
+        reponse = client.post(
+            "/roles/ADMIN_TECHNIQUE/reinitialiser",
+            json={},
+            headers=_entete(technique, "ADMIN_TECHNIQUE"),
+        )
+
+    assert reponse.status_code == 422
+    role = db.execute(select(Role).where(Role.code == "ADMIN_TECHNIQUE")).scalar_one()
+    assert role.gere_manuellement is True  # toujours verrouillé, rien n'a bougé

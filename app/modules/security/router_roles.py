@@ -11,6 +11,10 @@ les rôles, ADMIN_FONCTIONNEL les attribue et garde seul `roles.read` avec `role
 un titulaire de `roles.permissions.read` sans `roles.read` doit pouvoir charger tout l'écran.
 Incident du 28/09/2026 : l'écran appelait GET /roles pour peupler sa liste et recevait un 403
 avec le compte `technique` (ADMIN_TECHNIQUE), qui n'a jamais eu `roles.read`.
+
+LOT 4 : PATCH et PUT .../permissions s'appliquent désormais AUSSI aux rôles système (le
+verrou gere_manuellement, lot 3, rend ça sûr). Seul DELETE reste interdit sur un rôle
+système. POST /roles/{code}/reinitialiser lève ce verrou et rejoue le seed pour ce rôle.
 """
 
 from typing import Annotated
@@ -28,9 +32,12 @@ from app.modules.security.roles_ecriture import (
     DernierGardienPermissionsError,
     NouveauRole,
     PermissionInconnueError,
-    RoleSystemeNonModifiableError,
+    RoleNonSystemeError,
+    RoleNonVerrouilleError,
+    RoleSystemeNonSupprimableError,
     creer,
     modifier_metadonnees,
+    reinitialiser,
     remplacer_permissions,
     supprimer,
 )
@@ -85,13 +92,15 @@ class ModifierRoleRequest(BaseModel):
 
 class RoleApercu(BaseModel):
     """Un rôle pour la LISTE de l'écran Rôles et habilitations : assez pour la ligne du
-    tableau (badge Système, nombre de permissions), sans charger le détail de chacune."""
+    tableau (badge Système, nombre de permissions, indicateur « géré manuellement »),
+    sans charger le détail de chacune."""
 
     code: str
     name: str
     description: str | None
     is_system: bool
     nb_permissions: int
+    gere_manuellement: bool
 
 
 @router.get("/habilitations", response_model=list[RoleApercu])
@@ -107,6 +116,7 @@ def lister_roles_habilitations(
             Role.name,
             Role.description,
             Role.is_system,
+            Role.gere_manuellement,
             func.count(RolePermission.permission_id).label("nb_permissions"),
         )
         .outerjoin(RolePermission, RolePermission.role_id == Role.id)
@@ -120,6 +130,7 @@ def lister_roles_habilitations(
             description=r.description,
             is_system=r.is_system,
             nb_permissions=r.nb_permissions,
+            gere_manuellement=r.gere_manuellement,
         )
         for r in lignes
     ]
@@ -137,6 +148,7 @@ def _vers_apercu(db: Session, role: Role) -> RoleApercu:
         description=role.description,
         is_system=role.is_system,
         nb_permissions=nb_permissions,
+        gere_manuellement=role.gere_manuellement,
     )
 
 
@@ -168,8 +180,8 @@ def modifier_role(
     courant: Annotated[UtilisateurCourant, Depends(exige("roles.update"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> RoleApercu:
-    """Modifie le nom/la description d'un rôle PERSONNALISÉ. Refuse sur un rôle système
-    (édition système : lot 4)."""
+    """Modifie le nom/la description d'un rôle — personnalisé OU système (lot 4). Verrouille
+    le rôle (gere_manuellement=TRUE) dans les deux cas."""
     try:
         role = modifier_metadonnees(db, courant, code, corps.modifications(), _contexte(request))
     except Exception as erreur:
@@ -208,7 +220,28 @@ class RolePermissionsDetail(BaseModel):
     name: str
     description: str | None
     is_system: bool
+    gere_manuellement: bool
     permissions: list[PermissionItem]
+
+
+def _vers_detail(db: Session, role: Role) -> RolePermissionsDetail:
+    lignes = db.execute(
+        select(Permission.code, Permission.module, Permission.description)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .where(RolePermission.role_id == role.id)
+        .order_by(Permission.module, Permission.code)
+    )
+    return RolePermissionsDetail(
+        code=role.code,
+        name=role.name,
+        description=role.description,
+        is_system=role.is_system,
+        gere_manuellement=role.gere_manuellement,
+        permissions=[
+            PermissionItem(code=r.code, module=r.module, description=r.description)
+            for r in lignes
+        ],
+    )
 
 
 @router.get("/{code}/permissions", response_model=RolePermissionsDetail)
@@ -224,23 +257,7 @@ def lire_permissions_role(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_ROLE_INTROUVABLE
         )
-
-    lignes = db.execute(
-        select(Permission.code, Permission.module, Permission.description)
-        .join(RolePermission, RolePermission.permission_id == Permission.id)
-        .where(RolePermission.role_id == role.id)
-        .order_by(Permission.module, Permission.code)
-    )
-    return RolePermissionsDetail(
-        code=role.code,
-        name=role.name,
-        description=role.description,
-        is_system=role.is_system,
-        permissions=[
-            PermissionItem(code=r.code, module=r.module, description=r.description)
-            for r in lignes
-        ],
-    )
+    return _vers_detail(db, role)
 
 
 @router.put("/{code}/permissions", response_model=RolePermissionsDetail)
@@ -251,9 +268,10 @@ def remplacer_permissions_du_role(
     courant: Annotated[UtilisateurCourant, Depends(exige("roles.permissions.manage"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> RolePermissionsDetail:
-    """Remplace ATOMIQUEMENT le jeu de permissions d'un rôle PERSONNALISÉ. Refuse sur un rôle
-    système. Garde-fou anti-blocage : refuse si plus aucun rôle actif ne détiendrait
-    roles.permissions.manage après le changement."""
+    """Remplace ATOMIQUEMENT le jeu de permissions d'un rôle — personnalisé OU système
+    (lot 4). Verrouille le rôle (gere_manuellement=TRUE) dans les deux cas. Garde-fou
+    anti-blocage : refuse si plus aucun rôle actif ne détiendrait roles.permissions.manage
+    après le changement — couvre notamment ADMIN_TECHNIQUE, désormais éditable."""
     try:
         role = remplacer_permissions(
             db,
@@ -265,33 +283,53 @@ def remplacer_permissions_du_role(
         )
     except Exception as erreur:
         raise _traduire(erreur) from None
+    return _vers_detail(db, role)
 
-    lignes = db.execute(
-        select(Permission.code, Permission.module, Permission.description)
-        .join(RolePermission, RolePermission.permission_id == Permission.id)
-        .where(RolePermission.role_id == role.id)
-        .order_by(Permission.module, Permission.code)
-    )
-    return RolePermissionsDetail(
-        code=role.code,
-        name=role.name,
-        description=role.description,
-        is_system=role.is_system,
-        permissions=[
-            PermissionItem(code=r.code, module=r.module, description=r.description)
-            for r in lignes
-        ],
-    )
+
+class ReinitialiserRoleRequest(BaseModel):
+    """Entrée de POST /roles/{code}/reinitialiser. Motif FACULTATIF, jamais exigé — tracé
+    dans l'audit s'il est fourni."""
+
+    motif: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/{code}/reinitialiser", response_model=RolePermissionsDetail)
+def reinitialiser_role(
+    code: str,
+    corps: ReinitialiserRoleRequest,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("roles.permissions.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RolePermissionsDetail:
+    """Réinitialise un rôle SYSTÈME verrouillé à son réglage d'usine : rejoue le seed pour
+    ce rôle (métadonnées ET permissions), puis lève le verrou. Refuse sur un rôle
+    personnalisé (pas de réglage d'usine) ou déjà géré par le seed (rien à réinitialiser).
+    Même garde-fou anti-blocage que PUT .../permissions."""
+    try:
+        role = reinitialiser(db, courant, code, _contexte(request), corps.motif)
+    except Exception as erreur:
+        raise _traduire(erreur) from None
+    return _vers_detail(db, role)
 
 
 def _traduire(erreur: Exception) -> HTTPException:
-    """Traduit une erreur du service d'écriture (lot 2) en réponse HTTP. Un seul endroit."""
+    """Traduit une erreur du service d'écriture (lot 2/4) en réponse HTTP. Un seul endroit."""
     if isinstance(erreur, RoleIntrouvableEcritureError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_ROLE_INTROUVABLE)
-    if isinstance(erreur, RoleSystemeNonModifiableError):
+    if isinstance(erreur, RoleSystemeNonSupprimableError):
         return HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="L'édition des rôles système n'est pas encore disponible.",
+            detail="Un rôle système ne peut pas être supprimé.",
+        )
+    if isinstance(erreur, RoleNonSystemeError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Seul un rôle système peut être réinitialisé.",
+        )
+    if isinstance(erreur, RoleNonVerrouilleError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Ce rôle n'a pas été modifié : rien à réinitialiser.",
         )
     if isinstance(erreur, CodeRoleDejaUtiliseError):
         return HTTPException(
