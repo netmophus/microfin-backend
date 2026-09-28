@@ -66,6 +66,9 @@ class RapportSeed:
     permissions: int
     accords: int
     revocations: int
+    # Lot 3 : rôles system ignorés par LES TROIS convergences car gere_manuellement=TRUE —
+    # visible pour que le verrou ne soit jamais silencieux.
+    roles_geres_manuellement_ignores: int
 
 
 # --- §4 — les 11 rôles système -------------------------------------------------------
@@ -570,6 +573,7 @@ _UPSERT_ROLE = text(
         requires_2fa         = EXCLUDED.requires_2fa,
         password_expiry_days = EXCLUDED.password_expiry_days,
         updated_at           = NOW()
+    WHERE NOT security.roles.gere_manuellement
     """
 )
 
@@ -589,7 +593,7 @@ _ACCORDER = text(
     INSERT INTO security.role_permissions (role_id, permission_id)
     SELECT r.id, p.id
       FROM security.roles r, security.permissions p
-     WHERE r.code = :role_code AND p.code = :permission_code
+     WHERE r.code = :role_code AND p.code = :permission_code AND NOT r.gere_manuellement
     ON CONFLICT (role_id, permission_id) DO NOTHING
     """
 )
@@ -604,10 +608,17 @@ _REVOQUER_HORS_MATRICE = text(
      WHERE rp.role_id = r.id
        AND rp.permission_id = p.id
        AND r.is_system
+       AND NOT r.gere_manuellement
        AND (r.code || '|' || p.code) <> ALL(:accordes)
     RETURNING rp.role_id
     """
 ).bindparams(sa.bindparam("accordes", type_=postgresql.ARRAY(sa.Text())))
+
+# Lot 3 : compte les rôles verrouillés (gere_manuellement=TRUE) que les 3 convergences
+# ci-dessus viennent d'ignorer — visible dans le rapport, jamais silencieux.
+_ROLES_GERES_MANUELLEMENT = text(
+    "SELECT count(*) FROM security.roles WHERE gere_manuellement"
+)
 
 
 def executer_seed(db: Session) -> RapportSeed:
@@ -649,9 +660,12 @@ def executer_seed(db: Session) -> RapportSeed:
     # RETURNING plutôt que rowcount : ce dernier n'est pas typé sur Result.
     revocations = len(db.execute(_REVOQUER_HORS_MATRICE, {"accordes": attendus}).fetchall())
 
+    roles_geres_manuellement_ignores = db.execute(_ROLES_GERES_MANUELLEMENT).scalar_one()
+
     return RapportSeed(
         roles=len(ROLES),
         permissions=len(PERMISSIONS),
         accords=accords,
         revocations=revocations,
+        roles_geres_manuellement_ignores=roles_geres_manuellement_ignores,
     )

@@ -173,6 +173,12 @@ class Role(Base):
     is_system : le DELETE est refusé en base (trigger de la migration 0004). L'UPDATE
     reste techniquement possible — le seed s'en sert pour resynchroniser les définitions
     à chaque montée de version ; c'est au service Sécurité de refuser l'UPDATE illégitime.
+
+    gere_manuellement (lot 3, migration 0045) : posé à TRUE par un endpoint d'écriture
+    (création, PATCH, remplacement des permissions) dès qu'un HUMAIN modifie ce rôle depuis
+    l'écran. Dès lors, `seed-security` ne le touche plus JAMAIS — ni ses métadonnées, ni ses
+    habilitations — l'écran devient seul maître sur ce rôle. Ne repasse jamais à FALSE
+    automatiquement (pas de déverrouillage dans ce lot, dette pour un lot ultérieur).
     """
 
     __tablename__ = "roles"
@@ -183,6 +189,9 @@ class Role(Base):
     name: Mapped[str] = mapped_column(sa.String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(sa.Text(), nullable=True)
     is_system: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=sa.false())
+    gere_manuellement: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
     # C17 — un rôle qui exige la 2FA en interdit la désactivation.
     requires_2fa: Mapped[bool] = mapped_column(
         sa.Boolean(), nullable=False, server_default=sa.false()

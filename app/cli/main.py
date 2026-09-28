@@ -83,6 +83,9 @@ def seed_security(
     typer.echo(f"Permissions       : {rapport.permissions}")
     typer.echo(f"Habilitations     : {rapport.accords}")
     typer.echo(f"Révocations       : {rapport.revocations}")
+    typer.echo(
+        f"Rôles verrouillés : {rapport.roles_geres_manuellement_ignores} (ignorés, gérés à l'écran)"
+    )
     typer.echo("Simulation — rien n'a été écrit." if dry_run else "Seed appliqué.")
 
 

@@ -154,6 +154,8 @@ def test_creer_un_role_personnalise(client: TestClient, db: Session, agence: Age
 
     role = db.execute(select(Role).where(Role.code == "ROLE_TEST")).scalar_one()
     assert role.is_system is False
+    # Lot 3 : né verrouillé, seed-security ne le touchera jamais.
+    assert role.gere_manuellement is True
 
     ligne = _audit(db, "role.created")
     assert ligne["resource_id"] == role.id
@@ -206,6 +208,10 @@ def test_modifier_un_role_personnalise(client: TestClient, db: Session, agence: 
 
     ligne = _audit(db, "role.updated")
     assert ligne["new_values"] == {"description": "Nouvelle description"}
+
+    # Lot 3 : cette modification verrouille le rôle.
+    role = db.execute(select(Role).where(Role.code == "ROLE_PERSO")).scalar_one()
+    assert role.gere_manuellement is True
 
 
 def test_modifier_un_role_systeme_refuse(client: TestClient, db: Session, agence: Agency) -> None:
@@ -308,6 +314,10 @@ def test_remplacer_les_permissions_dun_role_personnalise(
     assert set(ligne["new_values"]["permissions"]) == {"tiers.read.basic", "epargne.account.read"}
     assert ligne["new_values"]["motif"] == "Ajustement du périmètre de ce rôle"
     assert ligne["old_values"]["permissions"] == ["tiers.read.basic"]
+
+    # Lot 3 : ce remplacement verrouille le rôle.
+    role = db.execute(select(Role).where(Role.code == "ROLE_PERSO")).scalar_one()
+    assert role.gere_manuellement is True
 
 
 def test_remplacer_les_permissions_dun_role_systeme_refuse(

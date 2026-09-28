@@ -146,6 +146,10 @@ def creer(
         name=nouveau.name,
         description=nouveau.description,
         is_system=False,
+        # Lot 3 : né verrouillé — un rôle personnalisé n'est de toute façon jamais dans le
+        # seed, mais on pose le flag dès la naissance pour rester correct et cohérent avec
+        # modifier_metadonnees/remplacer_permissions (mêmes règles partout).
+        gere_manuellement=True,
     )
     db.add(role)
     db.flush()
@@ -187,6 +191,8 @@ def modifier_metadonnees(
     avant = _etat_auditable(role)
     for champ, valeur in modifications.items():
         setattr(role, champ, valeur)
+    # Lot 3 : cet appel verrouille le rôle — seed-security ne le touchera plus jamais.
+    role.gere_manuellement = True
     db.flush()
     apres = _etat_auditable(role)
 
@@ -272,6 +278,8 @@ def remplacer_permissions(
     db.execute(delete(RolePermission).where(RolePermission.role_id == role.id))
     for permission in permissions:
         db.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    # Lot 3 : cet appel verrouille le rôle — seed-security ne le touchera plus jamais.
+    role.gere_manuellement = True
     db.flush()
 
     ecrire_audit(

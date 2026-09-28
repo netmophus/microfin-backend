@@ -222,6 +222,86 @@ def test_les_habilitations_dun_role_personnalise_sont_preservees(session: Sessio
     assert _codes_accordes(session, "ROLE_MAISON") == {"users.read"}
 
 
+def test_gere_manuellement_protege_les_trois_convergences(session: Session) -> None:
+    """LE test du lot 3 : un rôle verrouillé (gere_manuellement=TRUE) survit INTACT à un
+    seed-security qui, sans le flag, l'aurait corrigé sur les trois axes — métadonnées
+    (_UPSERT_ROLE), grâce due par la matrice mais retirée à la main (_ACCORDER), grâce
+    hors matrice (_REVOQUER_HORS_MATRICE).
+
+    Contre-épreuve DANS LE MÊME TEST : la même triple mutation, sur un AUTRE rôle NON
+    verrouillé (COMPTABLE), EST corrigée par le second seed — la preuve que c'est bien le
+    verrou qui fait la différence, pas un hasard de la matrice ou un test qui ne mord pas.
+    """
+    executer_seed(session)
+
+    # CAISSIER : verrouillé, puis désaligné sur les trois axes.
+    session.execute(
+        text(
+            "UPDATE security.roles SET gere_manuellement = TRUE, "
+            "name = 'Nom modifié à la main' WHERE code = 'CAISSIER'"
+        )
+    )
+    session.execute(
+        text(
+            "DELETE FROM security.role_permissions rp "
+            "USING security.roles r, security.permissions p "
+            "WHERE rp.role_id = r.id AND rp.permission_id = p.id "
+            "  AND r.code = 'CAISSIER' AND p.code = 'caisse.session.open'"
+        )
+    )
+    session.execute(
+        text(
+            "INSERT INTO security.role_permissions (role_id, permission_id) "
+            "SELECT r.id, p.id FROM security.roles r, security.permissions p "
+            " WHERE r.code = 'CAISSIER' AND p.code = 'users.delete'"
+        )
+    )
+
+    # COMPTABLE : NON verrouillé, exactement la même triple mutation (contre-épreuve).
+    session.execute(
+        text("UPDATE security.roles SET name = 'Nom modifié à la main' WHERE code = 'COMPTABLE'")
+    )
+    session.execute(
+        text(
+            "DELETE FROM security.role_permissions rp "
+            "USING security.roles r, security.permissions p "
+            "WHERE rp.role_id = r.id AND rp.permission_id = p.id "
+            "  AND r.code = 'COMPTABLE' AND p.code = 'compta.plan.read'"
+        )
+    )
+    session.execute(
+        text(
+            "INSERT INTO security.role_permissions (role_id, permission_id) "
+            "SELECT r.id, p.id FROM security.roles r, security.permissions p "
+            " WHERE r.code = 'COMPTABLE' AND p.code = 'users.delete'"
+        )
+    )
+
+    rapport = executer_seed(session)
+
+    # CAISSIER (verrouillé) : rien n'a bougé — ni le nom, ni les habilitations.
+    nom_caissier = session.execute(
+        text("SELECT name FROM security.roles WHERE code = 'CAISSIER'")
+    ).scalar_one()
+    assert nom_caissier == "Nom modifié à la main"
+    accordees_caissier = _codes_accordes(session, "CAISSIER")
+    assert "caisse.session.open" not in accordees_caissier, "réaccordée malgré le verrou"
+    assert "users.delete" in accordees_caissier, "révoquée malgré le verrou"
+
+    # COMPTABLE (non verrouillé) : tout est corrigé — la mutation aurait donc bien été
+    # rattrapée sur CAISSIER aussi, en l'absence du verrou.
+    nom_comptable = session.execute(
+        text("SELECT name FROM security.roles WHERE code = 'COMPTABLE'")
+    ).scalar_one()
+    assert nom_comptable != "Nom modifié à la main"
+    accordees_comptable = _codes_accordes(session, "COMPTABLE")
+    assert "compta.plan.read" in accordees_comptable, "pas réaccordée, contre-épreuve invalide"
+    assert "users.delete" not in accordees_comptable, "pas révoquée, contre-épreuve invalide"
+
+    # Rapport : le verrou est visible, jamais silencieux.
+    assert rapport.roles_geres_manuellement_ignores == 1
+
+
 def test_les_profils_sensibles_imposent_la_2fa(session: Session) -> None:
     executer_seed(session)
 
