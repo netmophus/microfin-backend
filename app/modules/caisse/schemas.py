@@ -166,6 +166,15 @@ class PosteCaisse(BaseModel):
     is_active: bool
 
 
+class PosteAssigne(BaseModel):
+    """Un poste proposé au CAISSIER pour l'ouverture de session (Bloc C) — jamais les champs de
+    gestion (agence, compte rattaché) : ce n'est pas un écran de paramétrage, juste un choix."""
+
+    id: uuid.UUID
+    code: str
+    libelle: str
+
+
 class CreationPoste(BaseModel):
     code: str = Field(min_length=1, max_length=20)
     libelle: str = Field(min_length=1, max_length=150)

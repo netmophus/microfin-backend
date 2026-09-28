@@ -58,6 +58,7 @@ from app.modules.caisse.schemas import (
     PageSessionsAValider,
     PageSessionsManquantes,
     ParametresCaisse,
+    PosteAssigne,
     PosteCaisse,
     RattachementComptePoste,
     SessionCaisse,
@@ -159,6 +160,22 @@ def _vers_schema_parametres(db: Session, config: CaisseParametres) -> Parametres
         compte_ecart_excedent=_compte_rattachement_ecart(db, config.compte_ecart_excedent_id),
         is_provisional=config.is_provisional,
     )
+
+
+@router.get("/caisse/sessions/mes-postes", response_model=list[PosteAssigne])
+def lister_mes_postes_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.session.open"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PosteAssigne]:
+    """Postes proposables à L'ACTEUR pour ouvrir une session (Bloc C) — SES postes assignés,
+    actifs, dans SON agence courante. Gardé par `caisse.session.open` (que tout caissier
+    détient déjà), jamais `caisse.poste.manage`/`compta.plan.manage` (gestion, hors de portée
+    d'un caissier) : cet écran ne montre que ce qui le concerne, pas la liste de gestion.
+    Distinct de `GET /caisse/postes`, réservé aux rôles de gestion."""
+    return [
+        PosteAssigne(id=p.id, code=p.code, libelle=p.libelle)
+        for p in postes.lister_mes_postes(db, courant)
+    ]
 
 
 @router.post(

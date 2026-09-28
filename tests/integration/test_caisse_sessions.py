@@ -544,6 +544,71 @@ def test_endpoint_ouverture_puis_fermeture_bout_en_bout(client: TestClient, db: 
     assert corps["ecart"] == 0
 
 
+def test_mes_postes_renvoie_le_poste_assigne_actif_de_lagence_courante(
+    client: TestClient, db: Session
+) -> None:
+    """Trois exclusions, chacune vue MORDRE : poste de la même agence mais non assigné, poste
+    assigné mais désactivé, poste assigné et actif mais d'une AUTRE agence."""
+    agence = _agence(db, "CXB4")
+    caissier_user = _utilisateur(db, agence, "23")
+    poste_assigne = _poste_principal(db, agence)
+    _assigner(db, poste_assigne, caissier_user.id)
+
+    poste_non_assigne = Poste(
+        agency_id=agence.id,
+        code="02",
+        libelle="Guichet non assigné",
+        compte_caisse_id=poste_assigne.compte_caisse_id,
+    )
+    db.add(poste_non_assigne)
+    db.flush()
+
+    poste_inactif = Poste(
+        agency_id=agence.id,
+        code="03",
+        libelle="Guichet désactivé",
+        compte_caisse_id=poste_assigne.compte_caisse_id,
+        is_active=False,
+    )
+    db.add(poste_inactif)
+    db.flush()
+    _assigner(db, poste_inactif, caissier_user.id)
+
+    autre_agence = _agence(db, "CXB5")
+    poste_autre_agence = _poste_principal(db, autre_agence)
+    _assigner(db, poste_autre_agence, caissier_user.id)
+
+    reponse = client.get("/caisse/sessions/mes-postes", headers=_entete(caissier_user, agence))
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert [p["code"] for p in corps] == ["01"]
+    assert corps[0]["libelle"] == "Caisse principale"
+    # Jamais l'agence ni le compte rattaché : ce n'est pas l'écran de gestion.
+    assert set(corps[0].keys()) == {"id", "code", "libelle"}
+
+
+def test_mes_postes_sans_caisse_session_open_403(client: TestClient, db: Session) -> None:
+    """`caisse.session.open` garde cet endpoint — jamais `caisse.poste.manage` ni
+    `compta.plan.manage` (hors de portée d'un caissier)."""
+    agence = _agence(db, "CXB6")
+    role = db.execute(select(Role).where(Role.code == "AUDITEUR_INTERNE")).scalar_one()
+    user = User(
+        matricule="MAT-CXB6", email="cxb6@ex.com", username="cxb6",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="A",
+        primary_agency_id=agence.id,
+    )
+    db.add(user)
+    db.flush()
+    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.flush()
+
+    reponse = client.get(
+        "/caisse/sessions/mes-postes", headers=_entete(user, agence, role_code="AUDITEUR_INTERNE")
+    )
+    assert reponse.status_code == 403
+
+
 def test_endpoint_sans_permission_403(client: TestClient, db: Session) -> None:
     agence = _agence(db, "CXB2")
     role = db.execute(select(Role).where(Role.code == "AUDITEUR_INTERNE")).scalar_one()

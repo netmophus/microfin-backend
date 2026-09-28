@@ -90,6 +90,31 @@ def lister(db: Session, courant: UtilisateurCourant) -> Sequence[Poste]:
     return db.execute(stmt.order_by(Poste.agency_id, Poste.code)).scalars().all()
 
 
+def lister_mes_postes(db: Session, courant: UtilisateurCourant) -> Sequence[Poste]:
+    """Postes proposables à L'ACTEUR pour ouvrir une session (Bloc C) — jamais `lister()` : un
+    caissier ne détient ni `caisse.poste.manage` ni `compta.plan.manage`, et n'a de toute façon
+    besoin de voir que CE qui le concerne, pas tous les postes de l'agence.
+
+    Trois conditions cumulées, toutes nécessaires : assigné (`caisse.poste_assignations`),
+    agence COURANTE de sa session (`courant.agency_id` — pas une agence où il serait par
+    ailleurs habilité), poste actif. Aucun rapport avec `caisse.poste.manage` : l'accès est
+    gardé par `caisse.session.open`, que tout caissier détient déjà."""
+    return (
+        db.execute(
+            select(Poste)
+            .join(PosteAssignation, PosteAssignation.poste_id == Poste.id)
+            .where(
+                PosteAssignation.user_id == courant.user_id,
+                Poste.agency_id == courant.agency_id,
+                Poste.is_active.is_(True),
+            )
+            .order_by(Poste.code)
+        )
+        .scalars()
+        .all()
+    )
+
+
 def _verifier_code_disponible(
     db: Session, *, agency_id: uuid.UUID | None, code: str, exclure_id: uuid.UUID | None = None
 ) -> None:
