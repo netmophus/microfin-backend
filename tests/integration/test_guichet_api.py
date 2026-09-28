@@ -1,7 +1,7 @@
 """API Guichet (F2a) — dépôt / retrait, et surtout les REFUS parlants.
 
-  - recherche par numéro : renvoie le NOM du membre (vérification humaine contre une faute de
-    frappe dans le numéro) ;
+  - recherche PARTIELLE par numéro ou nom (`ilike`, cloisonnée par agence) : renvoie le NOM du
+    membre (vérification humaine contre un mauvais choix dans la liste) ;
   - dépôt : crédite ; retrait > solde -> 422 avec « disponible » ; membre suspendu -> 422 (gel) ;
     compte fermé -> 422 ; montant <= 0 -> 422 ; sans permission -> 403 ; hors agence -> 404.
 """
@@ -140,17 +140,57 @@ def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) 
     )
 
 
-def test_recherche_par_numero_renvoie_le_nom_du_membre(client: TestClient, db: Session) -> None:
+def test_recherche_comptes_par_numero_partiel_renvoie_le_nom_du_membre(
+    client: TestClient, db: Session
+) -> None:
     agence = _agence(db, "AG-G1")
     compte = _compte(db, agence)
     entete = _entete(db, agence, "CAISSIER")
 
+    # Numéro PARTIEL (tout sauf le dernier caractère) — preuve que ce n'est plus une égalité
+    # stricte, le point que ce chantier corrige.
     reponse = client.get(
-        "/epargne/recherche-compte", params={"numero": compte.account_number}, headers=entete
+        "/epargne/recherche-comptes",
+        params={"q": compte.account_number[:-1]},
+        headers=entete,
     )
     assert reponse.status_code == 200
-    # Nom proéminent = vérification humaine contre une faute de frappe dans le numéro.
-    assert reponse.json()["membre_nom"] == "Traoré Fatoumata"
+    corps = reponse.json()
+    assert len(corps) == 1
+    assert corps[0]["account_number"] == compte.account_number
+    # Nom proéminent = vérification humaine contre un mauvais choix dans la liste.
+    assert corps[0]["membre_nom"] == "Traoré Fatoumata"
+
+
+def test_recherche_comptes_par_nom_partiel(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-G1B")
+    compte = _compte(db, agence)
+    entete = _entete(db, agence, "CAISSIER")
+
+    reponse = client.get("/epargne/recherche-comptes", params={"q": "raoré"}, headers=entete)
+    assert reponse.status_code == 200
+    assert reponse.json()[0]["account_number"] == compte.account_number
+
+
+def test_recherche_comptes_cloisonnee_par_agence(client: TestClient, db: Session) -> None:
+    agence_a = _agence(db, "AG-GC1")
+    agence_b = _agence(db, "AG-GC2")
+    _compte(db, agence_a)  # « Traoré Fatoumata », dans l'agence A seulement.
+    entete_b = _entete(db, agence_b, "CAISSIER")
+
+    reponse = client.get("/epargne/recherche-comptes", params={"q": "Traoré"}, headers=entete_b)
+    assert reponse.status_code == 200
+    assert reponse.json() == []
+
+
+def test_recherche_comptes_sans_permission_403(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "AG-G1C")
+    _compte(db, agence)
+    # CHARGE_PRET n'a pas epargne.account.read (contrairement à AUDITEUR_INTERNE, qui l'a).
+    entete = _entete(db, agence, "CHARGE_PRET")
+
+    reponse = client.get("/epargne/recherche-comptes", params={"q": "Traoré"}, headers=entete)
+    assert reponse.status_code == 403
 
 
 def test_depot_puis_retrait(client: TestClient, db: Session) -> None:

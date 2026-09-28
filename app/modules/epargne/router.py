@@ -12,9 +12,9 @@ TABLE DES ERREURS (un seul endroit, _traduire) :
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -336,19 +336,7 @@ def _422(erreur: Exception) -> HTTPException:
     return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur))
 
 
-@router.get("/epargne/recherche-compte", response_model=CompteGuichet)
-def rechercher_compte_endpoint(
-    numero: str,
-    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.read"))],
-    db: Annotated[Session, Depends(get_db)],
-) -> CompteGuichet:
-    """Trouve un compte par son NUMÉRO (chemin du guichet). Le NOM du membre est renvoyé,
-    proéminent à l'écran : vérification humaine contre une faute de frappe dans le numéro."""
-    ligne = consultation.rechercher_par_numero(db, courant, numero.strip())
-    if ligne is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
-        )
+def _vers_compte_guichet(ligne: Any) -> CompteGuichet:
     compte, produit, tier_id, nom = ligne
     return CompteGuichet(
         id=compte.id,
@@ -362,6 +350,20 @@ def rechercher_compte_endpoint(
         status=compte.status,
         is_provisional=produit.is_provisional,
     )
+
+
+@router.get("/epargne/recherche-comptes", response_model=list[CompteGuichet])
+def rechercher_comptes_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    q: Annotated[str, Query(min_length=1, description="Numéro de compte ou nom du titulaire.")],
+) -> list[CompteGuichet]:
+    """Trouve les comptes du périmètre dont le numéro OU le nom du titulaire correspond à `q`
+    (chemin de recherche du guichet, partielle) — même patron que
+    `credit.recherche-remboursement`. Le NOM du membre est renvoyé, proéminent à l'écran :
+    vérification humaine contre une faute de frappe dans le numéro choisi."""
+    lignes = consultation.rechercher_comptes(db, courant, q.strip())
+    return [_vers_compte_guichet(ligne) for ligne in lignes]
 
 
 @router.post("/epargne/comptes/{compte_id}/depot", response_model=ResultatOperation)

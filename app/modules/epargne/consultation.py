@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.comptabilite.models import JournalEntry
@@ -70,11 +70,12 @@ def lire_compte(
     ).first()
 
 
-def rechercher_par_numero(
-    db: Session, courant: UtilisateurCourant, numero: str
-) -> Any | None:
-    """Cherche un compte par son NUMÉRO (chemin du guichet), dans le périmètre. Rend
-    (compte, produit, tier_id, nom_membre) ou None (-> 404). Le nom sert de vérification humaine."""
+def rechercher_comptes(db: Session, courant: UtilisateurCourant, q: str) -> Sequence[Any]:
+    """Comptes du périmètre dont le NUMÉRO ou le NOM du titulaire correspond à `q` — chemin de
+    recherche du guichet (partielle, `ilike`), même patron que
+    `credit.consultation::rechercher_remboursables`. Rend jusqu'à 20 lignes
+    (compte, produit, tier_id, nom_membre) — le nom sert de vérification humaine à l'écran."""
+    motif = f"%{q}%"
     return db.execute(
         select(SavingsAccount, Product, _T.c.id.label("tier_id"), _nom_membre().label("nom"))
         .join(Product, Product.id == SavingsAccount.product_id)
@@ -83,10 +84,12 @@ def rechercher_par_numero(
         .outerjoin(_LE, _LE.c.tier_id == _T.c.id)
         .outerjoin(_GP, _GP.c.tier_id == _T.c.id)
         .where(
-            SavingsAccount.account_number == numero,
             courant.condition_perimetre(SavingsAccount.agency_id),
+            or_(SavingsAccount.account_number.ilike(motif), _nom_membre().ilike(motif)),
         )
-    ).first()
+        .order_by(SavingsAccount.account_number)
+        .limit(20)
+    ).all()
 
 
 def lister_mouvements(db: Session, compte_id: uuid.UUID) -> Sequence[Any]:
