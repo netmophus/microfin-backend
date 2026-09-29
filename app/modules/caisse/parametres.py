@@ -13,7 +13,15 @@ il lit/modifie la seule qui existe (posée par le seed `seed-comptabilite`, idem
 GARDE-FOU sur les comptes (CA3) : chaque numéro soumis passe par `comptes.compte_saisie_actif`
 (comptabilite), qui refuse tout compte de regroupement ou désactivé — même discipline que les
 rattachements produit/agence/parts déjà en place. DEUX comptes distincts (manquant/excédent),
-jamais un signe négatif sur un seul (décision actée)."""
+jamais un signe négatif sur un seul (décision actée).
+
+Sous-chantier 2 (transferts), Lot 2b : trois champs de plus, MÊME garde-fou
+(`compte_saisie_actif`), délibérément PAS `comptes.compte_caisse_valide` — le compte de liaison
+des transferts n'est pas un compte de caisse (l'argent en transit n'est pas « en caisse »), et
+l'écart de transfert est de même nature que l'écart de caisse ci-dessus (charge/produit), sans
+contrainte de rubrique non plus. Vérifié en LECTURE SEULE avant ce lot : aucun garde-fou
+n'existait sur ces trois colonnes (migration 0047, simples FK nullables) — ce n'est pas une
+correction d'un contrôle existant, c'est le premier posé."""
 
 import uuid
 
@@ -49,13 +57,17 @@ def modifier(
     seuil_tolerance: int,
     compte_ecart_manquant_number: str | None,
     compte_ecart_excedent_number: str | None,
+    compte_transit_number: str | None,
+    compte_ecart_transfert_manquant_number: str | None,
+    compte_ecart_transfert_excedent_number: str | None,
     motif: str,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> CaisseParametres:
-    """Modifie le seuil et/ou les rattachements de l'écart — MOTIF obligatoire, tracé
-    avant/après. La borne du seuil (montant positif) est déjà imposée par le schéma Pydantic ;
-    le garde-fou des comptes reste à vérifier ici (compte_saisie_actif)."""
+    """Modifie le seuil et/ou les rattachements de l'écart et des transferts — MOTIF
+    obligatoire, tracé avant/après. La borne du seuil (montant positif) est déjà imposée par le
+    schéma Pydantic ; le garde-fou des comptes reste à vérifier ici (compte_saisie_actif, SANS
+    contrainte de rubrique pour les 5 champs — voir docstring module pour les 3 de transfert)."""
     nouveau_manquant = (
         compte_saisie_actif(db, compte_ecart_manquant_number)
         if compte_ecart_manquant_number
@@ -64,6 +76,19 @@ def modifier(
     nouveau_excedent = (
         compte_saisie_actif(db, compte_ecart_excedent_number)
         if compte_ecart_excedent_number
+        else None
+    )
+    nouveau_transit = (
+        compte_saisie_actif(db, compte_transit_number) if compte_transit_number else None
+    )
+    nouveau_ecart_transfert_manquant = (
+        compte_saisie_actif(db, compte_ecart_transfert_manquant_number)
+        if compte_ecart_transfert_manquant_number
+        else None
+    )
+    nouveau_ecart_transfert_excedent = (
+        compte_saisie_actif(db, compte_ecart_transfert_excedent_number)
+        if compte_ecart_transfert_excedent_number
         else None
     )
 
@@ -77,11 +102,21 @@ def modifier(
         "seuil_tolerance": config.seuil_tolerance,
         "compte_ecart_manquant": _numero(config.compte_ecart_manquant_id),
         "compte_ecart_excedent": _numero(config.compte_ecart_excedent_id),
+        "compte_transit": _numero(config.compte_transit_id),
+        "compte_ecart_transfert_manquant": _numero(config.compte_ecart_transfert_manquant_id),
+        "compte_ecart_transfert_excedent": _numero(config.compte_ecart_transfert_excedent_id),
     }
 
     config.seuil_tolerance = seuil_tolerance
     config.compte_ecart_manquant_id = nouveau_manquant.id if nouveau_manquant else None
     config.compte_ecart_excedent_id = nouveau_excedent.id if nouveau_excedent else None
+    config.compte_transit_id = nouveau_transit.id if nouveau_transit else None
+    config.compte_ecart_transfert_manquant_id = (
+        nouveau_ecart_transfert_manquant.id if nouveau_ecart_transfert_manquant else None
+    )
+    config.compte_ecart_transfert_excedent_id = (
+        nouveau_ecart_transfert_excedent.id if nouveau_ecart_transfert_excedent else None
+    )
     config.updated_by = par
     db.flush()
 
@@ -97,6 +132,9 @@ def modifier(
             "seuil_tolerance": seuil_tolerance,
             "compte_ecart_manquant": compte_ecart_manquant_number,
             "compte_ecart_excedent": compte_ecart_excedent_number,
+            "compte_transit": compte_transit_number,
+            "compte_ecart_transfert_manquant": compte_ecart_transfert_manquant_number,
+            "compte_ecart_transfert_excedent": compte_ecart_transfert_excedent_number,
             "motif": motif,
         },
     )

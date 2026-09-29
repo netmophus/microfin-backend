@@ -329,6 +329,23 @@ PERMISSIONS: tuple[Permission, ...] = (
         "caisse",
         "Valider a posteriori l'écart d'une session de caisse",
     ),
+    # Sous-chantier 2 (transferts), Lot 1 : mouvement de fonds entre niveaux de caisse ADJACENTS
+    # (coffre/principale/secondaire) d'une même agence — cloisonnées à l'agence
+    # (condition_perimetre), jamais perimetre.reseau (un transfert reste local, voir plan). Le
+    # double regard (receveur != envoyeur) vient du contrôle applicatif, pas d'un cloisonnement
+    # de rôle : les deux permissions sont accordées ENSEMBLE à RESPONSABLE_AGENCE et CAISSIER
+    # (voir MATRICE) — côté secondaire, le contrôle à l'objet (caissier titulaire de la session
+    # ouverte sur le poste) restreint de fait qui peut agir, pas la permission nue.
+    Permission(
+        "caisse.transfert.initier",
+        "caisse",
+        "Initier un transfert de fonds entre deux niveaux de caisse",
+    ),
+    Permission(
+        "caisse.transfert.valider",
+        "caisse",
+        "Réceptionner (valider) un transfert de fonds entre deux niveaux de caisse",
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -369,6 +386,10 @@ MATRICE: dict[str, frozenset[str]] = {
             "caisse.session.open",
             "caisse.session.close",
             "caisse.session.read",
+            # Sous-chantier 2 : le caissier envoie/réceptionne côté secondaire (SON poste, sa
+            # session ouverte — contrôle à l'objet dans caisse/transferts.py, pas ici).
+            "caisse.transfert.initier",
+            "caisse.transfert.valider",
         }
     ),
     # Le chargé de clientèle enrôle ET ouvre les comptes d'épargne des membres.
@@ -459,6 +480,10 @@ MATRICE: dict[str, frozenset[str]] = {
             # CA2 : validation a posteriori des écarts de SON agence — même cloisonnement que
             # caisse.session.read.autres, jamais perimetre.reseau.
             "caisse.session.valider",
+            # Sous-chantier 2 : agit sur coffre/principale de SON agence (jamais à la place
+            # d'un caissier sur un poste — voir caisse/transferts.py).
+            "caisse.transfert.initier",
+            "caisse.transfert.valider",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

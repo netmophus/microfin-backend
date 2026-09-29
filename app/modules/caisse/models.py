@@ -20,7 +20,15 @@ validée), calculé par service.py, jamais stocké.
 Chantier coffre-fort/caisses, sous-chantier 1 Bloc 1 (migration 0046) : `NiveauCaisse` — le
 paramétrage PAR AGENCE des niveaux « coffre » et « principale ». PAS le niveau secondaire, qui
 reste sur `Poste.compte_caisse_id`. VIDE par défaut : aucun rattachement n'est imposé par le
-logiciel, l'IMF choisit et rattache ses propres comptes (voir docstring de la migration)."""
+logiciel, l'IMF choisit et rattache ses propres comptes (voir docstring de la migration).
+
+Sous-chantier 2, Lot 1 (migration 0047) : `Transfert` — UN mouvement de fonds entre deux niveaux
+ADJACENTS d'une même agence (coffre↔principale, principale↔secondaire). Voir docstring de la
+migration et de `app/modules/caisse/transferts.py` pour le détail des garde-fous (adjacence,
+double regard, ancrage des comptes, contrôle à l'objet côté secondaire). `CaisseParametres` gagne
+trois colonnes nullables : `compte_transit_id` (compte de liaison) et
+`compte_ecart_transfert_manquant_id`/`compte_ecart_transfert_excedent_id` (dédiés, distincts de
+l'écart de caisse)."""
 
 import uuid
 from datetime import datetime
@@ -225,6 +233,20 @@ class CaisseParametres(Base):
     compte_ecart_excedent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.accounts.id")
     )
+    # Sous-chantier 2, Lot 1 (migration 0047) : pont comptable des transferts entre niveaux de
+    # caisse. Compte de liaison débité à l'envoi, crédité à la réception ; écarts DÉDIÉS,
+    # distincts de compte_ecart_manquant_id/compte_ecart_excedent_id ci-dessus (l'écart d'une
+    # session de caisse et l'écart d'un transfert ne sont pas présumés de même nature — l'IMF
+    # peut choisir le même compte si elle le souhaite, rien ne l'en empêche).
+    compte_transit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    compte_ecart_transfert_manquant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    compte_ecart_transfert_excedent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
 
     def __repr__(self) -> str:
         return f"<CaisseParametres seuil={self.seuil_tolerance}>"
@@ -259,3 +281,106 @@ class NiveauCaisse(Base):
 
     def __repr__(self) -> str:
         return f"<NiveauCaisse {self.agency_id} {self.niveau}>"
+
+
+class Transfert(Base):
+    """Sous-chantier 2, Lot 1 (migration 0047) : UN mouvement de fonds entre deux niveaux
+    ADJACENTS de caisse d'une même agence. Voir docstring de la migration pour le détail des
+    CHECK (adjacence, cohérence du statut, double regard) — ce modèle les MIROITE, ne les
+    réimplémente pas côté Python (mêmes valeurs que la contrainte en base).
+
+    `compte_source_id`/`compte_destination_id` ANCRÉS à l'initiation, jamais recalculés — même
+    discipline que `CaisseSession.compte_caisse_id`. `poste_source_id`/`poste_destination_id`
+    renseigné SEULEMENT du côté « secondaire » : c'est ce qui permet au service de vérifier que
+    l'acteur est le caissier TITULAIRE de la session ouverte sur ce poste (voir
+    `app/modules/caisse/transferts.py`).
+
+    `journal_entry_envoi_id` NOT NULL : un transfert n'existe jamais sans son écriture d'envoi
+    déjà posée (compte de liaison débité, compte source crédité). `journal_entry_reception_id`
+    NULL tant que `statut = 'en_transit'`."""
+
+    __tablename__ = "transferts"
+    __table_args__: tuple[Any, ...] = (
+        sa.CheckConstraint(
+            "statut IN ('en_transit', 'receptionne')", name="statut_transfert_valide"
+        ),
+        sa.CheckConstraint(
+            "(niveau_source = 'coffre' AND niveau_destination = 'principale') OR "
+            "(niveau_source = 'principale' AND niveau_destination = 'coffre') OR "
+            "(niveau_source = 'principale' AND niveau_destination = 'secondaire') OR "
+            "(niveau_source = 'secondaire' AND niveau_destination = 'principale')",
+            name="adjacence_valide",
+        ),
+        sa.CheckConstraint(
+            "(niveau_source = 'secondaire') = (poste_source_id IS NOT NULL)",
+            name="poste_coherent_source",
+        ),
+        sa.CheckConstraint(
+            "(niveau_destination = 'secondaire') = (poste_destination_id IS NOT NULL)",
+            name="poste_coherent_destination",
+        ),
+        sa.CheckConstraint("montant_envoye > 0", name="montant_envoye_positif"),
+        sa.CheckConstraint(
+            "montant_compte IS NULL OR montant_compte >= 0", name="montant_compte_positif"
+        ),
+        sa.CheckConstraint(
+            "(statut = 'en_transit' AND receptionne_par IS NULL AND receptionne_le IS NULL "
+            "AND montant_compte IS NULL AND journal_entry_reception_id IS NULL) "
+            "OR "
+            "(statut = 'receptionne' AND receptionne_par IS NOT NULL AND "
+            "receptionne_le IS NOT NULL AND montant_compte IS NOT NULL AND "
+            "journal_entry_reception_id IS NOT NULL)",
+            name="statut_coherent_avec_reception",
+        ),
+        sa.CheckConstraint(
+            "receptionne_par IS NULL OR receptionne_par != envoye_par",
+            name="double_regard_envoyeur_receveur",
+        ),
+        sa.Index("ix_caisse_transferts_agency", "agency_id"),
+        sa.Index("ix_caisse_transferts_statut", "statut"),
+        sa.Index("ix_caisse_transferts_poste_source", "poste_source_id"),
+        sa.Index("ix_caisse_transferts_poste_destination", "poste_destination_id"),
+        {"schema": "caisse"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    agency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.agencies.id"), nullable=False
+    )
+    niveau_source: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    niveau_destination: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    compte_source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id"), nullable=False
+    )
+    compte_destination_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id"), nullable=False
+    )
+    poste_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("caisse.postes.id")
+    )
+    poste_destination_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("caisse.postes.id")
+    )
+    montant_envoye: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    montant_compte: Mapped[int | None] = mapped_column(sa.BigInteger)
+    statut: Mapped[str] = mapped_column(
+        sa.String(15), nullable=False, server_default=sa.text("'en_transit'")
+    )
+    envoye_par: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_USER), nullable=False)
+    envoye_le: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    receptionne_par: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    receptionne_le: Mapped[datetime | None] = mapped_column(TS)
+    motif: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    journal_entry_envoi_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id"), nullable=False
+    )
+    journal_entry_reception_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<Transfert {self.niveau_source}->{self.niveau_destination} {self.statut}>"

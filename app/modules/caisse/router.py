@@ -22,10 +22,27 @@ TABLE DES ERREURS :
   - écart au-delà du seuil sans motif (CA2)      -> 422
   - écart déjà validé / non significatif (CA2)   -> 422
   - compte de l'écart non rattaché (CA3)         -> 422
+
+TRANSFERTS (sous-chantier 2, Lot 2) : gardé caisse.transfert.initier (POST /caisse/transferts) /
+caisse.transfert.valider (POST .../reception) ; lecture (liste + fiche) acceptent l'une OU
+l'autre (exige_une_de). Cloisonné à l'agence dans les DEUX cas (condition_perimetre, dans le
+service) — jamais perimetre.reseau, aucun rôle de ce sous-chantier ne le porte. Le contrôle à
+l'objet côté secondaire (poste = session ouverte de l'ACTEUR) est vérifié dans
+`transferts.py`, jamais court-circuité ici : ce routeur délègue et traduit, il n'autorise rien
+lui-même au-delà de la permission de route. Table de traduction dédiée : `_traduire_transfert`
+(même patron que `tiers/router.py::_traduire`).
+  - transfert hors périmètre ou inexistant                    -> 404 (IDOR)
+  - poste soumis inexistant/inactif/hors agence                -> 404 (IDOR)
+  - adjacence invalide, poste requis/inattendu                 -> 422
+  - niveau non paramétré (coffre/principale) ou poste sans compte -> 422
+  - acteur non titulaire de la session ouverte sur le poste     -> 422
+  - compte de transit / d'écart de transfert non paramétré      -> 422
+  - transfert déjà réceptionné                                  -> 422
+  - double regard (receveur = envoyeur)                         -> 422
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
@@ -34,8 +51,9 @@ from sqlalchemy.orm import Session, aliased
 from app.core.database import get_db
 from app.modules.caisse import niveaux as niveaux_caisse
 from app.modules.caisse import postes
+from app.modules.caisse import transferts as transferts_caisse
 from app.modules.caisse.ecart_operations import RattachementEcartManquantError
-from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste
+from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, Transfert
 from app.modules.caisse.niveaux import NiveauInvalideError
 from app.modules.caisse.parametres import ParametrageManquantError
 from app.modules.caisse.parametres import lire as lire_parametres
@@ -61,12 +79,16 @@ from app.modules.caisse.schemas import (
     OuvertureSession,
     PageSessionsAValider,
     PageSessionsManquantes,
+    PageTransferts,
     ParametresCaisse,
     PosteAssigne,
     PosteCaisse,
     RattachementComptePoste,
     RattachementNiveauCaisse,
+    ReceptionTransfert,
     SessionCaisse,
+    TransfertCreation,
+    TransfertDetail,
     UtilisateurAssigne,
 )
 from app.modules.caisse.service import (
@@ -103,6 +125,7 @@ MESSAGE_SESSION_INTROUVABLE = "Session de caisse introuvable."
 MESSAGE_MANQUANT_SEUL = "Seul manquant=true est pris en charge pour l'instant."
 MESSAGE_POSTE_INTROUVABLE = "Poste de caisse introuvable."
 MESSAGE_AGENCE_INTROUVABLE = "Agence introuvable."
+MESSAGE_TRANSFERT_INTROUVABLE = "Transfert introuvable."
 
 
 def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
@@ -164,6 +187,13 @@ def _vers_schema_parametres(db: Session, config: CaisseParametres) -> Parametres
         seuil_tolerance=config.seuil_tolerance,
         compte_ecart_manquant=_compte_rattachement_ecart(db, config.compte_ecart_manquant_id),
         compte_ecart_excedent=_compte_rattachement_ecart(db, config.compte_ecart_excedent_id),
+        compte_transit=_compte_rattachement_ecart(db, config.compte_transit_id),
+        compte_ecart_transfert_manquant=_compte_rattachement_ecart(
+            db, config.compte_ecart_transfert_manquant_id
+        ),
+        compte_ecart_transfert_excedent=_compte_rattachement_ecart(
+            db, config.compte_ecart_transfert_excedent_id
+        ),
         is_provisional=config.is_provisional,
     )
 
@@ -374,6 +404,9 @@ def modifier_parametres_endpoint(
             seuil_tolerance=corps.seuil_tolerance,
             compte_ecart_manquant_number=corps.compte_ecart_manquant,
             compte_ecart_excedent_number=corps.compte_ecart_excedent,
+            compte_transit_number=corps.compte_transit,
+            compte_ecart_transfert_manquant_number=corps.compte_ecart_transfert_manquant,
+            compte_ecart_transfert_excedent_number=corps.compte_ecart_transfert_excedent,
             motif=corps.motif,
             par=courant.user_id,
             contexte=_contexte(request),
@@ -769,3 +802,234 @@ def revoquer_endpoint(
         ) from None
     postes.revoquer(db, courant, poste, user_id=user_id, contexte=_contexte(request))
     db.commit()
+
+
+# --- Transferts (chantier coffre-fort/caisses, sous-chantier 2, Lot 2) -----------------------
+# Mouvement de fonds entre deux niveaux ADJACENTS de caisse (coffre/principale/secondaire) d'une
+# même agence — voir caisse/transferts.py pour l'adjacence, le double regard et le contrôle à
+# l'objet côté secondaire (poste = session ouverte de l'ACTEUR). Ce routeur ne fait que déléguer
+# et traduire : aucune autorisation n'est décidée ici au-delà de la permission de route.
+
+
+def _vers_schema_transfert(db: Session, transfert: Transfert) -> TransfertDetail:
+    envoyeur = aliased(User)
+    receveur = aliased(User)
+    compte_source = aliased(Account)
+    compte_destination = aliased(Account)
+    nom_envoyeur = func.concat_ws(" ", envoyeur.first_name, envoyeur.last_name)
+    nom_receveur = func.concat_ws(" ", receveur.first_name, receveur.last_name)
+    (
+        agency_nom,
+        compte_source_number,
+        compte_destination_number,
+        envoye_par_nom,
+        receptionne_par_nom,
+    ) = db.execute(
+        select(
+            Agency.name,
+            compte_source.account_number,
+            compte_destination.account_number,
+            nom_envoyeur,
+            nom_receveur,
+        )
+        .select_from(Transfert)
+        .join(Agency, Agency.id == Transfert.agency_id)
+        .join(compte_source, compte_source.id == Transfert.compte_source_id)
+        .join(compte_destination, compte_destination.id == Transfert.compte_destination_id)
+        .join(envoyeur, envoyeur.id == Transfert.envoye_par)
+        .outerjoin(receveur, receveur.id == Transfert.receptionne_par)
+        .where(Transfert.id == transfert.id)
+    ).one()
+    return TransfertDetail(
+        id=transfert.id,
+        agency_id=transfert.agency_id,
+        agency_nom=agency_nom,
+        niveau_source=transfert.niveau_source,
+        niveau_destination=transfert.niveau_destination,
+        compte_source_number=compte_source_number,
+        compte_destination_number=compte_destination_number,
+        montant_envoye=transfert.montant_envoye,
+        montant_compte=transfert.montant_compte,
+        statut=transfert.statut,
+        envoye_par_nom=envoye_par_nom,
+        envoye_le=transfert.envoye_le,
+        # None tant que non réceptionné : concat_ws(' ', NULL, NULL) rendrait '' (pas NULL) sur
+        # la jointure externe — on tranche depuis l'objet ORM, pas depuis le résultat SQL brut.
+        receptionne_par_nom=(
+            receptionne_par_nom if transfert.receptionne_par is not None else None
+        ),
+        receptionne_le=transfert.receptionne_le,
+        motif=transfert.motif,
+    )
+
+
+def _traduire_transfert(erreur: Exception) -> HTTPException:
+    """Traduit une erreur de `transferts.py` en réponse HTTP. Un seul endroit pour cette table
+    (même patron que `tiers/router.py::_traduire`)."""
+    if isinstance(erreur, transferts_caisse.TransfertIntrouvableError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_TRANSFERT_INTROUVABLE
+        )
+    if isinstance(erreur, transferts_caisse.PosteIntrouvableError):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
+        )
+    if isinstance(
+        erreur,
+        (
+            transferts_caisse.AdjacenceInvalideError,
+            transferts_caisse.PosteRequisError,
+            transferts_caisse.PosteInattenduError,
+            transferts_caisse.CompteNonParametreError,
+            transferts_caisse.SessionCaissierRequiseError,
+            transferts_caisse.MontantInvalideError,
+            transferts_caisse.CompteTransitNonParametreError,
+            transferts_caisse.CompteEcartTransfertNonParametreError,
+            transferts_caisse.TransfertDejaReceptionneError,
+            transferts_caisse.DoubleRegardError,
+        ),
+    ):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        )
+    raise erreur
+
+
+@router.post(
+    "/caisse/transferts", response_model=TransfertDetail, status_code=status.HTTP_201_CREATED
+)
+def initier_transfert_endpoint(
+    corps: TransfertCreation,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.transfert.initier"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> TransfertDetail:
+    """Initie un transfert pour l'agence COURANTE de l'acteur. Côté « secondaire », l'acteur
+    doit être le caissier titulaire de la session ouverte sur le poste visé (contrôlé dans
+    `transferts.py`, jamais ici)."""
+    try:
+        transfert = transferts_caisse.initier_transfert(
+            db,
+            courant,
+            niveau_source=corps.niveau_source,
+            niveau_destination=corps.niveau_destination,
+            poste_id=corps.poste_id,
+            montant_envoye=corps.montant_envoye,
+            motif=corps.motif,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except Exception as erreur:
+        db.rollback()
+        raise _traduire_transfert(erreur) from None
+    return _vers_schema_transfert(db, transfert)
+
+
+@router.post("/caisse/transferts/{transfert_id}/reception", response_model=TransfertDetail)
+def receptionner_transfert_endpoint(
+    transfert_id: uuid.UUID,
+    corps: ReceptionTransfert,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.transfert.valider"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> TransfertDetail:
+    """Réceptionne un transfert « en transit » — double regard (receveur != envoyeur) et,
+    côté « secondaire », caissier titulaire de la session ouverte sur le poste visé : les deux
+    contrôlés dans `transferts.py`, jamais ici."""
+    try:
+        transfert = transferts_caisse.receptionner_transfert(
+            db,
+            courant,
+            transfert_id,
+            montant_compte=corps.montant_compte,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except Exception as erreur:
+        db.rollback()
+        raise _traduire_transfert(erreur) from None
+    return _vers_schema_transfert(db, transfert)
+
+
+@router.get("/caisse/transferts", response_model=PageTransferts)
+def lister_transferts_endpoint(
+    courant: Annotated[
+        UtilisateurCourant,
+        Depends(exige_une_de("caisse.transfert.initier", "caisse.transfert.valider")),
+    ],
+    db: Annotated[Session, Depends(get_db)],
+    statut: Annotated[
+        Literal["en_transit", "receptionne", "tous"],
+        Query(
+            description=(
+                "Par défaut : seulement les transferts en transit. « tous » pour l'historique "
+                "(besoin d'audit, Lot 2c) — un transfert réceptionné reste consultable."
+            )
+        ),
+    ] = "en_transit",
+    niveau: Annotated[
+        str | None, Query(description="Filtre sur le niveau source OU destination.")
+    ] = None,
+    agency_id: Annotated[uuid.UUID | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    taille: Annotated[int, Query(ge=1, le=TAILLE_PAGE_MAX)] = TAILLE_PAGE_DEFAUT,
+) -> PageTransferts:
+    """Transferts dans le périmètre de l'acteur (agence) — en transit par défaut (la file
+    d'attente à réceptionner). `statut=tous` lève le filtre (historique, jamais atteignable en
+    omettant le paramètre : le défaut reste « en transit », un client doit le demander
+    explicitement). `agency_id`/`niveau` s'AJOUTENT au cloisonnement, ne le remplacent jamais.
+    Pagination serveur (même discipline que les listes de sessions)."""
+    resultat = transferts_caisse.lister_transferts(
+        db,
+        courant,
+        statut=None if statut == "tous" else statut,
+        niveau=niveau,
+        agency_id=agency_id,
+        page=page,
+        taille=taille,
+    )
+    return PageTransferts(
+        lignes=[
+            TransfertDetail(
+                id=ligne.id,
+                agency_id=ligne.agency_id,
+                agency_nom=ligne.agency_nom,
+                niveau_source=ligne.niveau_source,
+                niveau_destination=ligne.niveau_destination,
+                compte_source_number=ligne.compte_source_number,
+                compte_destination_number=ligne.compte_destination_number,
+                montant_envoye=ligne.montant_envoye,
+                montant_compte=ligne.montant_compte,
+                statut=ligne.statut,
+                envoye_par_nom=ligne.envoye_par_nom,
+                envoye_le=ligne.envoye_le,
+                receptionne_par_nom=ligne.receptionne_par_nom,
+                receptionne_le=ligne.receptionne_le,
+                motif=ligne.motif,
+            )
+            for ligne in resultat.lignes
+        ],
+        total=resultat.total,
+        page=resultat.page,
+        taille=resultat.taille,
+    )
+
+
+@router.get("/caisse/transferts/{transfert_id}", response_model=TransfertDetail)
+def lire_transfert_endpoint(
+    transfert_id: uuid.UUID,
+    courant: Annotated[
+        UtilisateurCourant,
+        Depends(exige_une_de("caisse.transfert.initier", "caisse.transfert.valider")),
+    ],
+    db: Annotated[Session, Depends(get_db)],
+) -> TransfertDetail:
+    """Un transfert, dans le périmètre de l'acteur — hors périmètre ou inexistant -> 404
+    (IDOR, jamais 403)."""
+    try:
+        transfert = transferts_caisse.lire_transfert(db, courant, transfert_id)
+    except transferts_caisse.TransfertIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_TRANSFERT_INTROUVABLE
+        ) from None
+    return _vers_schema_transfert(db, transfert)

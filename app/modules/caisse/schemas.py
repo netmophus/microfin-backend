@@ -104,6 +104,12 @@ class ParametresCaisse(BaseModel):
     # LÉGITIME (paramétrage incomplet), affiché comme tel, jamais deviné.
     compte_ecart_manquant: CompteRattachementEcart | None
     compte_ecart_excedent: CompteRattachementEcart | None
+    # Sous-chantier 2 (transferts), Lot 2b : pont comptable des transferts — compte de liaison
+    # + écarts DÉDIÉS, distincts des deux ci-dessus (l'IMF peut choisir le même si elle veut).
+    # None est un état légitime tant qu'aucun transfert n'a encore été paramétré.
+    compte_transit: CompteRattachementEcart | None
+    compte_ecart_transfert_manquant: CompteRattachementEcart | None
+    compte_ecart_transfert_excedent: CompteRattachementEcart | None
     is_provisional: bool
 
 
@@ -114,6 +120,9 @@ class ModificationParametresCaisse(BaseModel):
     seuil_tolerance: int = Field(ge=0)
     compte_ecart_manquant: str | None
     compte_ecart_excedent: str | None
+    compte_transit: str | None
+    compte_ecart_transfert_manquant: str | None
+    compte_ecart_transfert_excedent: str | None
     motif: str = Field(min_length=3, max_length=500)
 
 
@@ -235,3 +244,55 @@ class UtilisateurAssigne(BaseModel):
 
 class AssignationCreation(BaseModel):
     user_id: uuid.UUID
+
+
+# --- Transferts (sous-chantier 2, Lot 1 backend / Lot 2 endpoints) ---------------------------
+
+
+class TransfertCreation(BaseModel):
+    """`poste_id` requis SEULEMENT si un des deux niveaux vaut « secondaire » — vérifié en
+    service (PosteRequisError/PosteInattenduError), pas ici : dépend de la combinaison des deux
+    autres champs, hors de portée d'une validation Pydantic simple."""
+
+    niveau_source: str
+    niveau_destination: str
+    poste_id: uuid.UUID | None = None
+    montant_envoye: int = Field(gt=0)
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ReceptionTransfert(BaseModel):
+    """Montant compté PHYSIQUEMENT à la réception — comparé au montant envoyé, jamais fourni par
+    le client : c'est le service qui calcule l'écart et route la ligne comptable."""
+
+    montant_compte: int = Field(ge=0)
+
+
+class TransfertDetail(BaseModel):
+    """Un transfert — comptes et identités résolus en clair, jamais un UUID nu. `montant_compte`/
+    `receptionne_par_nom`/`receptionne_le` restent `None` tant que `statut = 'en_transit'` (état
+    légitime, jamais une erreur). L'écart n'est pas un champ séparé : il se lit en comparant
+    `montant_compte` à `montant_envoye`, jamais stocké deux fois."""
+
+    id: uuid.UUID
+    agency_id: uuid.UUID
+    agency_nom: str
+    niveau_source: str
+    niveau_destination: str
+    compte_source_number: str
+    compte_destination_number: str
+    montant_envoye: int
+    montant_compte: int | None
+    statut: str
+    envoye_par_nom: str
+    envoye_le: datetime
+    receptionne_par_nom: str | None
+    receptionne_le: datetime | None
+    motif: str
+
+
+class PageTransferts(BaseModel):
+    lignes: list[TransfertDetail]
+    total: int
+    page: int
+    taille: int

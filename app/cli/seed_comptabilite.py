@@ -139,6 +139,31 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "caisse.ecart_excedent", "Régularisation d'écart de caisse (excédent)", "OD",
         (("CAISSE", "D"), ("ECART", "C")),
     ),
+    # Sous-chantier 2 (transferts), Lot 1 (migration 0047) : mouvement de fonds entre deux
+    # niveaux ADJACENTS de caisse (coffre/principale/secondaire), via un compte de LIAISON —
+    # option B actée (voir docstring de la migration). Journal CA : de l'argent bouge
+    # physiquement entre deux caisses, comme un dépôt.
+    #
+    # ENVOI (à l'initiation) : D TRANSIT / C SOURCE — montant envoyé, 2 lignes, montant uniforme
+    # -> posé via poser_depuis_schema() sans particularité.
+    ModeleEcriture(
+        "caisse.transfert.envoi", "Transfert de fonds — envoi", "CA",
+        (("TRANSIT", "D"), ("SOURCE", "C")),
+    ),
+    # RÉCEPTION (à la confirmation du comptage) : D DESTINATION (montant compté) /
+    # C TRANSIT (montant envoyé) — déclare la géométrie SANS ÉCART (montant identique sur les
+    # deux lignes). En cas d'écart (compté != envoyé),
+    # `caisse/transferts.py::receptionner_transfert` NE PASSE PAS par poser_depuis_schema() (qui
+    # suppose un montant unique pour toutes les lignes du modèle) : il construit lui-même une 3e
+    # ligne ECART (compte dédié, D si manquant/C si excédent) et pose la pièce via le moteur bas
+    # niveau (ecritures.creer_brouillon/valider) — mêmes garde-fous d'équilibre, juste sans le
+    # raccourci à montant uniforme. Ce modèle reste la source de vérité du journal et des DEUX
+    # premières lignes (rôle, sens), déclarée ici comme les autres, même documentée pour le cas
+    # sans écart.
+    ModeleEcriture(
+        "caisse.transfert.reception", "Transfert de fonds — réception", "CA",
+        (("DESTINATION", "D"), ("TRANSIT", "C")),
+    ),
 )
 
 _UPSERT_SCHEMA = text(

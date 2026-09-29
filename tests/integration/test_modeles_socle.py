@@ -24,6 +24,7 @@ from app.modules.caisse.models import (
     NiveauCaisse,
     Poste,
     PosteAssignation,
+    Transfert,
 )
 from app.modules.comptabilite.models import (
     Account,
@@ -183,6 +184,9 @@ TABLES_ATTENDUES = frozenset(
         # Chantier coffre-fort/caisses, sous-chantier 1 — niveaux coffre/principale par
         # agence, paramétrage vide au départ (migration 0046).
         "caisse.niveaux_caisse",
+        # Chantier coffre-fort/caisses, sous-chantier 2, Lot 1 — transferts de fonds entre
+        # niveaux adjacents (migration 0047).
+        "caisse.transferts",
     }
 )
 
@@ -246,6 +250,7 @@ MODELES = [
     PosteAssignation,
     CaisseParametres,
     NiveauCaisse,
+    Transfert,
 ]
 
 

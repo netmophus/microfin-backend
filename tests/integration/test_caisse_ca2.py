@@ -414,6 +414,8 @@ def test_parametres_modification_change_le_seuil_immediatement(db: Session) -> N
     modifier_parametres(
         db, config, seuil_tolerance=1_000,
         compte_ecart_manquant_number=None, compte_ecart_excedent_number=None,
+        compte_transit_number=None, compte_ecart_transfert_manquant_number=None,
+        compte_ecart_transfert_excedent_number=None,
         motif="Ajustement test", par=None,
     )
 

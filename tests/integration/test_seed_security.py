@@ -49,7 +49,8 @@ def test_les_donnees_declarees_sont_coherentes() -> None:
     #             + 2 reclassification : executer + read)
     # + 3 Caisse (open + close + read) + read.autres + poste.manage
     # + 1 Caisse CA2 (session.valider)
-    assert len(PERMISSIONS) == 65
+    # + 2 Caisse sous-chantier 2 (transfert.initier + transfert.valider)
+    assert len(PERMISSIONS) == 67
     assert set(MATRICE) == codes_roles
     for role_code, accordees in MATRICE.items():
         assert accordees <= codes_permissions, f"{role_code} cite une permission inconnue"
@@ -85,7 +86,7 @@ def test_le_seed_installe_les_roles_et_permissions(session: Session) -> None:
     nb_permissions = session.execute(text("SELECT count(*) FROM security.permissions")).scalar_one()
 
     assert nb_roles == 11
-    assert nb_permissions == 65
+    assert nb_permissions == 67
 
 
 def test_le_seed_est_idempotent(session: Session) -> None:
@@ -196,6 +197,8 @@ def test_une_permission_hors_matrice_est_revoquee(session: Session) -> None:
         "caisse.session.open",
         "caisse.session.close",
         "caisse.session.read",
+        "caisse.transfert.initier",
+        "caisse.transfert.valider",
     }
 
 
