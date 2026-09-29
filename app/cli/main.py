@@ -134,6 +134,10 @@ def seed_dev(
     if rapport.ignores:
         typer.echo(f"  Déjà là : {', '.join(rapport.ignores)}")
     typer.echo(f"  Mot de passe (tous) : {MOT_DE_PASSE_DEV}")
+    typer.echo(
+        f"  Niveaux caisse (coffre/principale, siège) rattachés : "
+        f"{rapport.niveaux_caisse_rattaches}"
+    )
     typer.secho("  Voir docs/comptes-dev.md pour la liste rôle par rôle.", fg=typer.colors.YELLOW)
     typer.echo("")
 

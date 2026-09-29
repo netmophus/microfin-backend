@@ -9,6 +9,7 @@ L'ouverture d'exercice est une OPÉRATION (dates propres à l'IMF), séparée du
 chevauchement — donc deux exercices ouverts ne peuvent pas se recouvrir.
 """
 
+import uuid
 from dataclasses import dataclass
 from datetime import date
 
@@ -195,6 +196,86 @@ def rattacher_caisse_agences(db: Session, numero: str = "101111") -> int:
             {"n": numero},
         ).fetchall()
     )
+
+
+# --- Chantier coffre-fort/caisses, sous-chantier 1, Bloc 3 : niveaux caisse (DEV UNIQUEMENT) --
+#
+# DISTINCT de rattacher_caisse_agences ci-dessus : celui-ci reste réseau entier, joué par
+# `seed-comptabilite` sur TOUTE installation (dev ou prod). Le seed des NIVEAUX (coffre/
+# principale), lui, n'a AUCUNE raison d'exister en production — une vraie IMF paramètre ses
+# comptes à l'écran (Bloc 2, `PATCH /caisse/agences/{id}/niveaux/{niveau}`), jamais par un
+# defaut injecté. C'est pourquoi cette fonction est appelée depuis `seed_dev.py::
+# executer_seed_dev` (refuse déjà ENV=production, cf. `app.cli.main.seed_dev`), PAS depuis
+# `seed_comptabilite()` — et pourquoi les comptes de démo ci-dessous sont créés ICI, par SQL
+# idempotent, PLUTÔT que par une ligne ajoutée « à demeure » dans
+# `docs/reference/plan_comptable_import.csv` (qui, lui, est importé sur TOUTE installation) :
+# ils ne doivent atteindre AUCUNE base réelle d'IMF.
+
+
+@dataclass(frozen=True)
+class CompteDemoNiveau:
+    numero: str
+    nom: str
+
+
+# Comptes de DÉMONSTRATION seulement (label explicite) — sous 1011, comme 101111, pour passer
+# le garde-fou `comptabilite.comptes.compte_caisse_valide` (Bloc 1). Choisis librement : aucune
+# IMF réelle n'est censée les voir, encore moins les garder.
+COMPTES_DEMO_NIVEAUX: dict[str, CompteDemoNiveau] = {
+    "principale": CompteDemoNiveau("101114", "Caisse principale (démo dev)"),
+    "coffre": CompteDemoNiveau("101115", "Coffre (démo dev)"),
+}
+
+
+def seed_niveaux_caisse_dev(db: Session, agency_id: uuid.UUID) -> int:
+    """Propose un jeu de départ (coffre + principale) pour UNE SEULE agence — celle du siège de
+    dev, jamais le réseau entier (voir l'en-tête ci-dessus).
+
+    Crée d'abord les 2 comptes de démo sous 1011 s'ils n'existent pas encore (idempotent, ON
+    CONFLICT DO NOTHING — no-op si un compte de même numéro existe déjà, y compris un compte
+    qu'une IMF aurait entre-temps créé au même numéro par coïncidence : on ne l'écrase jamais).
+
+    NE RATTACHE UN NIVEAU QUE SI AUCUNE LIGNE N'EXISTE ENCORE POUR LUI (agency_id, niveau) —
+    pas seulement si `compte_caisse_id` est NULL : une ligne existante à NULL est un choix
+    EXPLICITE (« vider » via l'écran, Bloc 2), pas un oubli à combler. Rejouable sans jamais
+    écraser un choix déjà fait. Renvoie le nombre de niveaux nouvellement rattachés.
+    """
+    for compte in COMPTES_DEMO_NIVEAUX.values():
+        db.execute(
+            text(
+                "INSERT INTO comptabilite.accounts "
+                "(account_number, name, account_class, parent_id, normal_side, is_posting, "
+                " is_system, is_provisional) "
+                "SELECT :numero, :nom, 1, id, 'D', TRUE, FALSE, TRUE "
+                "FROM comptabilite.accounts WHERE account_number = '1011' "
+                "ON CONFLICT (account_number) DO NOTHING"
+            ),
+            {"numero": compte.numero, "nom": compte.nom},
+        )
+
+    rattaches = 0
+    for niveau, compte in COMPTES_DEMO_NIVEAUX.items():
+        ligne_existe = (
+            db.execute(
+                text(
+                    "SELECT 1 FROM caisse.niveaux_caisse "
+                    "WHERE agency_id = :a AND niveau = :n"
+                ),
+                {"a": agency_id, "n": niveau},
+            ).first()
+            is not None
+        )
+        if ligne_existe:
+            continue
+        db.execute(
+            text(
+                "INSERT INTO caisse.niveaux_caisse (agency_id, niveau, compte_caisse_id) "
+                "SELECT :a, :n, id FROM comptabilite.accounts WHERE account_number = :numero"
+            ),
+            {"a": agency_id, "n": niveau, "numero": compte.numero},
+        )
+        rattaches += 1
+    return rattaches
 
 
 def seed_parametres_parts(db: Session) -> int:

@@ -15,7 +15,12 @@ CA2 (migration 0043) : `CaisseParametres` porte le seuil de tolérance sur l'éc
 même patron que `tiers.ShareParameters`. `CaisseSession.motif_ecart`/`valide_le`/`valide_par`
 tracent le motif saisi à la fermeture et la validation a posteriori du responsable — AUCUNE
 colonne de statut « à valider » : ce statut se DÉRIVE (fermée + écart significatif + non
-validée), calculé par service.py, jamais stocké."""
+validée), calculé par service.py, jamais stocké.
+
+Chantier coffre-fort/caisses, sous-chantier 1 Bloc 1 (migration 0046) : `NiveauCaisse` — le
+paramétrage PAR AGENCE des niveaux « coffre » et « principale ». PAS le niveau secondaire, qui
+reste sur `Poste.compte_caisse_id`. VIDE par défaut : aucun rattachement n'est imposé par le
+logiciel, l'IMF choisit et rattache ses propres comptes (voir docstring de la migration)."""
 
 import uuid
 from datetime import datetime
@@ -223,3 +228,34 @@ class CaisseParametres(Base):
 
     def __repr__(self) -> str:
         return f"<CaisseParametres seuil={self.seuil_tolerance}>"
+
+
+class NiveauCaisse(Base):
+    """Paramétrage caisse (sous-chantier 1, migration 0046) : pour CETTE agence, quel compte de
+    saisie joue le rôle « coffre » ou « principale ». Voir docstring de la migration pour le
+    détail — VIDE par défaut, `compte_caisse_id` nullable (paramétrage incomplet = état
+    légitime), rien n'est rattaché automatiquement."""
+
+    __tablename__ = "niveaux_caisse"
+    __table_args__: tuple[Any, ...] = (
+        sa.CheckConstraint("niveau IN ('coffre', 'principale')", name="niveau_valide"),
+        sa.UniqueConstraint("agency_id", "niveau", name="uq_caisse_niveaux_caisse_agency_niveau"),
+        sa.Index("ix_caisse_niveaux_caisse_agency", "agency_id"),
+        {"schema": "caisse"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    agency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.agencies.id"), nullable=False
+    )
+    niveau: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    compte_caisse_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.accounts.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<NiveauCaisse {self.agency_id} {self.niveau}>"

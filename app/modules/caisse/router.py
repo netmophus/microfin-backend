@@ -32,9 +32,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
+from app.modules.caisse import niveaux as niveaux_caisse
 from app.modules.caisse import postes
 from app.modules.caisse.ecart_operations import RattachementEcartManquantError
 from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste
+from app.modules.caisse.niveaux import NiveauInvalideError
 from app.modules.caisse.parametres import ParametrageManquantError
 from app.modules.caisse.parametres import lire as lire_parametres
 from app.modules.caisse.parametres import modifier as modifier_parametres
@@ -46,6 +48,7 @@ from app.modules.caisse.postes import (
 )
 from app.modules.caisse.schemas import (
     ActivationPoste,
+    AgenceNiveauxCaisse,
     AssignationCreation,
     CompteRattachementEcart,
     CreationPoste,
@@ -54,6 +57,7 @@ from app.modules.caisse.schemas import (
     LigneSessionManquante,
     ModificationParametresCaisse,
     ModificationPoste,
+    NiveauCaisseItem,
     OuvertureSession,
     PageSessionsAValider,
     PageSessionsManquantes,
@@ -61,6 +65,7 @@ from app.modules.caisse.schemas import (
     PosteAssigne,
     PosteCaisse,
     RattachementComptePoste,
+    RattachementNiveauCaisse,
     SessionCaisse,
     UtilisateurAssigne,
 )
@@ -85,7 +90,7 @@ from app.modules.caisse.service import (
     seuil_tolerance,
     valider_ecart,
 )
-from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.comptes import CompteHorsCaisseError, CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
@@ -97,6 +102,7 @@ router = APIRouter(tags=["caisse"])
 MESSAGE_SESSION_INTROUVABLE = "Session de caisse introuvable."
 MESSAGE_MANQUANT_SEUL = "Seul manquant=true est pris en charge pour l'instant."
 MESSAGE_POSTE_INTROUVABLE = "Poste de caisse introuvable."
+MESSAGE_AGENCE_INTROUVABLE = "Agence introuvable."
 
 
 def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
@@ -616,6 +622,89 @@ def rattacher_compte_poste_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
         ) from None
     return _vers_schema_poste(db, poste)
+
+
+# --- Niveaux caisse (chantier coffre-fort/caisses, sous-chantier 1, Bloc 1) ----------------
+# Coffre / principale par agence — PAS le niveau secondaire, qui reste sur les postes
+# ci-dessus. Institution entière, compta.plan.manage — même portée que les autres écrans
+# Bloc 5 (voir caisse/niveaux.py).
+
+
+def _vers_schema_niveaux(db: Session, agence: Agency) -> AgenceNiveauxCaisse:
+    niveaux = niveaux_caisse.lire_niveaux(db, agence.id)
+    return AgenceNiveauxCaisse(
+        agency_id=agence.id,
+        agency_nom=agence.name,
+        niveaux=[
+            NiveauCaisseItem(
+                niveau=niveau,
+                compte_caisse=(
+                    CompteRattachementEcart(
+                        account_number=compte.account_number, name=compte.name
+                    )
+                    if ligne is not None
+                    and ligne.compte_caisse_id is not None
+                    and (compte := db.get(Account, ligne.compte_caisse_id)) is not None
+                    else None
+                ),
+            )
+            for niveau, ligne in niveaux.items()
+        ],
+    )
+
+
+@router.get("/caisse/niveaux", response_model=list[AgenceNiveauxCaisse])
+def lister_niveaux_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[AgenceNiveauxCaisse]:
+    """Coffre/principale de CHAQUE agence active. Un niveau non paramétré (compte_caisse=None)
+    est un état LISIBLE, pas une erreur — voir caisse/niveaux.py."""
+    agences = db.execute(select(Agency).where(Agency.is_active).order_by(Agency.name)).scalars()
+    return [_vers_schema_niveaux(db, a) for a in agences]
+
+
+@router.patch(
+    "/caisse/agences/{agency_id}/niveaux/{niveau}", response_model=AgenceNiveauxCaisse
+)
+def rattacher_niveau_endpoint(
+    agency_id: uuid.UUID,
+    niveau: str,
+    corps: RattachementNiveauCaisse,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> AgenceNiveauxCaisse:
+    """Rattache (ou vide) le compte d'un niveau pour une agence. Le compte doit être un compte
+    de saisie actif ET descendre de la rubrique 1011 (comptes.compte_caisse_valide) —
+    contrainte propre à la caisse, refus clair sinon."""
+    agence = db.get(Agency, agency_id)
+    if agence is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_AGENCE_INTROUVABLE
+        )
+    try:
+        niveaux_caisse.rattacher_niveau(
+            db,
+            agency_id,
+            niveau,
+            compte_caisse_number=corps.compte_caisse,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except NiveauInvalideError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    except (CompteInvalideRattachementError, CompteHorsCaisseError) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_schema_niveaux(db, agence)
 
 
 @router.get("/caisse/postes/{poste_id}/assignations", response_model=list[UtilisateurAssigne])

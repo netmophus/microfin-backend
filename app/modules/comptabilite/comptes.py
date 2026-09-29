@@ -336,6 +336,55 @@ def compte_saisie_actif(db: Session, account_number: str) -> Account:
     return compte
 
 
+# Chantier coffre-fort/caisses, sous-chantier 1 — « Billets et monnaies émis par la BCEAO »,
+# la rubrique sous laquelle tout compte de caisse (coffre, principale, secondaire) doit se
+# trouver. Racine du sous-arbre, PAS le numéro de l'ancien compte partagé (101111) : le sens
+# reste correct même si l'IMF choisit un tout autre numéro sous 1011.
+CODE_RUBRIQUE_CAISSE = "1011"
+
+
+class CompteHorsCaisseError(CompteError):
+    """Le compte choisi n'est pas un sous-compte de la rubrique 1011 (Billets et monnaies émis
+    par la BCEAO) — seul ce sous-arbre peut servir de compte de caisse."""
+
+    def __init__(self, account_number: str) -> None:
+        super().__init__(
+            f"Le compte « {account_number} » ne peut pas servir de compte de caisse : il ne "
+            f"dépend pas de la rubrique « {CODE_RUBRIQUE_CAISSE} » (Billets et monnaies émis "
+            "par la BCEAO)."
+        )
+        self.account_number = account_number
+
+
+def _descend_de(db: Session, compte: Account, code_rubrique: str) -> bool:
+    """Remonte la hiérarchie parent_id depuis `compte` : vrai si `code_rubrique` est un
+    ancêtre (ou le compte lui-même). Sur parent_id, pas sur le numéro (préfixe textuel) : reste
+    correct même si l'IMF numérote ses comptes de caisse sans reprendre les chiffres de 1011."""
+    courant: Account | None = compte
+    vus: set[uuid.UUID] = set()
+    while courant is not None:
+        if courant.account_number == code_rubrique:
+            return True
+        if courant.id in vus:  # garde-fou anti-boucle — ne devrait jamais se produire
+            return False
+        vus.add(courant.id)
+        courant = (
+            db.get(Account, courant.parent_id) if courant.parent_id is not None else None
+        )
+    return False
+
+
+def compte_caisse_valide(db: Session, account_number: str) -> Account:
+    """Comme `compte_saisie_actif`, EN PLUS strict : exige aussi que le compte descende de la
+    rubrique 1011. Contrainte PROPRE au périmètre Caisse (coffre/principale/secondaire) —
+    jamais ajoutée à `compte_saisie_actif`, qui sert aussi épargne/parts/écart sans cette
+    règle : une fonction séparée, pas une modification du comportement partagé."""
+    compte = compte_saisie_actif(db, account_number)
+    if not _descend_de(db, compte, CODE_RUBRIQUE_CAISSE):
+        raise CompteHorsCaisseError(account_number)
+    return compte
+
+
 def lister_pour_selecteur(db: Session, q: str | None = None) -> list[Account]:
     """Comptes proposables dans un sélecteur de rattachement — TOUJOURS de saisie et actifs."""
     stmt = select(Account).where(Account.is_posting, Account.is_active)

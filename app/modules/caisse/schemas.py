@@ -199,6 +199,31 @@ class RattachementComptePoste(BaseModel):
     motif: str = Field(min_length=3, max_length=500)
 
 
+class NiveauCaisseItem(BaseModel):
+    """Le rattachement d'UN niveau (coffre ou principale) pour une agence — `compte_caisse`
+    résolu en clair, `None` si le niveau n'a encore rien de rattaché (état légitime, pas une
+    erreur : voir caisse/niveaux.py)."""
+
+    niveau: str
+    compte_caisse: CompteRattachementEcart | None
+
+
+class AgenceNiveauxCaisse(BaseModel):
+    """Les niveaux coffre/principale d'une agence (chantier coffre-fort/caisses, sous-chantier
+    1). Le niveau secondaire n'y figure pas : il se rattache par poste, pas ici."""
+
+    agency_id: uuid.UUID
+    agency_nom: str
+    niveaux: list[NiveauCaisseItem]
+
+
+class RattachementNiveauCaisse(BaseModel):
+    """Vider le rattachement (`compte_caisse=None`) est une action légitime, pas une erreur."""
+
+    compte_caisse: str | None
+    motif: str = Field(min_length=3, max_length=500)
+
+
 class UtilisateurAssigne(BaseModel):
     """Un guichetier assigné à un poste — identité en clair, jamais un UUID nu."""
 

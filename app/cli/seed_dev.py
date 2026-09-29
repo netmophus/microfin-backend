@@ -11,13 +11,19 @@ CE N'EST PAS LE SEED DE PRODUCTION. Il est distinct de `seed-security` (rôles/p
 de `creer-admin` (amorçage réel, mot de passe généré périssable). Il REFUSE de s'exécuter si
 ENV=production (sauf --force explicite) : des comptes à mot de passe public n'ont rien à faire en
 prod. Le mot de passe n'est pas un secret — c'est une commodité de dev, assumée comme telle.
-"""
+
+Chantier coffre-fort/caisses, sous-chantier 1 Bloc 3 : propose AUSSI un jeu de départ des
+niveaux coffre/principale pour le siège de dev (`seed_comptabilite.seed_niveaux_caisse_dev`) —
+volontairement câblé ICI, pas dans `seed-comptabilite` (qui tourne sur TOUTE installation,
+dev ou prod) : ce défaut n'a rien à faire en production, où une IMF paramètre ses comptes à
+l'écran (Bloc 2)."""
 
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.cli.seed_comptabilite import seed_niveaux_caisse_dev
 from app.modules.parameters.models import Agency
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
@@ -61,6 +67,9 @@ COMPTES: tuple[CompteDev, ...] = (
 class RapportSeedDev:
     crees: list[str]
     ignores: list[str]  # déjà présents (idempotence)
+    # Chantier coffre-fort/caisses, sous-chantier 1 Bloc 3 : niveaux coffre/principale
+    # nouvellement rattachés pour le siège de dev (0 si déjà paramétrés, jamais écrasés).
+    niveaux_caisse_rattaches: int = 0
 
 
 class RoleManquantError(Exception):
@@ -114,4 +123,8 @@ def executer_seed_dev(db: Session) -> RapportSeedDev:
         db.flush()
         crees.append(compte.username)
 
-    return RapportSeedDev(crees=crees, ignores=ignores)
+    # Bloc 3 : propose coffre/principale pour CE siège de dev seulement — jamais le réseau,
+    # jamais écrasé si déjà paramétré (voir seed_comptabilite.py::seed_niveaux_caisse_dev).
+    niveaux_rattaches = seed_niveaux_caisse_dev(db, agence.id)
+
+    return RapportSeedDev(crees=crees, ignores=ignores, niveaux_caisse_rattaches=niveaux_rattaches)
