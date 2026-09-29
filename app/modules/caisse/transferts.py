@@ -9,16 +9,25 @@ ADJACENCE : donnée statique (`ADJACENCES`), pas une table — même patron que 
 COMPTES ANCRÉS À L'INITIATION : `compte_source_id`/`compte_destination_id` résolus une fois, ici,
 jamais recalculés ensuite (même discipline que `CaisseSession.compte_caisse_id`).
 
-CONTRÔLE À L'OBJET CÔTÉ SECONDAIRE (résolution du point de rupture identifié avant tout code) :
-un coffre/une principale n'a ni caissier ni session — un responsable agit dessus avec la simple
-permission, cloisonnée à son agence. Un POSTE (secondaire), lui, est le compte d'une session
-CaisseSession active : `resoudre_session_active`/`calculer_solde_theorique` filtrent sur
-`journal_entries.created_by = caissier de la session`. Pour que le solde théorique du caissier
-reste exact SANS toucher à ce calcul existant (CA1, déjà testé), ce module exige que la personne
-qui envoie ou réceptionne du côté « secondaire » soit LE CAISSIER TITULAIRE de la session
-actuellement ouverte sur CE poste — jamais un responsable à sa place. `created_by` de l'écriture
-posée est donc TOUJOURS l'acteur agissant sur son propre compte, une conséquence de ce contrôle,
-pas un cas particulier ajouté après coup.
+CONTRÔLE À L'OBJET, PAR NIVEAU (sous-chantier 3, Lot A — modèle B de responsabilité) :
+`_verifier_autorise_sur_niveau` est LE point d'ancrage unique, appelé aux deux mêmes endroits
+depuis le début (`initier_transfert` pour la source, `receptionner_transfert` pour la
+destination) — jamais un troisième point, jamais dupliqué :
+  - SECONDAIRE : un POSTE est le compte d'une session CaisseSession active —
+    `resoudre_session_active`/`calculer_solde_theorique` filtrent sur
+    `journal_entries.created_by = caissier de la session`. Pour que le solde théorique du
+    caissier reste exact SANS toucher à ce calcul existant (CA1, déjà testé), ce module exige
+    que la personne qui envoie ou réceptionne soit LE CAISSIER TITULAIRE de la session
+    actuellement ouverte sur CE poste — jamais un responsable à sa place. `created_by` de
+    l'écriture posée est donc TOUJOURS l'acteur agissant sur son propre compte, une conséquence
+    de ce contrôle, pas un cas particulier ajouté après coup. INCHANGÉ depuis le Lot 1.
+  - PRINCIPALE : responsabilité NOMINATIVE — l'acteur doit être LE caissier principal DÉSIGNÉ de
+    cette agence (`caisse.caissiers_principaux`, migration 0048). Aucune désignation -> refus
+    propre (`CaissierPrincipalNonDesigneError`), jamais un caissier deviné.
+  - COFFRE : responsabilité de RÔLE, pas nominative — l'acteur doit détenir `caisse.coffre.gerer`
+    ET son agence courante doit être CELLE du transfert, une ÉGALITÉ STRICTE, délibérément PAS
+    `condition_perimetre` : un rôle réseau (direction, audit) ne doit pas pouvoir manipuler le
+    coffre d'une agence qu'il ne dirige pas — voir n'est pas agir, décision actée explicitement.
 
 DOUBLE REGARD : receveur != envoyeur, vérifié ICI (message clair) — le CHECK
 `double_regard_envoyeur_receveur` de la migration est le dernier rempart si ce contrôle était
@@ -59,6 +68,7 @@ from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_aud
 from app.modules.caisse.models import (
     CaisseParametres,
     CaisseSession,
+    CaissierPrincipal,
     NiveauCaisse,
     Poste,
     Transfert,
@@ -84,6 +94,10 @@ CODE_RECEPTION = "caisse.transfert.reception"
 NIVEAU_COFFRE = "coffre"
 NIVEAU_PRINCIPALE = "principale"
 NIVEAU_SECONDAIRE = "secondaire"
+
+# Sous-chantier 3 : responsabilité de RÔLE sur le coffre — RESPONSABLE_AGENCE, SON agence
+# uniquement (égalité stricte, voir _verifier_responsable_coffre).
+PERMISSION_COFFRE = "caisse.coffre.gerer"
 
 # Adjacence statique — donnée, pas une table (même patron que TRANSITIONS dans
 # tiers/cycle_de_vie.py). Coffre<->secondaire direct n'existe pas.
@@ -149,6 +163,36 @@ class SessionCaissierRequiseError(TransfertError):
         super().__init__(
             "seul le caissier ayant une session de caisse ouverte sur ce poste peut envoyer "
             "ou réceptionner un transfert sur son compte."
+        )
+
+
+class CaissierPrincipalNonDesigneError(TransfertError):
+    """Aucun caissier principal désigné pour cette agence — paramétrage incomplet, transitoire."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "aucun caissier principal n'est désigné pour cette agence : contactez le "
+            "responsable d'agence avant d'effectuer ce mouvement."
+        )
+
+
+class CaissierPrincipalRequisError(TransfertError):
+    """Un caissier principal est désigné, mais l'acteur n'est pas cette personne."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "seul le caissier principal désigné de cette agence peut envoyer ou réceptionner "
+            "un transfert sur la caisse principale."
+        )
+
+
+class ResponsableCoffreRequisError(TransfertError):
+    """L'acteur n'a pas la responsabilité du coffre de cette agence."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "seul le responsable de CETTE agence peut envoyer ou réceptionner un transfert sur "
+            "le coffre."
         )
 
 
@@ -245,6 +289,50 @@ def _verifier_caissier_titulaire(
         raise SessionCaissierRequiseError()
 
 
+def _verifier_caissier_principal(
+    db: Session, courant: UtilisateurCourant, agency_id: uuid.UUID
+) -> None:
+    """Côté principale : l'acteur doit être LE caissier principal DÉSIGNÉ de cette agence
+    (responsabilité nominative — voir `caissiers_principaux.py`). Aucune désignation -> refus
+    propre, jamais un caissier deviné."""
+    designation = db.execute(
+        select(CaissierPrincipal).where(CaissierPrincipal.agency_id == agency_id)
+    ).scalar_one_or_none()
+    if designation is None:
+        raise CaissierPrincipalNonDesigneError()
+    if designation.user_id != courant.user_id:
+        raise CaissierPrincipalRequisError()
+
+
+def _verifier_responsable_coffre(courant: UtilisateurCourant, agency_id: uuid.UUID) -> None:
+    """Côté coffre : responsabilité de RÔLE (RESPONSABLE_AGENCE), pas nominative — permission
+    `caisse.coffre.gerer` ET agence courante STRICTEMENT égale à celle du transfert (jamais
+    `condition_perimetre`, qui tolère `voit_tout` : un rôle réseau ne dirige pas cette agence au
+    quotidien, voir n'est pas agir — décision actée explicitement)."""
+    if PERMISSION_COFFRE not in courant.permissions or courant.agency_id != agency_id:
+        raise ResponsableCoffreRequisError()
+
+
+def _verifier_autorise_sur_niveau(
+    db: Session,
+    courant: UtilisateurCourant,
+    *,
+    agency_id: uuid.UUID,
+    niveau: str,
+    poste_id: uuid.UUID | None,
+) -> None:
+    """LE point d'ancrage unique du contrôle à l'objet par niveau — appelé aux deux mêmes
+    endroits depuis le Lot 1 (source à l'initiation, destination à la réception), jamais un
+    troisième point. Voir docstring module pour le détail des trois régimes."""
+    if niveau == NIVEAU_SECONDAIRE:
+        assert poste_id is not None
+        _verifier_caissier_titulaire(db, courant, poste_id)
+    elif niveau == NIVEAU_PRINCIPALE:
+        _verifier_caissier_principal(db, courant, agency_id)
+    elif niveau == NIVEAU_COFFRE:
+        _verifier_responsable_coffre(courant, agency_id)
+
+
 def _maintenant(db: Session) -> datetime:
     return cast(datetime, db.execute(text("SELECT NOW()")).scalar_one())
 
@@ -294,9 +382,9 @@ def initier_transfert(
         db, agency_id=agency_id, niveau=niveau_destination, poste_id=poste_destination
     )
 
-    if niveau_source == NIVEAU_SECONDAIRE:
-        assert poste_source_id is not None
-        _verifier_caissier_titulaire(db, courant, poste_source_id)
+    _verifier_autorise_sur_niveau(
+        db, courant, agency_id=agency_id, niveau=niveau_source, poste_id=poste_source_id
+    )
 
     config = _lire_parametres(db)
     if config is None or config.compte_transit_id is None:
@@ -391,9 +479,13 @@ def receptionner_transfert(
         raise TransfertDejaReceptionneError(transfert.receptionne_le)
     if courant.user_id == transfert.envoye_par:
         raise DoubleRegardError()
-    if transfert.niveau_destination == NIVEAU_SECONDAIRE:
-        assert transfert.poste_destination_id is not None
-        _verifier_caissier_titulaire(db, courant, transfert.poste_destination_id)
+    _verifier_autorise_sur_niveau(
+        db,
+        courant,
+        agency_id=transfert.agency_id,
+        niveau=transfert.niveau_destination,
+        poste_id=transfert.poste_destination_id,
+    )
 
     config = _lire_parametres(db)
     if config is None or config.compte_transit_id is None:

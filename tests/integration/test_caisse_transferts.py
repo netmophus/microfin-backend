@@ -38,6 +38,7 @@ from app.main import app
 from app.modules.caisse.models import (
     CaisseParametres,
     CaisseSession,
+    CaissierPrincipal,
     NiveauCaisse,
     Poste,
     Transfert,
@@ -45,8 +46,11 @@ from app.modules.caisse.models import (
 from app.modules.caisse.parametres import modifier as modifier_parametres
 from app.modules.caisse.transferts import (
     AdjacenceInvalideError,
+    CaissierPrincipalNonDesigneError,
+    CaissierPrincipalRequisError,
     CompteTransitNonParametreError,
     DoubleRegardError,
+    ResponsableCoffreRequisError,
     SessionCaissierRequiseError,
     initier_transfert,
     receptionner_transfert,
@@ -60,7 +64,12 @@ from app.modules.security.password import hasher_mot_de_passe
 
 pytestmark = pytest.mark.integration
 
-PERMISSIONS_TRANSFERT = frozenset({"caisse.transfert.initier", "caisse.transfert.valider"})
+# Sous-chantier 3 : caisse.coffre.gerer ajoutée — la plupart des acteurs de test agissent côté
+# coffre (responsabilité de rôle). Être caissier principal reste une IDENTITÉ (voir
+# _designer_principal), jamais une permission — pas dans ce frozenset.
+PERMISSIONS_TRANSFERT = frozenset(
+    {"caisse.transfert.initier", "caisse.transfert.valider", "caisse.coffre.gerer"}
+)
 
 
 @pytest.fixture
@@ -197,6 +206,14 @@ def _session_ouverte(db: Session, poste: Poste, caissier: User) -> CaisseSession
     return session
 
 
+def _designer_principal(db: Session, agence: Agency, caissier: User) -> None:
+    """Sous-chantier 3 : désigne LE caissier principal d'une agence — insertion directe (pas le
+    service `caissiers_principaux.designer`, testé séparément), même discipline que
+    `_session_ouverte`."""
+    db.add(CaissierPrincipal(agency_id=agence.id, user_id=caissier.id))
+    db.flush()
+
+
 def _utilisateur_avec_role(db: Session, agence: Agency, role_code: str) -> User:
     """Pour les tests HTTP (Lot 2) : un vrai rôle système, résolu par l'authentification réelle
     — contrairement à `_utilisateur`/`_courant`, qui fabriquent un `UtilisateurCourant` à la main
@@ -265,6 +282,7 @@ def test_transfert_coffre_principale_complet(
     assert _solde(db, compte_transit) - avant_transit == 100_000
     assert _solde(db, compte_coffre) - avant_coffre == -100_000
 
+    _designer_principal(db, agence, receveur)  # sous-chantier 3 : identité requise à la réception
     resultat = receptionner_transfert(
         db, _courant(receveur, agence), transfert.id, montant_compte=100_000
     )
@@ -295,6 +313,8 @@ def test_transfert_avec_ecart_manquant(
     envoyeur = _utilisateur(db, agence)  # agit côté « principale », pas de session requise
     receveur = _utilisateur(db, agence)  # caissier titulaire du poste (secondaire)
     _session_ouverte(db, poste, receveur)
+    # Sous-chantier 3 : l'envoyeur agit côté principale -> doit être LE caissier principal désigné.
+    _designer_principal(db, agence, envoyeur)
     compte_transit = _cid(db, "1141")
     compte_secondaire = _cid(db, "101112")
     compte_ecart_manquant = _cid(db, "6099")
@@ -521,6 +541,7 @@ def test_api_cycle_complet_initier_puis_receptionner(
 ) -> None:
     envoyeur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
     receveur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
+    _designer_principal(db, agence, receveur)
 
     creation = client.post(
         "/caisse/transferts",
@@ -711,6 +732,7 @@ def test_api_lister_transferts_defaut_exclut_les_receptionnes(
 ) -> None:
     envoyeur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
     receveur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
+    _designer_principal(db, agence, receveur)
     creation = client.post(
         "/caisse/transferts",
         json={
@@ -722,11 +744,12 @@ def test_api_lister_transferts_defaut_exclut_les_receptionnes(
         headers=_entete(envoyeur, agence, "RESPONSABLE_AGENCE"),
     )
     transfert_id = creation.json()["id"]
-    client.post(
+    reception = client.post(
         f"/caisse/transferts/{transfert_id}/reception",
         json={"montant_compte": 12_000},
         headers=_entete(receveur, agence, "RESPONSABLE_AGENCE"),
     )
+    assert reception.status_code == 200
 
     # Sans paramètre statut, le défaut reste « en transit » — comportement du Lot 2 inchangé.
     reponse = client.get(
@@ -746,6 +769,7 @@ def test_api_lister_transferts_statut_receptionne(
 ) -> None:
     envoyeur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
     receveur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
+    _designer_principal(db, agence, receveur)
     creation = client.post(
         "/caisse/transferts",
         json={
@@ -757,11 +781,12 @@ def test_api_lister_transferts_statut_receptionne(
         headers=_entete(envoyeur, agence, "RESPONSABLE_AGENCE"),
     )
     transfert_id = creation.json()["id"]
-    client.post(
+    reception = client.post(
         f"/caisse/transferts/{transfert_id}/reception",
         json={"montant_compte": 14_000},  # manquant de 1 000
         headers=_entete(receveur, agence, "RESPONSABLE_AGENCE"),
     )
+    assert reception.status_code == 200
 
     reponse = client.get(
         "/caisse/transferts",
@@ -792,6 +817,7 @@ def test_api_lister_transferts_statut_tous(
 ) -> None:
     envoyeur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
     receveur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
+    _designer_principal(db, agence, receveur)
     en_transit = client.post(
         "/caisse/transferts",
         json={
@@ -812,11 +838,12 @@ def test_api_lister_transferts_statut_tous(
         },
         headers=_entete(envoyeur, agence, "RESPONSABLE_AGENCE"),
     ).json()["id"]
-    client.post(
+    reception = client.post(
         f"/caisse/transferts/{receptionne}/reception",
         json={"montant_compte": 6_000},
         headers=_entete(receveur, agence, "RESPONSABLE_AGENCE"),
     )
+    assert reception.status_code == 200
 
     reponse = client.get(
         "/caisse/transferts",
@@ -850,6 +877,7 @@ def test_api_lister_transferts_historique_cloisonnement_inchange(
     envoyeur_a = _utilisateur_avec_role(db, agence_a, "RESPONSABLE_AGENCE")
     receveur_a = _utilisateur_avec_role(db, agence_a, "RESPONSABLE_AGENCE")
     intrus_b = _utilisateur_avec_role(db, agence_b, "RESPONSABLE_AGENCE")
+    _designer_principal(db, agence_a, receveur_a)
 
     transfert_id = client.post(
         "/caisse/transferts",
@@ -861,11 +889,12 @@ def test_api_lister_transferts_historique_cloisonnement_inchange(
         },
         headers=_entete(envoyeur_a, agence_a, "RESPONSABLE_AGENCE"),
     ).json()["id"]
-    client.post(
+    reception = client.post(
         f"/caisse/transferts/{transfert_id}/reception",
         json={"montant_compte": 3_000},
         headers=_entete(receveur_a, agence_a, "RESPONSABLE_AGENCE"),
     )
+    assert reception.status_code == 200
 
     reponse = client.get(
         "/caisse/transferts",
@@ -994,3 +1023,220 @@ def test_api_modifier_parametres_compte_transfert_invalide_422(
     )
 
     assert reponse.status_code == 422
+
+
+# =============================================================================================
+# --- Responsabilité des niveaux (sous-chantier 3, Lot A) — modèle B ---------------------------
+# =============================================================================================
+
+
+def test_coffre_autorise_pour_le_responsable_de_lagence(
+    db: Session, agence: Agency, poste: Poste, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    # Principale -> coffre (destination = coffre, vérifiée à la RÉCEPTION) : le responsable de
+    # CETTE agence est autorisé.
+    principal = _utilisateur(db, agence)
+    responsable = _utilisateur(db, agence)
+    _designer_principal(db, agence, principal)
+
+    transfert = initier_transfert(
+        db,
+        _courant(principal, agence),
+        niveau_source="principale",
+        niveau_destination="coffre",
+        poste_id=None,
+        montant_envoye=10_000,
+        motif="Reversement au coffre",
+    )
+    resultat = receptionner_transfert(
+        db, _courant(responsable, agence), transfert.id, montant_compte=10_000
+    )
+
+    assert resultat.statut == "receptionne"
+
+
+def test_coffre_refuse_pour_un_acteur_dune_autre_agence_meme_avec_role_reseau(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    """Le point validé explicitement (§2) : ÉGALITÉ STRICTE d'agence, PAS condition_perimetre —
+    un acteur `voit_tout=True` (rôle réseau type direction/audit) doit rester REFUSÉ sur le
+    coffre d'une agence qu'il ne dirige pas. C'est la RÉCEPTION, pas l'initiation, qui rend ce
+    cas testable : l'agence d'un transfert est TOUJOURS l'agence courante de qui l'initie
+    (`_agence_courante`), donc l'égalité est triviale à l'initiation — seule la réception permet
+    à un acteur d'une AUTRE agence d'atteindre le contrôle (condition_perimetre du chargement
+    est déjà contourné par voit_tout, exprès, pour isoler CE contrôle-ci)."""
+    autre_agence = Agency(code=f"AG-{uuid.uuid4().hex[:6]}", name="Autre agence")
+    db.add(autre_agence)
+    db.flush()
+    principal = _utilisateur(db, agence)
+    _designer_principal(db, agence, principal)
+
+    transfert = initier_transfert(
+        db,
+        _courant(principal, agence),
+        niveau_source="principale",
+        niveau_destination="coffre",
+        poste_id=None,
+        montant_envoye=10_000,
+        motif="Reversement au coffre",
+    )
+
+    intrus_reseau = _utilisateur(db, autre_agence)
+    courant_intrus = UtilisateurCourant(
+        user_id=intrus_reseau.id,
+        roles=(),
+        permissions=PERMISSIONS_TRANSFERT,  # détient bien caisse.coffre.gerer
+        primary_agency_id=autre_agence.id,
+        agency_id=autre_agence.id,  # PAS l'agence du transfert
+        voit_tout=True,  # rôle réseau : contourne condition_perimetre, PAS ce contrôle-ci
+    )
+
+    with pytest.raises(ResponsableCoffreRequisError):
+        receptionner_transfert(db, courant_intrus, transfert.id, montant_compte=10_000)
+
+
+def test_principale_autorisee_pour_le_caissier_principal_designe(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    responsable = _utilisateur(db, agence)
+    principal = _utilisateur(db, agence)
+    _designer_principal(db, agence, principal)
+
+    transfert = initier_transfert(
+        db,
+        _courant(responsable, agence),
+        niveau_source="coffre",
+        niveau_destination="principale",
+        poste_id=None,
+        montant_envoye=10_000,
+        motif="Alimentation de la principale",
+    )
+    resultat = receptionner_transfert(
+        db, _courant(principal, agence), transfert.id, montant_compte=10_000
+    )
+
+    assert resultat.statut == "receptionne"
+
+
+def test_principale_refusee_pour_un_autre_caissier(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    responsable = _utilisateur(db, agence)
+    principal_designe = _utilisateur(db, agence)
+    autre_caissier = _utilisateur(db, agence)
+    _designer_principal(db, agence, principal_designe)
+
+    transfert = initier_transfert(
+        db,
+        _courant(responsable, agence),
+        niveau_source="coffre",
+        niveau_destination="principale",
+        poste_id=None,
+        montant_envoye=10_000,
+        motif="Alimentation de la principale",
+    )
+
+    with pytest.raises(CaissierPrincipalRequisError):
+        receptionner_transfert(
+            db, _courant(autre_caissier, agence), transfert.id, montant_compte=10_000
+        )
+
+
+def test_principale_non_designee_refus_propre(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    responsable = _utilisateur(db, agence)
+    caissier = _utilisateur(db, agence)
+    # AUCUNE désignation posée — état transitoire légitime.
+
+    transfert = initier_transfert(
+        db,
+        _courant(responsable, agence),
+        niveau_source="coffre",
+        niveau_destination="principale",
+        poste_id=None,
+        montant_envoye=10_000,
+        motif="Alimentation de la principale",
+    )
+
+    with pytest.raises(CaissierPrincipalNonDesigneError):
+        receptionner_transfert(
+            db, _courant(caissier, agence), transfert.id, montant_compte=10_000
+        )
+
+
+def test_api_principale_non_designee_422(
+    client: TestClient,
+    db: Session,
+    agence: Agency,
+    niveaux: None,
+    compte_transit_pose: CaisseParametres,
+) -> None:
+    responsable = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
+    caissier = _utilisateur_avec_role(db, agence, "CAISSIER")
+
+    creation = client.post(
+        "/caisse/transferts",
+        json={
+            "niveau_source": "coffre",
+            "niveau_destination": "principale",
+            "montant_envoye": 10_000,
+            "motif": "Sans caissier principal désigné (API)",
+        },
+        headers=_entete(responsable, agence, "RESPONSABLE_AGENCE"),
+    )
+    transfert_id = creation.json()["id"]
+
+    reponse = client.post(
+        f"/caisse/transferts/{transfert_id}/reception",
+        json={"montant_compte": 10_000},
+        headers=_entete(caissier, agence, "CAISSIER"),
+    )
+
+    assert reponse.status_code == 422
+    assert "aucun caissier principal" in reponse.json()["detail"]
+
+
+def test_secondaire_non_affecte_par_la_responsabilite_des_niveaux(
+    db: Session,
+    agence: Agency,
+    poste: Poste,
+    niveaux: None,
+    compte_transit_pose: CaisseParametres,
+) -> None:
+    """Le contrôle secondaire (session titulaire) reste INCHANGÉ : le caissier de guichet n'a
+    besoin ni de `caisse.coffre.gerer` ni d'être désigné caissier principal — juste sa session
+    ouverte sur SON poste, exactement comme avant le sous-chantier 3."""
+    principal = _utilisateur(db, agence)
+    caissier_guichet = _utilisateur(db, agence)
+    _designer_principal(db, agence, principal)
+    _session_ouverte(db, poste, caissier_guichet)
+
+    # Permissions RÉELLES d'un CAISSIER (pas caisse.coffre.gerer, pas de désignation) — même
+    # frozenset que le seed accorde réellement à ce rôle.
+    permissions_caissier_reelles = frozenset(
+        {"caisse.transfert.initier", "caisse.transfert.valider"}
+    )
+    courant_guichet = UtilisateurCourant(
+        user_id=caissier_guichet.id,
+        roles=(),
+        permissions=permissions_caissier_reelles,
+        primary_agency_id=agence.id,
+        agency_id=agence.id,
+        voit_tout=False,
+    )
+
+    transfert = initier_transfert(
+        db,
+        _courant(principal, agence),
+        niveau_source="principale",
+        niveau_destination="secondaire",
+        poste_id=poste.id,
+        montant_envoye=10_000,
+        motif="Approvisionnement du guichet",
+    )
+    resultat = receptionner_transfert(
+        db, courant_guichet, transfert.id, montant_compte=10_000
+    )
+
+    assert resultat.statut == "receptionne"

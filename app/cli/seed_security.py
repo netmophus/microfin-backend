@@ -346,6 +346,26 @@ PERMISSIONS: tuple[Permission, ...] = (
         "caisse",
         "Réceptionner (valider) un transfert de fonds entre deux niveaux de caisse",
     ),
+    # Sous-chantier 3, Lot A : responsabilité des niveaux de caisse (modèle B). Le coffre est une
+    # responsabilité de RÔLE (RESPONSABLE_AGENCE, SON agence, égalité stricte — jamais
+    # perimetre.reseau : un rôle réseau ne dirige pas cette agence au quotidien, voir n'est pas
+    # agir). Vérifiée à l'objet dans transferts.py::_verifier_responsable_coffre, PAS via
+    # condition_perimetre — décision actée explicitement, divergence délibérée de la convention
+    # habituelle de ce projet.
+    Permission(
+        "caisse.coffre.gerer",
+        "caisse",
+        "Envoyer ou réceptionner un transfert de fonds sur le coffre de son agence",
+    ),
+    # Désigne (ou redésigne) LE caissier principal d'une agence — décision organisationnelle,
+    # jamais accordée à CAISSIER (on ne s'auto-désigne pas). Être LE caissier principal désigné
+    # n'exige aucune permission en soi : c'est une identité vérifiée à l'objet
+    # (caissiers_principaux.py), comme la titularité d'une session de poste.
+    Permission(
+        "caisse.principale.manage",
+        "caisse",
+        "Désigner le caissier principal de la caisse principale d'une agence",
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -484,6 +504,10 @@ MATRICE: dict[str, frozenset[str]] = {
             # d'un caissier sur un poste — voir caisse/transferts.py).
             "caisse.transfert.initier",
             "caisse.transfert.valider",
+            # Sous-chantier 3 : responsabilité du coffre (rôle, SON agence) + désignation du
+            # caissier principal — jamais accordées à CAISSIER.
+            "caisse.coffre.gerer",
+            "caisse.principale.manage",
         }
     ),
     # Lecture seule intégrale : voir qui existe, qui détient quoi, lire le journal et les

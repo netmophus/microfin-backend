@@ -296,3 +296,20 @@ class PageTransferts(BaseModel):
     total: int
     page: int
     taille: int
+
+
+# --- Caissier principal (sous-chantier 3, Lot B) ----------------------------------------------
+
+
+class CaissierPrincipalAgence(BaseModel):
+    """`caissier_principal` reste `None` tant qu'aucune désignation n'a été faite — état
+    LÉGITIME et transitoire, jamais une erreur (voir caissiers_principaux.py)."""
+
+    agency_id: uuid.UUID
+    agency_nom: str
+    caissier_principal: UtilisateurAssigne | None
+
+
+class DesignationCaissierPrincipal(BaseModel):
+    user_id: uuid.UUID
+    motif: str = Field(min_length=3, max_length=500)

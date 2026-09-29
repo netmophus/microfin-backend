@@ -28,7 +28,12 @@ migration et de `app/modules/caisse/transferts.py` pour le détail des garde-fou
 double regard, ancrage des comptes, contrôle à l'objet côté secondaire). `CaisseParametres` gagne
 trois colonnes nullables : `compte_transit_id` (compte de liaison) et
 `compte_ecart_transfert_manquant_id`/`compte_ecart_transfert_excedent_id` (dédiés, distincts de
-l'écart de caisse)."""
+l'écart de caisse).
+
+Sous-chantier 3, Lot A (migration 0048) : `CaissierPrincipal` — LE caissier désigné de la caisse
+principale d'une agence (`agency_id` UNIQUE, un seul à la fois). Le coffre n'a pas d'équivalent :
+sa responsabilité est de rôle (RESPONSABLE_AGENCE), pas nominative — voir
+`app/modules/caisse/transferts.py::_verifier_responsable_coffre`."""
 
 import uuid
 from datetime import datetime
@@ -384,3 +389,26 @@ class Transfert(Base):
 
     def __repr__(self) -> str:
         return f"<Transfert {self.niveau_source}->{self.niveau_destination} {self.statut}>"
+
+
+class CaissierPrincipal(Base):
+    """Sous-chantier 3, Lot A (migration 0048) : LE caissier désigné de la caisse principale
+    d'une agence. `agency_id` UNIQUE — un seul à la fois, jamais un rattachement N:N comme
+    `PosteAssignation`. Redésigner remplace (upsert), n'ajoute jamais une seconde ligne."""
+
+    __tablename__ = "caissiers_principaux"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("agency_id", name="uq_caisse_caissiers_principaux_agency"),
+        {"schema": "caisse"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    agency_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("parameters.agencies.id"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_USER), nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    assigned_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<CaissierPrincipal {self.agency_id} {self.user_id}>"

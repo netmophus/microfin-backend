@@ -39,6 +39,14 @@ lui-même au-delà de la permission de route. Table de traduction dédiée : `_t
   - compte de transit / d'écart de transfert non paramétré      -> 422
   - transfert déjà réceptionné                                  -> 422
   - double regard (receveur = envoyeur)                         -> 422
+  - responsabilité des niveaux (sous-chantier 3) : caissier principal non désigné, mauvais
+    caissier principal, ou responsable coffre non autorisé      -> 422
+
+CAISSIER PRINCIPAL (sous-chantier 3, Lot B) : GET/PUT/DELETE gardés par caisse.principale.manage
+(RESPONSABLE_AGENCE, SON agence — ÉGALITÉ STRICTE, même discipline que le coffre, voir
+transferts.py). Hors périmètre -> 404 (IDOR), jamais 403. Désigner exige un utilisateur habilité
+à l'agence ET détenant le rôle Caissier (refus clair sinon, table de traduction dédiée
+`_traduire_caissier_principal`).
 """
 
 import uuid
@@ -49,8 +57,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
+from app.modules.caisse import caissiers_principaux, postes
 from app.modules.caisse import niveaux as niveaux_caisse
-from app.modules.caisse import postes
 from app.modules.caisse import transferts as transferts_caisse
 from app.modules.caisse.ecart_operations import RattachementEcartManquantError
 from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, Transfert
@@ -68,8 +76,10 @@ from app.modules.caisse.schemas import (
     ActivationPoste,
     AgenceNiveauxCaisse,
     AssignationCreation,
+    CaissierPrincipalAgence,
     CompteRattachementEcart,
     CreationPoste,
+    DesignationCaissierPrincipal,
     FermetureSession,
     LigneSessionAValider,
     LigneSessionManquante,
@@ -887,6 +897,13 @@ def _traduire_transfert(erreur: Exception) -> HTTPException:
             transferts_caisse.CompteEcartTransfertNonParametreError,
             transferts_caisse.TransfertDejaReceptionneError,
             transferts_caisse.DoubleRegardError,
+            # Sous-chantier 3 : responsabilité des niveaux — les endpoints existent déjà
+            # (sous-chantier 2, Lot 2) et appellent ces mêmes fonctions ; sans cette entrée, un
+            # refus légitime (coffre/principale non autorisés) remonterait en 500, pas en 422.
+            # Nécessaire dès le Lot A, pas différé au Lot B.
+            transferts_caisse.CaissierPrincipalNonDesigneError,
+            transferts_caisse.CaissierPrincipalRequisError,
+            transferts_caisse.ResponsableCoffreRequisError,
         ),
     ):
         return HTTPException(
@@ -1033,3 +1050,113 @@ def lire_transfert_endpoint(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_TRANSFERT_INTROUVABLE
         ) from None
     return _vers_schema_transfert(db, transfert)
+
+
+# --- Caissier principal (sous-chantier 3, Lot B) ----------------------------------------------
+# Désignation de LA personne responsable de la caisse principale d'une agence — organisationnel,
+# jamais comptable (voir caissiers_principaux.py). ÉGALITÉ STRICTE d'agence (pas
+# condition_perimetre), même discipline que le coffre dans transferts.py : un rôle réseau ne
+# gère pas cette agence au quotidien.
+
+
+def _charger_agence_geree(
+    db: Session, courant: UtilisateurCourant, agency_id: uuid.UUID
+) -> Agency:
+    """L'agence, SEULEMENT si c'est celle de l'acteur — jamais condition_perimetre (qui
+    tolérerait voit_tout). Hors périmètre ou inexistante -> même 404 (IDOR, on ne distingue
+    pas « n'existe pas » de « n'est pas la vôtre »)."""
+    if courant.agency_id != agency_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_AGENCE_INTROUVABLE
+        )
+    agence = db.get(Agency, agency_id)
+    if agence is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_AGENCE_INTROUVABLE
+        )
+    return agence
+
+
+def _vers_schema_caissier_principal(db: Session, agence: Agency) -> CaissierPrincipalAgence:
+    designation = caissiers_principaux.lire(db, agence.id)
+    caissier = None
+    if designation is not None:
+        utilisateur = db.get(User, designation.user_id)
+        if utilisateur is not None:
+            caissier = _vers_schema_utilisateur(utilisateur)
+    return CaissierPrincipalAgence(
+        agency_id=agence.id, agency_nom=agence.name, caissier_principal=caissier
+    )
+
+
+def _traduire_caissier_principal(erreur: Exception) -> HTTPException:
+    """Traduit une erreur de `caissiers_principaux.py` en réponse HTTP. Un seul endroit pour
+    cette table (même patron que `_traduire_transfert`)."""
+    if isinstance(
+        erreur,
+        (
+            caissiers_principaux.UtilisateurHorsPerimetreError,
+            caissiers_principaux.RoleCaissierRequisError,
+        ),
+    ):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur))
+    raise erreur
+
+
+@router.get(
+    "/caisse/agences/{agency_id}/caissier-principal", response_model=CaissierPrincipalAgence
+)
+def lire_caissier_principal_endpoint(
+    agency_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.principale.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> CaissierPrincipalAgence:
+    """`caissier_principal` à `null` est un état LISIBLE (aucune désignation encore faite),
+    jamais une erreur."""
+    agence = _charger_agence_geree(db, courant, agency_id)
+    return _vers_schema_caissier_principal(db, agence)
+
+
+@router.put(
+    "/caisse/agences/{agency_id}/caissier-principal", response_model=CaissierPrincipalAgence
+)
+def designer_caissier_principal_endpoint(
+    agency_id: uuid.UUID,
+    corps: DesignationCaissierPrincipal,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.principale.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> CaissierPrincipalAgence:
+    """Désigne (ou remplace) LE caissier principal — MOTIF obligatoire. Refuse si l'utilisateur
+    n'est pas habilité à cette agence, ou ne détient pas le rôle Caissier (422, message clair)."""
+    agence = _charger_agence_geree(db, courant, agency_id)
+    try:
+        caissiers_principaux.designer(
+            db,
+            agency_id,
+            corps.user_id,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except Exception as erreur:
+        db.rollback()
+        raise _traduire_caissier_principal(erreur) from None
+    return _vers_schema_caissier_principal(db, agence)
+
+
+@router.delete(
+    "/caisse/agences/{agency_id}/caissier-principal", status_code=status.HTTP_204_NO_CONTENT
+)
+def retirer_caissier_principal_endpoint(
+    agency_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.principale.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Retire la désignation — idempotent : aucune désignation -> ne fait rien (même discipline
+    que `postes.revoquer`)."""
+    _charger_agence_geree(db, courant, agency_id)
+    caissiers_principaux.retirer(db, agency_id, par=courant.user_id, contexte=_contexte(request))
+    db.commit()

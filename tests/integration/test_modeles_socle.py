@@ -21,6 +21,7 @@ from app.modules.audit.models import AuditLog, EcritureAuditInterditeError
 from app.modules.caisse.models import (
     CaisseParametres,
     CaisseSession,
+    CaissierPrincipal,
     NiveauCaisse,
     Poste,
     PosteAssignation,
@@ -187,6 +188,9 @@ TABLES_ATTENDUES = frozenset(
         # Chantier coffre-fort/caisses, sous-chantier 2, Lot 1 — transferts de fonds entre
         # niveaux adjacents (migration 0047).
         "caisse.transferts",
+        # Chantier coffre-fort/caisses, sous-chantier 3, Lot A — désignation du caissier
+        # principal d'une agence (migration 0048).
+        "caisse.caissiers_principaux",
     }
 )
 
@@ -251,6 +255,7 @@ MODELES = [
     CaisseParametres,
     NiveauCaisse,
     Transfert,
+    CaissierPrincipal,
 ]
 
 
