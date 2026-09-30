@@ -152,9 +152,10 @@ class Application(Base):
         UUID, sa.ForeignKey(FK_ACCOUNT)
     )
     # CR5c (migration 0038) : classification COURANTE, posée par le job de reclassification —
-    # NULL = sain. Jamais recalculée à la lecture (contrairement à « soldé », dérivé des
-    # installments) : c'est justement ce que ce champ trace, un état qui persiste entre deux
-    # exécutions du job. `rembourser()` s'en sert pour créditer le compte courant de l'encours
+    # NULL = sain. Jamais recalculée à la lecture (contrairement à « entièrement remboursé au
+    # fil des échéances », dérivé des installments) : c'est justement ce que ce champ trace, un
+    # état qui persiste entre deux exécutions du job. `rembourser()` s'en sert pour créditer le
+    # compte courant de l'encours
     # (le palier si classé, sinon `compte_credit_id`) plutôt que toujours l'ancrage figé.
     delinquency_tier_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("credit.delinquency_tiers.id")
@@ -165,6 +166,13 @@ class Application(Base):
     compte_prelevement_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("epargne.accounts.id")
     )
+    # Remboursement anticipé (migration 0051) : statut 'solde' possible depuis 'decaisse'
+    # (CHECK étendu), posé par credit.remboursement.solder_par_anticipation(). Même patron que
+    # decided_at/by et disbursed_at/by ci-dessus. Les `installments` FUTURES ne sont JAMAIS
+    # réécrites (voir 0051) — 'solde' est donc la SEULE trace stockée de la clôture anticipée ;
+    # un crédit normalement soldé (toutes échéances 'paye') reste, lui, dérivé (rien ici).
+    solde_at: Mapped[datetime | None] = mapped_column(TS)
+    solde_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

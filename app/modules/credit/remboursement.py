@@ -70,6 +70,7 @@ from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE, CreditError
+from app.modules.credit.echeancier import calculer_interets_courus
 from app.modules.credit.models import Application, DelinquencyTier, Installment, Product, Repayment
 
 CODE_JOURNAL = "CA"  # journal de caisse — même journal que le décaissement
@@ -140,6 +141,24 @@ def compte_encours_courant(db: Session, demande: Application) -> uuid.UUID:
             "(paramétrage)"
         )
     return compte_encours
+
+
+def encours_actuel(db: Session, application_id: uuid.UUID) -> int:
+    """Capital restant dû TOTAL de ce crédit à cet instant — 0 si intégralement soldé. Tient
+    compte d'un versement partiel CR5b sur l'échéance en cours (la part capital déjà versée
+    dessus est déduite, dérivée de montant_paye/interets, aucune colonne dédiée — même
+    discipline que la ventilation de rembourser()).
+
+    Déplacée ici depuis `reclassification.py` (chantier remboursement anticipé) : CR5c
+    l'utilisait déjà, et `solder_par_anticipation()` (ci-dessous) en a besoin aussi — la placer
+    dans CE module évite un import circulaire (`reclassification.py` importe déjà
+    `compte_encours_courant`/`prochaine_echeance` d'ICI)."""
+    echeance = prochaine_echeance(db, application_id)
+    if echeance is None:
+        return 0
+    encours_avant_cette_echeance = echeance.capital_restant_du + echeance.capital
+    part_capital_deja_versee = max(0, echeance.montant_paye - echeance.interets)
+    return encours_avant_cette_echeance - part_capital_deja_versee
 
 
 def rembourser(
@@ -307,5 +326,198 @@ def rembourser(
         paid_at=maintenant,
         solde_du=echeance.total - nouveau_montant_paye,
         echeance_soldee=echeance_soldee,
+        entry_id=entry.id,
+    )
+
+
+# --- Solde anticipé (clôture totale avant terme, migration 0051) --------------------------
+#
+# TOTAL SEULEMENT (arbitrage acté) : pas de partiel anticipé, qui exigerait de réécrire
+# l'échéancier restant. Le client paie le CAPITAL RESTANT DÛ + les INTÉRÊTS COURUS jusqu'à la
+# date du solde ; les intérêts des échéances FUTURES sont ANNULÉS, AUCUNE pénalité — décision
+# du banquier, favorable au client (protection consommateur UEMOA).
+#
+# LES `Installment` FUTURES NE SONT JAMAIS TOUCHÉES (arbitrage acté, option c du cadrage) : le
+# plan reste un témoin historique intact, jamais réécrit — ça évite tout conflit avec son CHECK
+# `statut_coherent_avec_montant_paye` (migration 0037), qui exigerait `montant_paye = total`
+# pour marquer une échéance 'paye', alors qu'on paie MOINS que la somme des `total` futurs
+# (intérêts annulés). La SEULE trace du solde anticipé est `Application.status = 'solde'` +
+# `solde_at`/`solde_by` (migration 0051) + l'écriture comptable + l'audit — jamais une
+# Installment ni un Repayment (son FK `installment_id` est NOT NULL, ce règlement ne concerne
+# structurellement aucune échéance unique).
+#
+# CONSÉQUENCE GRATUITE : `rembourser()` (ci-dessus, refuse si `status != 'decaisse'`) et
+# `executer_reclassification()` (`reclassification.py`, ne sélectionne que `status == 'decaisse'`)
+# excluent DÉJÀ tout statut différent de 'decaisse' — passer à 'solde' les coupe TOUS LES DEUX
+# sans toucher une ligne de ces deux fichiers.
+#
+# ÉCHÉANCE COURANTE DÉJÀ PARTIELLEMENT PAYÉE (CR5b) : REFUSÉE en v1 (arbitrage acté) — éviter
+# d'avoir à nettre l'intérêt déjà encaissé sur ce versement partiel contre l'intérêt couru
+# recalculé, un cas plus subtil laissé à une itération future si le besoin se confirme.
+
+
+class EcheanceEnCoursDejaVerseeError(CreditError):
+    """L'échéance en cours porte déjà un versement partiel (CR5b) : solde anticipé refusé en
+    v1 — rembourser cette échéance jusqu'à solde d'abord, ou attendre la suivante."""
+
+
+@dataclass(frozen=True)
+class ResultatSoldeAnticipe:
+    demande: Application
+    capital_regle: int
+    interets_courus: int
+    montant_total: int
+    jours_courus: int
+    solde_at: datetime
+    entry_id: uuid.UUID
+
+
+def _date_reference_interets_courus(db: Session, demande: Application) -> date:
+    """Le point de départ du prorata (voir `echeancier.calculer_interets_courus`) : la
+    due_date de la dernière `Installment` au statut 'paye', ou la date de décaissement si
+    aucune échéance n'a encore été intégralement payée."""
+    derniere_payee = db.execute(
+        select(Installment.due_date)
+        .where(Installment.application_id == demande.id, Installment.status == "paye")
+        .order_by(Installment.numero.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if derniere_payee is not None:
+        return derniere_payee
+    assert demande.disbursed_at is not None
+    return demande.disbursed_at.date()
+
+
+def solder_par_anticipation(
+    db: Session,
+    demande: Application,
+    *,
+    par: uuid.UUID | None,
+    entry_date: date | None = None,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatSoldeAnticipe:
+    """Clôture TOTALE et anticipée d'un crédit décaissé : encaisse le capital restant dû +
+    les intérêts courus jusqu'à aujourd'hui (ou `entry_date`), annule les intérêts des
+    échéances futures (elles ne sont jamais réécrites, voir docstring de section ci-dessus),
+    passe la demande à 'solde'. AUCUNE pénalité.
+
+    Refuse si le crédit n'est pas décaissé ou déjà soldé (`AucuneEcheanceAReglerError`, même
+    erreur que `rembourser()` — même situation de fond : rien à régler dans cet état), si
+    l'échéance en cours porte déjà un versement partiel (`EcheanceEnCoursDejaVerseeError`, v1),
+    ou si le produit n'a pas de compte de produits d'intérêts rattaché ALORS QUE des intérêts
+    courus sont dus (`RattachementManquantError` — jamais exigé si `interets_courus == 0`,
+    même discipline que `rembourser()`).
+
+    Exige une session de caisse OUVERTE pour `par` (guichet, même gate que `rembourser()` en
+    mode volontaire) — aucun mode `compte_source_id` externe ici, ce n'est pas un prélèvement
+    automatique."""
+    if demande.status != "decaisse":
+        raise AucuneEcheanceAReglerError(
+            f"Cette demande ({demande.application_number}) n'est pas décaissée : "
+            "aucune échéance à régler."
+        )
+
+    echeance_courante = prochaine_echeance(db, demande.id)
+    if echeance_courante is None:
+        raise AucuneEcheanceAReglerError(
+            f"Ce crédit ({demande.application_number}) est déjà entièrement soldé : "
+            "aucune échéance à régler."
+        )
+    if echeance_courante.montant_paye > 0:
+        raise EcheanceEnCoursDejaVerseeError(
+            f"L'échéance #{echeance_courante.numero} de ce crédit porte déjà un versement "
+            "partiel : le solde anticipé n'est pas possible en l'état."
+        )
+
+    capital_restant = encours_actuel(db, demande.id)
+
+    jour = entry_date
+    if jour is None:
+        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+
+    produit = db.get(Product, demande.product_id)
+    assert produit is not None  # FK NOT NULL depuis demandes.creer_demande
+
+    date_reference = _date_reference_interets_courus(db, demande)
+    jours = (jour - date_reference).days
+    interets_courus = calculer_interets_courus(
+        capital_restant=capital_restant,
+        taux_bp=produit.taux_bp,
+        jours=jours,
+        base_jours=produit.base_jours,
+        regle_arrondi=produit.regle_arrondi,
+    )
+    montant_total = capital_restant + interets_courus
+
+    compte_debit = resoudre_session_active(db, par).compte_caisse_id
+    reference = f"Solde anticipé crédit {demande.application_number}"
+    lignes = [
+        LigneSaisie(account_id=compte_debit, side="D", amount=montant_total, label=reference),
+        LigneSaisie(
+            account_id=compte_encours_courant(db, demande),
+            side="C",
+            amount=capital_restant,
+            label=f"{reference} (capital)",
+        ),
+    ]
+    if interets_courus > 0:
+        if produit.compte_produits_interets_id is None:
+            raise RattachementManquantError(
+                "ce produit de crédit n'a pas de compte de produits d'intérêts rattaché "
+                "(plan comptable)"
+            )
+        lignes.append(
+            LigneSaisie(
+                account_id=produit.compte_produits_interets_id,
+                side="C",
+                amount=interets_courus,
+                label=f"{reference} (intérêts courus)",
+            )
+        )
+
+    journal_id = db.execute(select(Journal.id).where(Journal.code == CODE_JOURNAL)).scalar_one()
+    entry: JournalEntry = ecritures.creer_brouillon(
+        db,
+        journal_id=journal_id,
+        entry_date=jour,
+        description=reference,
+        lignes=lignes,
+        par=par,
+    )
+    ecritures.valider(db, entry, par, contexte=contexte)
+
+    maintenant = db.execute(text("SELECT NOW()")).scalar_one()
+    avant = {"status": demande.status}
+    demande.status = "solde"
+    demande.solde_at = maintenant
+    demande.solde_by = par
+    demande.updated_by = par
+    db.flush()
+
+    ecrire_audit(
+        db,
+        action="credit.demande.soldee_anticipee",
+        contexte=contexte,
+        acteur_id=par,
+        resource_type=RESSOURCE,
+        resource_id=demande.id,
+        agency_id=demande.agency_id,
+        old_values=avant,
+        new_values={
+            "status": "solde",
+            "capital_regle": capital_restant,
+            "interets_courus": interets_courus,
+            "montant_total": montant_total,
+            "jours_courus": jours,
+            "entry_number": entry.entry_number,
+        },
+    )
+    return ResultatSoldeAnticipe(
+        demande=demande,
+        capital_regle=capital_restant,
+        interets_courus=interets_courus,
+        montant_total=montant_total,
+        jours_courus=jours,
+        solde_at=maintenant,
         entry_id=entry.id,
     )

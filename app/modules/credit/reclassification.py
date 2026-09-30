@@ -35,10 +35,12 @@ traitement des autres.
 APERÇU (`previsualiser_reclassement`, dry-run) : on MONTRE avant de poser de vraies écritures de
 dotation/reprise sur potentiellement tout le portefeuille — même exigence que le versement
 d'intérêts épargne (E5). N'est PAS un refactor de `reclasser_un_credit` (le chemin qui écrit,
-déjà testé, n'est pas touché) : réutilise les 4 fonctions déjà PURES et publiques ci-dessous
-(`jours_de_retard`, `palier_applicable`, `encours_actuel`, `compte_encours_courant`), et
-duplique en lecture seule les 4 contrôles de rattachement de `reclasser_un_credit` — même
-patron que `epargne/interets.py` (`previsualiser_interets`/`_verser_un` sont deux implémentations
+déjà testé, n'est pas touché) : réutilise `jours_de_retard`/`palier_applicable` (ci-dessous) et
+`encours_actuel`/`compte_encours_courant` (déplacées dans `remboursement.py` — chantier
+remboursement anticipé, pour que `solder_par_anticipation()` puisse réutiliser `encours_actuel`
+sans import circulaire, remboursement.py étant déjà importé PAR ce module), et duplique en
+lecture seule les 4 contrôles de rattachement de `reclasser_un_credit` — même patron que
+`epargne/interets.py` (`previsualiser_interets`/`_verser_un` sont deux implémentations
 distinctes qui partagent les primitives de calcul, pas une fonction commune). Si les messages de
 refus de `reclasser_un_credit` changent, les mettre à jour ICI aussi (repère : « MÊME CONTRÔLE »).
 """
@@ -57,22 +59,13 @@ from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE
 from app.modules.credit.models import Application, DelinquencyEvent, DelinquencyTier
-from app.modules.credit.remboursement import compte_encours_courant, prochaine_echeance
+from app.modules.credit.remboursement import (
+    compte_encours_courant,
+    encours_actuel,
+    prochaine_echeance,
+)
 
 CODE_JOURNAL = "OD"
-
-
-def encours_actuel(db: Session, application_id: uuid.UUID) -> int:
-    """Capital restant dû TOTAL de ce crédit à cet instant — 0 si intégralement soldé. Tient
-    compte d'un versement partiel CR5b sur l'échéance en cours (la part capital déjà versée
-    dessus est déduite, dérivée de montant_paye/interets, aucune colonne dédiée — même
-    discipline que la ventilation de rembourser())."""
-    echeance = prochaine_echeance(db, application_id)
-    if echeance is None:
-        return 0
-    encours_avant_cette_echeance = echeance.capital_restant_du + echeance.capital
-    part_capital_deja_versee = max(0, echeance.montant_paye - echeance.interets)
-    return encours_avant_cette_echeance - part_capital_deja_versee
 
 
 def jours_de_retard(db: Session, application_id: uuid.UUID, *, aujourdhui: date) -> int:
