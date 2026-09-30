@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProduitEpargne(BaseModel):
@@ -190,6 +190,84 @@ class ModificationParametresInteretProduit(BaseModel):
     regle_arrondi: Literal["plus_proche", "plancher"]
     solde_minimum_remunere: int = Field(ge=0)
     motif: str = Field(min_length=3, max_length=500)
+
+
+class ProduitEpargneDetail(BaseModel):
+    """Réponse des endpoints de gestion du référentiel (création/modification/activation) —
+    le produit complet, motif exclu (déjà dans l'audit)."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+    type: str
+    currency: str
+    is_active: bool
+    is_provisional: bool
+    taux_bp: int
+    periodicite: str
+    methode_calcul_solde: str
+    base_jours: int
+    regle_arrondi: str
+    solde_minimum_remunere: int
+
+
+class CreationProduitEpargne(BaseModel):
+    """Valeurs par défaut = celles de la migration 0018/0023 (taux 0, calcul en fin de période,
+    base 360, arrondi au plus proche) : un produit tout juste créé ne verse aucun intérêt tant
+    qu'il n'a pas été réglé explicitement. Ne reçoit AUCUN compte comptable — ça reste le rôle
+    de l'écran de rattachement (`compta.plan.manage`), après création.
+
+    `decouvert_autorise` N'EST PAS un champ de ce schéma, à dessein : un SFD ne tient pas de
+    comptes courants, l'épargne n'autorise jamais de découvert. `extra="forbid"` REJETTE (422)
+    toute tentative de le faire passer dans le corps, plutôt que de l'ignorer en silence — la
+    colonne reste à sa valeur par défaut (0) en base, jamais touchée par cet endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=150)
+    type: Literal["a_vue", "terme", "programmee"] = "a_vue"
+    currency: str = Field(default="XOF", min_length=3, max_length=3)
+    taux_bp: int = Field(default=0, ge=0, le=10000)
+    periodicite: Literal["mensuelle", "trimestrielle", "annuelle"] = "annuelle"
+    methode_calcul_solde: Literal["min_periode", "moyen_quotidien", "fin_periode"] = "fin_periode"
+    base_jours: Literal[360, 365] = 360
+    regle_arrondi: Literal["plus_proche", "plancher"] = "plus_proche"
+    solde_minimum_remunere: int = Field(default=0, ge=0)
+
+
+class ModificationProduitEpargne(BaseModel):
+    """État complet soumis à chaque enregistrement (même discipline que
+    `ModificationParametresInteretProduit`) — pas un PATCH partiel. Ne touche pas aux comptes
+    rattachés ni à `is_active`/`is_provisional`. `decouvert_autorise` absent à dessein — voir
+    `CreationProduitEpargne`, même garde-fou `extra="forbid"`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=150)
+    type: Literal["a_vue", "terme", "programmee"]
+    taux_bp: int = Field(ge=0, le=10000)
+    periodicite: Literal["mensuelle", "trimestrielle", "annuelle"]
+    methode_calcul_solde: Literal["min_periode", "moyen_quotidien", "fin_periode"]
+    base_jours: Literal[360, 365]
+    regle_arrondi: Literal["plus_proche", "plancher"]
+    solde_minimum_remunere: int = Field(ge=0)
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ActivationProduit(BaseModel):
+    """Motif obligatoire dans les deux sens (activer comme désactiver) — même discipline que
+    `caisse.poste`."""
+
+    is_active: bool
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ValidationProduitResultat(ProduitEpargneDetail):
+    """`avertissements` : messages non bloquants (ex. compte client non rattaché) — structurés
+    pour être exploités par le frontend, jamais noyés dans un texte libre."""
+
+    avertissements: list[str] = Field(default_factory=list)
 
 
 class LigneRapprochement(BaseModel):

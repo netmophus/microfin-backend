@@ -16,13 +16,15 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
-from app.modules.epargne import consultation, parametres_interet, rattachements
+from app.modules.epargne import consultation, gestion_produits, parametres_interet, rattachements
+from app.modules.epargne.gestion_produits import CodeDejaUtiliseError, ComptesNonRattachesError
 from app.modules.epargne.guichet import (
     CompteClotureError,
     CompteIntrouvableError,
@@ -37,24 +39,29 @@ from app.modules.epargne.interets import previsualiser_interets, verser_interets
 from app.modules.epargne.models import Product
 from app.modules.epargne.rapprochement import rapprocher_tout
 from app.modules.epargne.schemas import (
+    ActivationProduit,
     ApercuInterets,
     ApercuLigneInterets,
     CompteEpargneDetail,
     CompteEpargneResume,
     CompteGuichet,
     CompteRattachement,
+    CreationProduitEpargne,
     DemandeInterets,
     LigneRapprochement,
     ModificationParametresInteretProduit,
+    ModificationProduitEpargne,
     ModificationRattachementsProduit,
     MouvementResume,
     OperationGuichet,
     OuvertureCompte,
     ParametresInteretProduit,
     ProduitEpargne,
+    ProduitEpargneDetail,
     RapportInterets,
     RattachementsProduit,
     ResultatOperation,
+    ValidationProduitResultat,
 )
 from app.modules.epargne.service import (
     CompteDebiteurError,
@@ -91,6 +98,24 @@ def _vers_rattachements(db: Session, produit: Product) -> RattachementsProduit:
         compte_epargne=_compte_rattachement(db, produit.compte_epargne_id),
         compte_epargne_client=_compte_rattachement(db, produit.compte_epargne_client_id),
         compte_charge_interet=_compte_rattachement(db, produit.compte_charge_interet_id),
+    )
+
+
+def _vers_detail(produit: Product) -> ProduitEpargneDetail:
+    return ProduitEpargneDetail(
+        id=produit.id,
+        code=produit.code,
+        name=produit.name,
+        type=produit.type,
+        currency=produit.currency,
+        is_active=produit.is_active,
+        is_provisional=produit.is_provisional,
+        taux_bp=produit.taux_bp,
+        periodicite=produit.periodicite,
+        methode_calcul_solde=produit.methode_calcul_solde,
+        base_jours=produit.base_jours,
+        regle_arrondi=produit.regle_arrondi,
+        solde_minimum_remunere=produit.solde_minimum_remunere,
     )
 
 
@@ -225,6 +250,157 @@ def modifier_parametres_interet_endpoint(
     )
     db.commit()
     return _vers_parametres_interet(produit)
+
+
+# --- Référentiel produit : consultation, création, modification métier, validation,
+# activation ---------------------------------------------------------------------------------
+# Gardé epargne.product.read (lecture) / epargne.product.manage (écriture) — ADMIN_FONCTIONNEL —
+# jamais compta.plan.manage, réservé aux 2 blocs ci-dessus (comptes, taux). Voir
+# gestion_produits.py.
+
+
+@router.get("/epargne/produits/referentiel", response_model=list[ProduitEpargneDetail])
+def lister_produits_gestion_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.product.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ProduitEpargneDetail]:
+    """TOUS les produits (actifs, inactifs, provisoires) — écran de gestion du référentiel.
+    Distinct de `GET /epargne/produits` (choix à l'ouverture, actifs seulement, schéma léger)."""
+    return [_vers_detail(p) for p in consultation.lister_produits_gestion(db)]
+
+
+@router.post(
+    "/epargne/produits", response_model=ProduitEpargneDetail, status_code=status.HTTP_201_CREATED
+)
+def creer_produit_endpoint(
+    corps: CreationProduitEpargne,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProduitEpargneDetail:
+    """Crée un produit PROVISOIRE, sans compte comptable rattaché (voir l'écran de
+    rattachement, permission distincte, après création)."""
+    try:
+        produit = gestion_produits.creer_produit(
+            db,
+            code=corps.code,
+            name=corps.name,
+            type=corps.type,
+            currency=corps.currency,
+            taux_bp=corps.taux_bp,
+            periodicite=corps.periodicite,
+            methode_calcul_solde=corps.methode_calcul_solde,
+            base_jours=corps.base_jours,
+            regle_arrondi=corps.regle_arrondi,
+            solde_minimum_remunere=corps.solde_minimum_remunere,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CodeDejaUtiliseError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    except IntegrityError as erreur:
+        # Filet de sécurité : deux créations concurrentes du même code (rare).
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Le code « {corps.code} » est déjà utilisé par un autre produit d'épargne.",
+        ) from erreur
+    return _vers_detail(produit)
+
+
+@router.patch("/epargne/produits/{produit_id}", response_model=ProduitEpargneDetail)
+def modifier_produit_endpoint(
+    produit_id: uuid.UUID,
+    corps: ModificationProduitEpargne,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProduitEpargneDetail:
+    """Champs MÉTIER uniquement (nom, type, paramètres d'intérêt) — ne touche jamais aux comptes
+    rattachés (endpoint dédié, `compta.plan.manage`)."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    gestion_produits.modifier_produit(
+        db,
+        produit,
+        name=corps.name,
+        type=corps.type,
+        taux_bp=corps.taux_bp,
+        periodicite=corps.periodicite,
+        methode_calcul_solde=corps.methode_calcul_solde,
+        base_jours=corps.base_jours,
+        regle_arrondi=corps.regle_arrondi,
+        solde_minimum_remunere=corps.solde_minimum_remunere,
+        motif=corps.motif,
+        par=courant.user_id,
+        contexte=_contexte(request),
+    )
+    db.commit()
+    return _vers_detail(produit)
+
+
+@router.post("/epargne/produits/{produit_id}/valider", response_model=ValidationProduitResultat)
+def valider_produit_endpoint(
+    produit_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ValidationProduitResultat:
+    """Lève le provisoire — REFUSE (422) si le compte membre n'est pas rattaché. Le compte
+    client manquant ne bloque pas mais revient en avertissement explicite (bascule vers le
+    compte membre, à ne jamais laisser silencieuse)."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    try:
+        avertissements = gestion_produits.valider_produit(
+            db, produit, par=courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except ComptesNonRattachesError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return ValidationProduitResultat(
+        **_vers_detail(produit).model_dump(), avertissements=avertissements
+    )
+
+
+@router.patch("/epargne/produits/{produit_id}/activation", response_model=ProduitEpargneDetail)
+def changer_activation_produit_endpoint(
+    produit_id: uuid.UUID,
+    corps: ActivationProduit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProduitEpargneDetail:
+    """(Dés)active le produit dans le catalogue proposé à l'ouverture (jamais de suppression).
+    Motif obligatoire dans les deux sens."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    gestion_produits.changer_activation_produit(
+        db,
+        produit,
+        is_active=corps.is_active,
+        motif=corps.motif,
+        par=courant.user_id,
+        contexte=_contexte(request),
+    )
+    db.commit()
+    return _vers_detail(produit)
 
 
 @router.get("/tiers/{tier_id}/comptes-epargne", response_model=list[CompteEpargneResume])

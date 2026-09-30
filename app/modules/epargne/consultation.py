@@ -41,6 +41,14 @@ def lister_produits(db: Session) -> Sequence[Product]:
     ).scalars().all()
 
 
+def lister_produits_gestion(db: Session) -> Sequence[Product]:
+    """TOUS les produits (actifs, inactifs, provisoires) — écran de gestion du référentiel
+    (epargne.product.manage), seul endroit où un produit désactivé reste visible (pour le
+    réactiver). Distincte de `lister_produits` ci-dessus, qui reste filtrée aux actifs pour le
+    choix à l'ouverture d'un compte."""
+    return db.execute(select(Product).order_by(Product.code)).scalars().all()
+
+
 def lister_comptes_du_membre(
     db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID
 ) -> Sequence[Any]:

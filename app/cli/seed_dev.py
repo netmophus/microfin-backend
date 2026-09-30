@@ -42,8 +42,7 @@ class CompteDev:
     first_name: str
 
 
-# Un compte par rôle qui porte des permissions métier réelles. L'admin fonctionnel vient de
-# `creer-admin` (amorçage), il n'est pas répété ici.
+# Un compte par rôle qui porte des permissions métier réelles.
 COMPTES: tuple[CompteDev, ...] = (
     CompteDev("resp", "RESPONSABLE_AGENCE", "DEV-RESP", "Responsable", "Agence"),
     CompteDev("lbcft", "RESPONSABLE_LBC_FT", "DEV-LBC", "Responsable", "LBC-FT"),
@@ -56,6 +55,10 @@ COMPTES: tuple[CompteDev, ...] = (
     # Distinct du compte réel "anne" (GG001) — celui-ci est un compte de DEV, mot de passe
     # public connu, jamais à confondre avec un compte de production.
     CompteDev("direction", "DIRECTION_GENERALE", "DEV-DIR", "Direction", "Generale"),
+    # Distinct de "sysadmin" (ADMIN_FONCTIONNEL, compte RÉEL d'amorçage créé par `creer-admin`,
+    # mot de passe généré périssable) : celui-ci est un compte de DEV, mot de passe public connu
+    # (chantier gestion des produits d'épargne — epargne.product.manage).
+    CompteDev("adminfonc", "ADMIN_FONCTIONNEL", "DEV-ADF", "Admin", "Fonctionnel"),
     # Distinct de "sysadmin" (ADMIN_FONCTIONNEL) : ADMIN_TECHNIQUE définit les rôles
     # (roles.permissions.read/create/update/delete) sans pouvoir les attribuer — ce compte
     # isole ce rôle pour le tester séparément de sysadmin.

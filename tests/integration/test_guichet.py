@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import engine
@@ -164,12 +165,20 @@ def test_le_plancher_solde_minimum_est_respecte(db: Session) -> None:
     assert retirer(db, c.caissier, c.compte.id, 500).nouveau_solde == 500
 
 
-def test_le_decouvert_autorise_laisse_passer_sous_zero(db: Session) -> None:
-    c = _cadre(db, "P3", decouvert=2000)
-    deposer(db, c.caissier, c.compte.id, 1000)
-    # disponible = 1000 - 0 + 2000 = 3000
-    resultat = retirer(db, c.caissier, c.compte.id, 2500)
-    assert resultat.nouveau_solde == -1500
+def test_la_base_refuse_un_decouvert_non_nul_sur_epargne(db: Session) -> None:
+    """Conformité SFD (migration 0049) : un SFD ne tient pas de comptes courants, l'épargne
+    n'autorise JAMAIS de découvert. `decouvert_autorise` reste en base (mécanique du calcul du
+    disponible dans guichet.py/prelevement.py, inchangée) mais un CHECK verrouille sa valeur à
+    0 — y compris pour une insertion directe en base qui contournerait l'API (extra="forbid"
+    sur les schémas de création/modification, voir schemas.py). Avant 0049, cette même
+    insertion réussissait (voir historique du test) ; c'était précisément le trou à combler."""
+    produit = Product(
+        code="PDEC", name="Épargne (tentative découvert)", type="a_vue",
+        compte_epargne_id=_compte_id(db, "251111"), decouvert_autorise=2000,
+    )
+    db.add(produit)
+    with pytest.raises(IntegrityError, match="decouvert_nul_epargne"):
+        db.flush()
 
 
 # --- Gel, fermeture, montant, cloisonnement -----------------------------------------
