@@ -13,9 +13,12 @@ validation STRICT, décidé pour le crédit) :
      revérifié À LA CRÉATION ET À LA MODIFICATION, pas seulement à la validation : un produit ne
      doit jamais exister, même provisoire, avec un taux qui dépasse son propre plafond déclaré.
 
-Distinct de `rattachements.py`/`parametres_interet.py` (à venir, lot 3b, comptes/taux) : ici,
-l'EXISTENCE et l'ÉTAT du produit. Gardé `credit.product.manage` (ADMIN_FONCTIONNEL) au routeur
-— jamais `compta.plan.manage`. Même patron d'écriture que le reste du projet : pré-contrôle
+Distinct de `rattachements.py` (comptes comptables, `compta.plan.manage`, lot 3b) : ici,
+l'EXISTENCE, l'ÉTAT et les PARAMÈTRES MÉTIER (taux, amortissement) du produit — gardé
+`credit.product.manage` (ADMIN_FONCTIONNEL) au routeur, jamais `compta.plan.manage`. Pas
+d'endpoint `parametres-interet` côté crédit, à dessein : un seul chemin d'écriture par champ,
+symétrique de l'épargne (dont l'équivalent a été retiré pour la même raison — voir
+`epargne/gestion_produits.py`). Même patron d'écriture que le reste du projet : pré-contrôle
 métier (erreur typée, jamais un IntegrityError brut en 500), `db.flush()`, audit, pas de
 `db.commit()` ici (fait par le routeur).
 """

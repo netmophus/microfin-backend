@@ -160,38 +160,6 @@ class ModificationRattachementsProduit(BaseModel):
     motif: str = Field(min_length=3, max_length=500)
 
 
-# --- Paramètres d'intérêt (E5, écran de paramétrage) --------------------------------------
-#
-# `periodicite` existe en base (migration 0023) mais n'est exploitée nulle part dans
-# `interets.py` : le versement se déclenche manuellement par période choisie à l'écran, pas
-# asservi à ce champ. periodicite non exposée — champ non branché au moteur de versement, à
-# exposer quand il le sera. L'endpoint ne la touche donc pas ; elle garde sa valeur actuelle.
-
-
-class ParametresInteretProduit(BaseModel):
-    id: uuid.UUID
-    code: str
-    name: str
-    taux_bp: int
-    methode_calcul_solde: str
-    base_jours: int
-    regle_arrondi: str
-    solde_minimum_remunere: int
-    is_provisional: bool
-
-
-class ModificationParametresInteretProduit(BaseModel):
-    """Bornes reproduisant les CHECK constraints SQL de la migration 0023 (Literal) ou le
-    précédent `credit.taux_provision_bp` (points de base, 0-10000)."""
-
-    taux_bp: int = Field(ge=0, le=10000)
-    methode_calcul_solde: Literal["min_periode", "moyen_quotidien", "fin_periode"]
-    base_jours: Literal[360, 365]
-    regle_arrondi: Literal["plus_proche", "plancher"]
-    solde_minimum_remunere: int = Field(ge=0)
-    motif: str = Field(min_length=3, max_length=500)
-
-
 class ProduitEpargneDetail(BaseModel):
     """Réponse des endpoints de gestion du référentiel (création/modification/activation) —
     le produit complet, motif exclu (déjà dans l'audit)."""
@@ -237,10 +205,12 @@ class CreationProduitEpargne(BaseModel):
 
 
 class ModificationProduitEpargne(BaseModel):
-    """État complet soumis à chaque enregistrement (même discipline que
-    `ModificationParametresInteretProduit`) — pas un PATCH partiel. Ne touche pas aux comptes
-    rattachés ni à `is_active`/`is_provisional`. `decouvert_autorise` absent à dessein — voir
-    `CreationProduitEpargne`, même garde-fou `extra="forbid"`."""
+    """État complet soumis à chaque enregistrement — pas un PATCH partiel. SEUL chemin
+    d'écriture du taux et des paramètres de calcul (l'ancien endpoint comptable
+    `parametres-interet` a été retiré : deux chemins sur les mêmes champs créaient une
+    collision silencieuse). Ne touche pas aux comptes rattachés ni à `is_active`/
+    `is_provisional`. `decouvert_autorise` absent à dessein — voir `CreationProduitEpargne`,
+    même garde-fou `extra="forbid"`."""
 
     model_config = ConfigDict(extra="forbid")
 

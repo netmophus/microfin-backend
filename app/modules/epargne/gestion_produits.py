@@ -1,12 +1,14 @@
 """Cycle de vie du référentiel produit d'épargne : création, modification métier, validation
 (lever le provisoire), activation/désactivation du catalogue.
 
-Distinct de `rattachements.py` (comptes comptables) et `parametres_interet.py` (taux/calcul) :
-ici, l'EXISTENCE et l'ÉTAT du produit lui-même. Gardé `epargne.product.manage`
-(ADMIN_FONCTIONNEL) au routeur — jamais `compta.plan.manage`, qui reste réservé au comptable
-pour les 2 fichiers ci-dessus. Même patron d'écriture que le reste du module : pré-contrôle
-métier (erreur typée, jamais un IntegrityError brut en 500), `db.flush()`, audit, pas de
-`db.commit()` ici (fait par le routeur).
+Distinct de `rattachements.py` (comptes comptables, `compta.plan.manage`, comptable) : ici,
+l'EXISTENCE, l'ÉTAT et les PARAMÈTRES MÉTIER (taux, calcul) du produit — gardé
+`epargne.product.manage` (ADMIN_FONCTIONNEL). Le taux ne vit QUE là : l'ancien endpoint
+`parametres-interet` (comptable, `compta.plan.manage`) a été retiré — deux chemins d'écriture
+sur les mêmes champs, sans coordination, créaient une collision silencieuse (dernier écrivain
+gagne). Même symétrie côté crédit (`credit/gestion_produits.py`). Même patron d'écriture que
+le reste du module : pré-contrôle métier (erreur typée, jamais un IntegrityError brut en 500),
+`db.flush()`, audit, pas de `db.commit()` ici (fait par le routeur).
 """
 
 import uuid
