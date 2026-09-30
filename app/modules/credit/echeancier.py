@@ -154,3 +154,36 @@ def _generer_echeance_constante(
             )
         )
     return echeances
+
+
+def calculer_interets_courus(
+    *, capital_restant: int, taux_bp: int, jours: int, base_jours: int, regle_arrondi: str
+) -> int:
+    """Intérêts courus PONCTUELS entre deux dates (solde anticipé/clôture d'un crédit) —
+    DISTINCT du moteur périodique ci-dessus. Formule jumelle de
+    `epargne.interets.calculer_montant` : intérêt = capital_restant x (taux_bp / 10000) x
+    (jours / base_jours), arrondi selon `regle_arrondi`. Pure, sans base de données — reçoit
+    `jours` déjà calculé, ne le calcule pas elle-même.
+
+    CONVENTION `jours` (calculée par l'appelant, lot B) : (date_solde - date_reference).days,
+    où date_reference = due_date de la dernière `Installment` au statut 'paye', ou
+    `Application.disbursed_at` (converti en date) si aucune échéance n'a encore été payée.
+
+    `base_jours` : PAS le champ gelé du produit pour l'échéancier périodique (voir docstring de
+    module ci-dessus) — ici, c'est la base du prorata ponctuel, toujours 360 en pratique (norme
+    UEMOA), mais un PARAMÈTRE EXPLICITE plutôt qu'une valeur en dur, pour rester testable et ne
+    pas dupliquer la convention deux fois dans le code.
+
+    Retourne 0 si `capital_restant`, `taux_bp`, `jours` ou `base_jours` est <= 0 — aucun cas ne
+    lève : un solde anticipé à taux nul, à jours nuls ou à capital nul est un 0 légitime, pas
+    une erreur (même discipline que `epargne.interets.calculer_montant`)."""
+    if capital_restant <= 0 or taux_bp <= 0 or jours <= 0 or base_jours <= 0:
+        return 0
+    brut = (
+        Decimal(capital_restant)
+        * Decimal(taux_bp)
+        / Decimal(10000)
+        * Decimal(jours)
+        / Decimal(base_jours)
+    )
+    return max(_arrondir(brut, regle_arrondi), 0)
