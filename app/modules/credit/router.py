@@ -8,7 +8,8 @@ credit.remboursement.create pour l'encaissement lui-même, déjà présent.
 CR5a : paramétrage des paliers de souffrance (Bloc 5) — lecture/écriture de la CONFIGURATION
 seule. CR5c : reclassification automatique — un seul endpoint d'exécution, réservé DIRECTION,
 voir reclassification.py pour le détail (encours + provisionnement, comptes dynamiques par
-palier).
+palier). Remboursement anticipé (lot C) : aperçu PUR + action de solde total avant terme, voir
+remboursement.py (section « Solde anticipé »).
 
 Permissions (exige) : lecture produits -> credit.product.read ; créer une demande ->
 credit.demande.create ; lire -> credit.demande.read ; décider -> credit.demande.decide ;
@@ -29,6 +30,7 @@ TABLE DES ERREURS (un seul endroit) :
   - compte choisi invalide (mode 'epargne' : hors tiers, hors périmètre, fermé) -> 422
   - aucune session de caisse ouverte (décaissement mode 'caisse', remboursement au guichet) -> 422
   - aucune échéance à régler (non décaissé ou déjà soldé), montant incorrect -> 422
+  - échéance en cours déjà partiellement payée (solde anticipé, v1) -> 422
   - code/seuil de palier déjà utilisé par un autre palier, compte de rattachement invalide -> 422
   - palier encore classé sur un dossier (suppression refusée) -> 422
 """
@@ -44,7 +46,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
-from app.modules.comptabilite.models import Account
+from app.modules.comptabilite.models import Account, JournalEntry
 from app.modules.credit import consultation, delinquency_parametres, gestion_produits, rattachements
 from app.modules.credit.decaissement import (
     DemandeNonApprouveeError,
@@ -80,13 +82,17 @@ from app.modules.credit.reclassification import (
 )
 from app.modules.credit.remboursement import (
     AucuneEcheanceAReglerError,
+    EcheanceEnCoursDejaVerseeError,
     MontantIncorrectError,
+    apercevoir_solde_anticipe,
     prochaine_echeance,
     rembourser,
+    solder_par_anticipation,
 )
 from app.modules.credit.schemas import (
     ActivationProduit,
     ApercuReclassement,
+    ApercuSoldeAnticipe,
     CompteRattachement,
     CompteRattachementPalier,
     CreationDemande,
@@ -112,6 +118,7 @@ from app.modules.credit.schemas import (
     RattachementsProduitCredit,
     Remboursement,
     RemboursementRecu,
+    SoldeAnticipeRecu,
     SuppressionPalier,
     ValidationProduitResultat,
 )
@@ -818,6 +825,104 @@ def rembourser_endpoint(
         solde_du=resultat.solde_du,
         echeance_soldee=resultat.echeance_soldee,
         echeances_restantes=restantes,
+    )
+
+
+@router.get(
+    "/credit/demandes/{application_id}/solde-anticipe/apercu",
+    response_model=ApercuSoldeAnticipe,
+)
+def apercu_solde_anticipe_endpoint(
+    application_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.remboursement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuSoldeAnticipe:
+    """Aperçu PUR (calcul, rien n'est écrit en base) de ce que coûterait un solde anticipé
+    AUJOURD'HUI : capital restant + intérêts courus depuis la dernière échéance payée (ou le
+    décaissement). Renvoie une erreur claire (422, pas 500) si le crédit n'est pas dans un état
+    soldable — pour que l'écran puisse expliquer pourquoi AVANT que l'utilisateur ne clique.
+
+    Même permission que l'action (`credit.remboursement.create`, cohérent avec le patron de
+    l'aperçu échéancier) : consulter ce montant, c'est déjà consulter ce que l'action produirait.
+    Les montants sont garantis identiques à ceux réellement posés par l'action SI elle est
+    déclenchée le même jour (voir remboursement.apercevoir_solde_anticipe) — un jour plus tard,
+    l'action recalcule à SA propre date."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    demande = db.get(Application, application_id)
+    assert demande is not None
+
+    try:
+        detail = apercevoir_solde_anticipe(db, demande)
+    except (
+        AucuneEcheanceAReglerError,
+        EcheanceEnCoursDejaVerseeError,
+        RattachementManquantError,
+    ) as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+
+    return ApercuSoldeAnticipe(
+        capital_restant=detail.capital_restant,
+        interets_courus=detail.interets_courus,
+        montant_total=detail.montant_total,
+        date_reference_interets=detail.date_reference,
+        jours_courus=detail.jours_courus,
+    )
+
+
+@router.post(
+    "/credit/demandes/{application_id}/solde-anticipe", response_model=SoldeAnticipeRecu
+)
+def solder_par_anticipation_endpoint(
+    application_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.remboursement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> SoldeAnticipeRecu:
+    """Clôture TOTALE et anticipée d'un crédit décaissé : capital restant + intérêts courus
+    jusqu'à aujourd'hui, AUCUNE pénalité, les échéances futures ne sont jamais réécrites (le
+    plan reste un témoin historique). Recalcule TOUJOURS côté serveur — aucun montant transmis
+    par le client n'est accepté ni utilisé (voir remboursement.solder_par_anticipation). Même
+    gate de session de caisse OUVERTE que le remboursement normal au guichet (Bloc C6)."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    demande = db.get(Application, application_id)
+    assert demande is not None
+
+    try:
+        resultat = solder_par_anticipation(
+            db, demande, par=courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except (
+        AucuneEcheanceAReglerError,
+        EcheanceEnCoursDejaVerseeError,
+        RattachementManquantError,
+        AucuneSessionOuverteError,
+    ) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+
+    entry = db.get(JournalEntry, resultat.entry_id)
+    assert entry is not None and entry.entry_number is not None
+    return SoldeAnticipeRecu(
+        capital_regle=resultat.capital_regle,
+        interets_courus=resultat.interets_courus,
+        montant_total=resultat.montant_total,
+        jours_courus=resultat.jours_courus,
+        solde_at=resultat.solde_at,
+        status=resultat.demande.status,
+        entry_number=entry.entry_number,
     )
 
 

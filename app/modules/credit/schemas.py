@@ -265,6 +265,30 @@ class RemboursementRecu(BaseModel):
     echeances_restantes: int
 
 
+class ApercuSoldeAnticipe(BaseModel):
+    """Ce que coûterait un solde anticipé à la date `date_reference_intérêts` — calcul PUR, rien
+    n'est encore posé. Mêmes montants que `SoldeAnticipeRecu` SI l'action est déclenchée le même
+    jour (voir remboursement.apercevoir_solde_anticipe)."""
+
+    capital_restant: int
+    interets_courus: int
+    montant_total: int
+    date_reference_interets: date
+    jours_courus: int
+
+
+class SoldeAnticipeRecu(BaseModel):
+    """La clôture anticipée réellement posée — statut basculé, pièce comptable créée."""
+
+    capital_regle: int
+    interets_courus: int
+    montant_total: int
+    jours_courus: int
+    solde_at: datetime
+    status: str
+    entry_number: str
+
+
 class CompteRattachementPalier(BaseModel):
     """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
 

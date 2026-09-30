@@ -1,5 +1,5 @@
 """Crédit — solde anticipé (clôture totale avant terme), chantier remboursement anticipé
-lot B.
+lots B (service) et C (endpoints HTTP).
 
   - capital restant dû (encours_actuel) + intérêts courus (prorata jour-par-jour) exactement,
     AUCUNE pénalité, intérêts des échéances futures ANNULÉS ;
@@ -7,12 +7,15 @@ lot B.
   - date de référence du prorata : due_date de la dernière échéance 'paye', sinon decaissement ;
   - conséquence GRATUITE : status='solde' coupe rembourser() ET la reclassification, sans
     modifier ces deux fichiers ;
-  - refuse si non décaissé, déjà soldé, ou échéance courante déjà partiellement payée (v1).
+  - refuse si non décaissé, déjà soldé, ou échéance courante déjà partiellement payée (v1) ;
+  - lot C (API) : GET .../solde-anticipe/apercu (calcul PUR) + POST .../solde-anticipe
+    (action) — mêmes montants le même jour (calcul PARTAGÉ, voir remboursement.py), le serveur
+    recalcule TOUJOURS, aucun montant client accepté.
 """
 
 import uuid
 from collections.abc import Generator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -36,7 +39,7 @@ from app.modules.credit.remboursement import (
 )
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.security.jwt import creer_access_token
+from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 
@@ -393,3 +396,163 @@ def test_reclassification_ignore_un_credit_solde(db: Session) -> None:
     assert demande.application_number not in [
         ligne.application_number for ligne in rapport.lignes
     ]
+
+
+# --- API (lot C) : aperçu PUR + action, cohérence des montants ----------------------------
+
+
+def _aujourdhui(db: Session) -> date:
+    return db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+
+
+def _ouvrir_session_caisse_acteur(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+    """Poste + session de caisse OUVERTE pour l'acteur HTTP de `entete` (Bloc C6) : l'action
+    de solde anticipé au guichet exige SA session, pas celle du caissier de mise en situation
+    du décaissement (`_ouvrir_session_caisse`, poste "01") — poste DISTINCT (code "02"), même
+    patron que test_credit_remboursement_api.py."""
+    jeton = entete["Authorization"].removeprefix("Bearer ")
+    user_id = decoder_access_token(jeton).sub
+    poste = Poste(
+        agency_id=agence.id, code="02", libelle="Caisse solde anticipé",
+        compte_caisse_id=agence.compte_caisse_id,
+    )
+    db.add(poste)
+    db.flush()
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
+    db.flush()
+    ouvrir_session(
+        db,
+        UtilisateurCourant(
+            user_id=user_id, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        poste_id=poste.id, fonds_initial=0,
+    )
+
+
+def test_api_apercu_renvoie_les_bons_montants(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "CSA10")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    date_decaissement = _aujourdhui(db) - timedelta(days=15)
+    demande = _credit_decaisse(db, agence, tier_id, produit, entry_date=date_decaissement)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    reponse = client.get(
+        f"/credit/demandes/{demande.id}/solde-anticipe/apercu", headers=caissier
+    )
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["capital_restant"] == 300_000
+    assert corps["interets_courus"] == 1_500
+    assert corps["montant_total"] == 301_500
+    assert corps["jours_courus"] == 15
+    assert corps["date_reference_interets"] == date_decaissement.isoformat()
+
+
+def test_api_apercu_erreur_claire_si_non_decaissable(client: TestClient, db: Session) -> None:
+    """Non décaissé -> 422 avec un message métier, jamais un 500 : l'écran doit pouvoir
+    expliquer pourquoi le solde anticipé est impossible AVANT que l'utilisateur ne clique."""
+    agence = _agence(db, "CSA11")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = creer_demande(
+        db, tier_id=tier_id, agency_id=agence.id, product_id=produit.id,
+        montant_demande=300_000, duree_echeances=3, objet="Test", par=None,
+    )
+    db.commit()
+    caissier = _entete(db, agence, "CAISSIER")
+
+    reponse = client.get(
+        f"/credit/demandes/{demande.id}/solde-anticipe/apercu", headers=caissier
+    )
+
+    assert reponse.status_code == 422
+    assert "décaissée" in reponse.json()["detail"]
+
+
+def test_api_post_solde_bascule_statut_et_pose_la_piece(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "CSA12")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _credit_decaisse(
+        db, agence, tier_id, produit, entry_date=_aujourdhui(db) - timedelta(days=15)
+    )
+    caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
+
+    reponse = client.post(f"/credit/demandes/{demande.id}/solde-anticipe", headers=caissier)
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["capital_regle"] == 300_000
+    assert corps["interets_courus"] == 1_500
+    assert corps["montant_total"] == 301_500
+    assert corps["status"] == "solde"
+    assert corps["entry_number"]
+    assert demande.status == "solde"
+
+
+def test_api_post_refuse_si_non_decaissable(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "CSA13")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = creer_demande(
+        db, tier_id=tier_id, agency_id=agence.id, product_id=produit.id,
+        montant_demande=300_000, duree_echeances=3, objet="Test", par=None,
+    )
+    db.commit()
+    caissier = _entete(db, agence, "CAISSIER")
+
+    reponse = client.post(f"/credit/demandes/{demande.id}/solde-anticipe", headers=caissier)
+
+    assert reponse.status_code == 422
+
+
+def test_api_403_sans_credit_remboursement_create(client: TestClient, db: Session) -> None:
+    """CHARGE_PRET a credit.demande.read mais pas credit.remboursement.create — même gate que
+    l'action normale (voir test_credit_recherche_remboursement_api.py)."""
+    agence = _agence(db, "CSA14")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _credit_decaisse(db, agence, tier_id, produit)
+    charge = _entete(db, agence, "CHARGE_PRET")
+
+    reponse_apercu = client.get(
+        f"/credit/demandes/{demande.id}/solde-anticipe/apercu", headers=charge
+    )
+    reponse_action = client.post(
+        f"/credit/demandes/{demande.id}/solde-anticipe", headers=charge
+    )
+
+    assert reponse_apercu.status_code == 403
+    assert reponse_action.status_code == 403
+
+
+def test_api_montant_pose_egale_montant_apercu_le_meme_jour(
+    client: TestClient, db: Session
+) -> None:
+    """La garantie centrale du lot C : même calcul PARTAGÉ (remboursement._detail_solde_anticipe),
+    donc mêmes montants pour l'aperçu et l'action quand les deux tombent le même jour."""
+    agence = _agence(db, "CSA15")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _credit_decaisse(
+        db, agence, tier_id, produit, entry_date=_aujourdhui(db) - timedelta(days=7)
+    )
+    caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse_acteur(db, agence, caissier)
+
+    apercu = client.get(
+        f"/credit/demandes/{demande.id}/solde-anticipe/apercu", headers=caissier
+    ).json()
+    action = client.post(
+        f"/credit/demandes/{demande.id}/solde-anticipe", headers=caissier
+    ).json()
+
+    assert action["montant_total"] == apercu["montant_total"]
+    assert action["capital_regle"] == apercu["capital_restant"]
+    assert action["interets_courus"] == apercu["interets_courus"]

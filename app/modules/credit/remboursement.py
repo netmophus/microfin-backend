@@ -372,6 +372,21 @@ class ResultatSoldeAnticipe:
     entry_id: uuid.UUID
 
 
+@dataclass(frozen=True)
+class DetailSoldeAnticipe:
+    """Ce qu'un solde anticipé COÛTERAIT à `jour` — capital restant + intérêts courus, AUCUNE
+    écriture. Renvoyée par `apercevoir_solde_anticipe` (lecture) ET calculée en interne par
+    `solder_par_anticipation` (action) via `_detail_solde_anticipe` : UNE SEULE fonction de
+    calcul, jamais deux implémentations qui pourraient diverger — même discipline que
+    `_dater_echeances`, partagée par `decaisser()`/`generer_apercu()` dans decaissement.py."""
+
+    capital_restant: int
+    interets_courus: int
+    montant_total: int
+    date_reference: date
+    jours_courus: int
+
+
 def _date_reference_interets_courus(db: Session, demande: Application) -> date:
     """Le point de départ du prorata (voir `echeancier.calculer_interets_courus`) : la
     due_date de la dernière `Installment` au statut 'paye', ou la date de décaissement si
@@ -388,29 +403,18 @@ def _date_reference_interets_courus(db: Session, demande: Application) -> date:
     return demande.disbursed_at.date()
 
 
-def solder_par_anticipation(
-    db: Session,
-    demande: Application,
-    *,
-    par: uuid.UUID | None,
-    entry_date: date | None = None,
-    contexte: ContexteRequete = CONTEXTE_VIDE,
-) -> ResultatSoldeAnticipe:
-    """Clôture TOTALE et anticipée d'un crédit décaissé : encaisse le capital restant dû +
-    les intérêts courus jusqu'à aujourd'hui (ou `entry_date`), annule les intérêts des
-    échéances futures (elles ne sont jamais réécrites, voir docstring de section ci-dessus),
-    passe la demande à 'solde'. AUCUNE pénalité.
+def _detail_solde_anticipe(db: Session, demande: Application, *, jour: date) -> DetailSoldeAnticipe:
+    """Calcule PUREMENT (aucune écriture, aucune mutation) ce que coûterait un solde anticipé
+    à `jour` — PARTAGÉE par `apercevoir_solde_anticipe` et `solder_par_anticipation` (voir
+    `DetailSoldeAnticipe`).
 
     Refuse si le crédit n'est pas décaissé ou déjà soldé (`AucuneEcheanceAReglerError`, même
     erreur que `rembourser()` — même situation de fond : rien à régler dans cet état), si
     l'échéance en cours porte déjà un versement partiel (`EcheanceEnCoursDejaVerseeError`, v1),
     ou si le produit n'a pas de compte de produits d'intérêts rattaché ALORS QUE des intérêts
     courus sont dus (`RattachementManquantError` — jamais exigé si `interets_courus == 0`,
-    même discipline que `rembourser()`).
-
-    Exige une session de caisse OUVERTE pour `par` (guichet, même gate que `rembourser()` en
-    mode volontaire) — aucun mode `compte_source_id` externe ici, ce n'est pas un prélèvement
-    automatique."""
+    même discipline que `rembourser()`) — revérifié ICI, pas seulement à l'action, pour qu'un
+    aperçu ne promette jamais un solde qui échouerait ensuite pour cette seule raison."""
     if demande.status != "decaisse":
         raise AucuneEcheanceAReglerError(
             f"Cette demande ({demande.application_number}) n'est pas décaissée : "
@@ -431,10 +435,6 @@ def solder_par_anticipation(
 
     capital_restant = encours_actuel(db, demande.id)
 
-    jour = entry_date
-    if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
-
     produit = db.get(Product, demande.product_id)
     assert produit is not None  # FK NOT NULL depuis demandes.creer_demande
 
@@ -447,7 +447,67 @@ def solder_par_anticipation(
         base_jours=produit.base_jours,
         regle_arrondi=produit.regle_arrondi,
     )
-    montant_total = capital_restant + interets_courus
+    if interets_courus > 0 and produit.compte_produits_interets_id is None:
+        raise RattachementManquantError(
+            "ce produit de crédit n'a pas de compte de produits d'intérêts rattaché "
+            "(plan comptable)"
+        )
+
+    return DetailSoldeAnticipe(
+        capital_restant=capital_restant,
+        interets_courus=interets_courus,
+        montant_total=capital_restant + interets_courus,
+        date_reference=date_reference,
+        jours_courus=jours,
+    )
+
+
+def apercevoir_solde_anticipe(
+    db: Session, demande: Application, *, jour: date | None = None
+) -> DetailSoldeAnticipe:
+    """Aperçu PUR (CR6b-like) de ce que coûterait un solde anticipé AUJOURD'HUI (ou `jour`) —
+    RIEN N'EST ÉCRIT EN BASE, aucun db.add, aucun db.commit. Les montants sont GARANTIS
+    identiques à ceux réellement posés par `solder_par_anticipation` LE MÊME JOUR (même
+    fonction de calcul, voir `_detail_solde_anticipe`) — un jour différent recalcule sur SA
+    propre date, l'aperçu n'est qu'indicatif au-delà d'aujourd'hui."""
+    if jour is None:
+        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    return _detail_solde_anticipe(db, demande, jour=jour)
+
+
+def solder_par_anticipation(
+    db: Session,
+    demande: Application,
+    *,
+    par: uuid.UUID | None,
+    entry_date: date | None = None,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatSoldeAnticipe:
+    """Clôture TOTALE et anticipée d'un crédit décaissé : encaisse le capital restant dû +
+    les intérêts courus jusqu'à aujourd'hui (ou `entry_date`), annule les intérêts des
+    échéances futures (elles ne sont jamais réécrites, voir docstring de section ci-dessus),
+    passe la demande à 'solde'. AUCUNE pénalité.
+
+    Ne fait JAMAIS confiance à un montant transmis par l'appelant : `_detail_solde_anticipe`
+    est TOUJOURS recalculé ici, à SA date (`entry_date` ou aujourd'hui) — voir
+    `apercevoir_solde_anticipe` pour l'aperçu en lecture seule, mêmes refus, mêmes montants
+    SI la date est identique.
+
+    Exige une session de caisse OUVERTE pour `par` (guichet, même gate que `rembourser()` en
+    mode volontaire) — aucun mode `compte_source_id` externe ici, ce n'est pas un prélèvement
+    automatique."""
+    jour = entry_date
+    if jour is None:
+        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+
+    detail = _detail_solde_anticipe(db, demande, jour=jour)
+    capital_restant = detail.capital_restant
+    interets_courus = detail.interets_courus
+    montant_total = detail.montant_total
+    jours = detail.jours_courus
+
+    produit = db.get(Product, demande.product_id)
+    assert produit is not None  # déjà chargé et vérifié par _detail_solde_anticipe
 
     compte_debit = resoudre_session_active(db, par).compte_caisse_id
     reference = f"Solde anticipé crédit {demande.application_number}"
@@ -461,11 +521,8 @@ def solder_par_anticipation(
         ),
     ]
     if interets_courus > 0:
-        if produit.compte_produits_interets_id is None:
-            raise RattachementManquantError(
-                "ce produit de crédit n'a pas de compte de produits d'intérêts rattaché "
-                "(plan comptable)"
-            )
+        # Rattachement déjà vérifié par _detail_solde_anticipe (RattachementManquantError sinon).
+        assert produit.compte_produits_interets_id is not None
         lignes.append(
             LigneSaisie(
                 account_id=produit.compte_produits_interets_id,
