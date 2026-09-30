@@ -13,6 +13,11 @@ validation STRICT, décidé pour le crédit) :
      revérifié À LA CRÉATION ET À LA MODIFICATION, pas seulement à la validation : un produit ne
      doit jamais exister, même provisoire, avec un taux qui dépasse son propre plafond déclaré.
 
+`base_jours` n'est PAS un paramètre de `creer_produit`/`modifier_produit` : GELÉ à son défaut
+base (360), jamais lu ni écrit ici — le calcul de l'échéancier est périodique, pas jour-par-jour
+(voir `echeancier.py`). Champ non symétrique de l'épargne : `epargne.products.base_jours`, lui,
+est un paramètre VIVANT du calcul d'intérêts (`epargne/interets.py`).
+
 Distinct de `rattachements.py` (comptes comptables, `compta.plan.manage`, lot 3b) : ici,
 l'EXISTENCE, l'ÉTAT et les PARAMÈTRES MÉTIER (taux, amortissement) du produit — gardé
 `credit.product.manage` (ADMIN_FONCTIONNEL) au routeur, jamais `compta.plan.manage`. Pas
@@ -63,7 +68,6 @@ def creer_produit(
     taux_bp: int,
     periodicite: str,
     methode_amortissement: str,
-    base_jours: int,
     regle_arrondi: str,
     taux_usure_max_bp: int | None,
     par: uuid.UUID | None,
@@ -75,6 +79,9 @@ def creer_produit(
     Pré-contrôle d'unicité (message clair) ; l'UNIQUE en base reste le filet de sécurité pour
     une course rare entre deux créations simultanées du même code (l'appelant traduit
     l'IntegrityError, même patron que `epargne.gestion_produits.creer_produit`).
+
+    `base_jours` n'est PAS un paramètre ici : GELÉ à son défaut base (360, migration 0031),
+    jamais écrit par le code applicatif — voir `echeancier.py` pour pourquoi.
     """
     _verifier_taux_usure(taux_bp, taux_usure_max_bp)
 
@@ -90,7 +97,6 @@ def creer_produit(
         taux_bp=taux_bp,
         periodicite=periodicite,
         methode_amortissement=methode_amortissement,
-        base_jours=base_jours,
         regle_arrondi=regle_arrondi,
         taux_usure_max_bp=taux_usure_max_bp,
         created_by=par,
@@ -119,7 +125,6 @@ def modifier_produit(
     taux_bp: int,
     periodicite: str,
     methode_amortissement: str,
-    base_jours: int,
     regle_arrondi: str,
     taux_usure_max_bp: int | None,
     motif: str,
@@ -127,7 +132,8 @@ def modifier_produit(
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Product:
     """Remplace les champs MÉTIER (nom, taux, amortissement) — jamais les comptes rattachés.
-    MOTIF obligatoire, tracé avant/après. Ne touche pas à `is_active`/`is_provisional`."""
+    MOTIF obligatoire, tracé avant/après. Ne touche pas à `is_active`/`is_provisional` ni à
+    `base_jours` (GELÉ, jamais modifiable — voir `creer_produit`)."""
     _verifier_taux_usure(taux_bp, taux_usure_max_bp)
 
     avant = {
@@ -135,7 +141,6 @@ def modifier_produit(
         "taux_bp": produit.taux_bp,
         "periodicite": produit.periodicite,
         "methode_amortissement": produit.methode_amortissement,
-        "base_jours": produit.base_jours,
         "regle_arrondi": produit.regle_arrondi,
         "taux_usure_max_bp": produit.taux_usure_max_bp,
     }
@@ -144,7 +149,6 @@ def modifier_produit(
     produit.taux_bp = taux_bp
     produit.periodicite = periodicite
     produit.methode_amortissement = methode_amortissement
-    produit.base_jours = base_jours
     produit.regle_arrondi = regle_arrondi
     produit.taux_usure_max_bp = taux_usure_max_bp
     produit.updated_by = par
@@ -163,7 +167,6 @@ def modifier_produit(
             "taux_bp": taux_bp,
             "periodicite": periodicite,
             "methode_amortissement": methode_amortissement,
-            "base_jours": base_jours,
             "regle_arrondi": regle_arrondi,
             "taux_usure_max_bp": taux_usure_max_bp,
             "motif": motif,

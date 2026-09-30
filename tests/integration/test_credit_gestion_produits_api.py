@@ -151,6 +151,8 @@ def test_creation_reussie_produit_provisoire(client: TestClient, db: Session) ->
     assert corps["is_active"] is True
     assert corps["taux_bp"] == 0
     assert corps["taux_usure_max_bp"] is None
+    # base_jours GELÉ : jamais saisi, reste à son défaut base (voir echeancier.py).
+    assert corps["base_jours"] == 360
 
     ligne = db.execute(
         text(
@@ -172,6 +174,23 @@ def test_creation_code_duplique_422(client: TestClient, db: Session) -> None:
 
     assert reponse.status_code == 422
     assert "DUPC01" in reponse.json()["detail"]
+
+
+def test_creation_base_jours_rejetee_422(client: TestClient, db: Session) -> None:
+    """base_jours GELÉ (echeancier.py : calcul périodique, pas jour-par-jour) : n'existe plus
+    dans le schéma de création — extra="forbid" REJETTE, plutôt que d'ignorer en silence."""
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+
+    reponse = client.post(
+        "/credit/produits",
+        json={**CORPS_CREATION, "base_jours": 365},
+        headers=admin,
+    )
+
+    assert reponse.status_code == 422
+    assert db.execute(
+        text("SELECT count(*) FROM credit.products WHERE code = :c"), {"c": "TSTC01"}
+    ).scalar_one() == 0
 
 
 def test_creation_sans_permission_403(client: TestClient, db: Session) -> None:
@@ -215,12 +234,13 @@ def test_creation_taux_usure_null_aucun_plafond(client: TestClient, db: Session)
 
 
 def _corps_modification(**overrides: object) -> dict[str, object]:
+    # base_jours ABSENT à dessein (GELÉ, extra="forbid" le rejetterait) — voir
+    # test_modification_base_jours_rejetee_422 pour la vérification dédiée.
     base = {
         "name": "Nouveau nom",
         "taux_bp": 500,
         "periodicite": "trimestrielle",
         "methode_amortissement": "capital_constant",
-        "base_jours": 365,
         "regle_arrondi": "plancher",
         "taux_usure_max_bp": None,
         "motif": "Refonte du produit",
@@ -280,6 +300,24 @@ def test_modification_produit_introuvable_404(client: TestClient, db: Session) -
         f"/credit/produits/{uuid.uuid4()}", json=_corps_modification(), headers=admin
     )
     assert reponse.status_code == 404
+
+
+def test_modification_base_jours_rejetee_422(client: TestClient, db: Session) -> None:
+    """Même garde-fou qu'à la création : base_jours n'existe plus dans le schéma de
+    modification — extra="forbid" rejette, la valeur en base reste inchangée (360)."""
+    produit = _produit(db, code="MODC-BJ")
+    db.commit()  # checkpoint : le rollback de la requête (422) ne doit pas emporter ce setup.
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+
+    reponse = client.patch(
+        f"/credit/produits/{produit.id}",
+        json=_corps_modification(base_jours=365),
+        headers=admin,
+    )
+
+    assert reponse.status_code == 422
+    db.refresh(produit)
+    assert produit.base_jours == 360
 
 
 def test_modification_taux_depasse_usure_422(client: TestClient, db: Session) -> None:

@@ -5,6 +5,13 @@ Les deux méthodes d'amortissement (capital constant / échéance constante) son
 La convention de taux périodique est proportionnelle simple (taux_bp / 10000 / nb
 périodes par an), pas actuarielle — un choix mécanique assumé, pas une donnée
 réglementaire.
+
+`credit.products.base_jours` (360/365) N'EST PAS un paramètre de ce module, VOLONTAIREMENT :
+le calcul est PÉRIODIQUE (taux annuel / nb de périodes de la périodicité choisie), base 360
+implicite — norme UEMOA — pas un calcul jour-par-jour. La colonne reste GELÉE à 360 en base
+(non modifiable via l'API, voir `gestion_produits.py`) : ne PAS la brancher ici sans une
+décision métier explicite qui changerait le mode de calcul lui-même. Différent de l'épargne,
+où `base_jours` est un paramètre VIVANT du calcul d'intérêts (`epargne/interets.py`).
 """
 
 from __future__ import annotations

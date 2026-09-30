@@ -69,6 +69,10 @@ class Product(Base):
     methode_amortissement: Mapped[str] = mapped_column(
         sa.String(20), nullable=False, server_default=sa.text("'echeance_constante'")
     )
+    # GELÉ : la colonne existe (défaut 360) mais n'est plus modifiable via l'API/l'écran
+    # (gestion_produits.py) et n'est lue nulle part par le calcul (voir echeancier.py) — le
+    # mode de calcul est périodique, pas jour-par-jour. Pas de migration destructive : la
+    # valeur reste en base, seule l'écriture applicative est neutralisée.
     base_jours: Mapped[int] = mapped_column(
         sa.Integer, nullable=False, server_default=sa.text("360")
     )

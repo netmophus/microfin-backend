@@ -106,8 +106,11 @@ plancher) — tous `is_provisional = TRUE`, tous à 0/valeur neutre par défaut.
   valeur de communication réglementaire au client n'est produite par ce moteur.
 - **`base_jours`** : posé sur le produit dès CR0 mais **non exploité** par `generer_echeancier()`
   — l'échéancier CR2 raisonne en périodes fixes (mensualité/trimestre/année), pas en jours
-  exacts. Réservé à un raffinement futur (calcul au jour près), signalé plutôt qu'exploité en
-  silence.
+  exacts. **Décision (chantier gestion des produits, suite) : GELÉ définitivement**, pas un
+  raffinement différé — le mode de calcul reste périodique, base 360 implicite (norme UEMOA).
+  Retiré des schémas de création/modification (`schemas.py`), la colonne reste en base à sa
+  valeur par défaut (360), jamais modifiable via l'API ni l'écran. Non symétrique de l'épargne,
+  où `base_jours` est un paramètre vivant du calcul d'intérêts (`epargne/interets.py`).
 - **Garde-fou de cohérence** (`EcheancierImpossibleError`, `app/modules/credit/echeancier.py`) :
   un montant trop faible pour la durée demandée, combiné à un arrondi défavorable, peut rendre
   l'échéancier économiquement impossible (capital restant dû qui deviendrait négatif). Le moteur

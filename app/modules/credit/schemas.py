@@ -39,9 +39,13 @@ class ProduitCreditDetail(BaseModel):
 
 class CreationProduitCredit(BaseModel):
     """Valeurs par défaut = celles de la migration 0031 (taux 0, mensuelle, échéance
-    constante, base 360, arrondi au plus proche) : un produit tout juste créé ne porte aucun
-    intérêt tant qu'il n'a pas été réglé explicitement. Ne reçoit AUCUN compte comptable — ça
-    reste le rôle de l'écran de rattachement (`compta.plan.manage`), après création."""
+    constante, arrondi au plus proche) : un produit tout juste créé ne porte aucun intérêt
+    tant qu'il n'a pas été réglé explicitement. Ne reçoit AUCUN compte comptable — ça reste le
+    rôle de l'écran de rattachement (`compta.plan.manage`), après création.
+
+    `base_jours` N'EST PAS un champ de ce schéma, à dessein — voir `ModificationProduitCredit`.
+    La colonne reste à 360 (défaut base, migration 0031) en base, jamais touchée par cet
+    endpoint."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -50,14 +54,19 @@ class CreationProduitCredit(BaseModel):
     taux_bp: int = Field(default=0, ge=0, le=10000)
     periodicite: Literal["mensuelle", "trimestrielle", "annuelle"] = "mensuelle"
     methode_amortissement: Literal["capital_constant", "echeance_constante"] = "echeance_constante"
-    base_jours: Literal[360, 365] = 360
     regle_arrondi: Literal["plus_proche", "plancher"] = "plus_proche"
     taux_usure_max_bp: int | None = Field(default=None, ge=0, le=10000)
 
 
 class ModificationProduitCredit(BaseModel):
     """État complet soumis à chaque enregistrement — pas un PATCH partiel. Ne touche pas aux
-    comptes rattachés ni à `is_active`/`is_provisional`."""
+    comptes rattachés ni à `is_active`/`is_provisional`.
+
+    `base_jours` N'EST PAS un champ de ce schéma, à dessein : le calcul de l'échéancier est
+    PÉRIODIQUE (taux annuel / nb périodes), base 360 implicite (norme UEMOA) — `base_jours` n'a
+    aucun sens dans ce mode et reste GELÉ à sa valeur par défaut en base (voir
+    `echeancier.py` et `CreationProduitCredit`). `extra="forbid"` REJETTE (422) toute tentative
+    de le faire passer dans le corps, plutôt que de l'ignorer en silence."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -65,7 +74,6 @@ class ModificationProduitCredit(BaseModel):
     taux_bp: int = Field(ge=0, le=10000)
     periodicite: Literal["mensuelle", "trimestrielle", "annuelle"]
     methode_amortissement: Literal["capital_constant", "echeance_constante"]
-    base_jours: Literal[360, 365]
     regle_arrondi: Literal["plus_proche", "plancher"]
     taux_usure_max_bp: int | None = Field(default=None, ge=0, le=10000)
     motif: str = Field(min_length=3, max_length=500)
