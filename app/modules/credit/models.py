@@ -75,6 +75,10 @@ class Product(Base):
     regle_arrondi: Mapped[str] = mapped_column(
         sa.String(20), nullable=False, server_default=sa.text("'plus_proche'")
     )
+    # Plafond de taux paramétrable (migration 0050) — NULL = pas de plafond (défaut). Valeur
+    # MÉTIER (taux d'usure BCEAO par produit), jamais codée en dur ; revérifiée par le service
+    # à la création/modification, pas un CHECK SQL (voir gestion_produits.py).
+    taux_usure_max_bp: Mapped[int | None] = mapped_column(sa.Integer)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

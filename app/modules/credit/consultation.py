@@ -4,9 +4,9 @@ Le chargé de prêt / comité ne voit que les dossiers de SON agence (condition_
 agency_id). Un dossier hors périmètre est INTROUVABLE (le router rend 404), jamais 403.
 """
 
+import uuid
 from collections.abc import Sequence
 from typing import Any
-import uuid
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -35,6 +35,14 @@ def _nom_tier() -> Any:
 def lister_produits(db: Session) -> Sequence[Product]:
     """Les produits de crédit actifs (pour le choix à la demande)."""
     return db.execute(select(Product).where(Product.is_active).order_by(Product.code)).scalars().all()
+
+
+def lister_produits_gestion(db: Session) -> Sequence[Product]:
+    """TOUS les produits (actifs, inactifs, provisoires) — écran de gestion du référentiel
+    (credit.product.manage), seul endroit où un produit désactivé reste visible (pour le
+    réactiver). Distincte de `lister_produits` ci-dessus, qui reste filtrée aux actifs pour le
+    choix à la demande. Miroir de `epargne.consultation.lister_produits_gestion`."""
+    return db.execute(select(Product).order_by(Product.code)).scalars().all()
 
 
 def _requete_demandes(courant: UtilisateurCourant):

@@ -38,13 +38,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.models import Account
-from app.modules.credit import consultation, delinquency_parametres
+from app.modules.credit import consultation, delinquency_parametres, gestion_produits, rattachements
 from app.modules.credit.decaissement import (
     DemandeNonApprouveeError,
     RattachementManquantError,
@@ -65,7 +66,14 @@ from app.modules.credit.demandes import (
     decider,
 )
 from app.modules.credit.echeancier import EcheancierImpossibleError
-from app.modules.credit.models import Application, DelinquencyTier, Installment
+from app.modules.credit.gestion_produits import (
+    CodeDejaUtiliseError as CodeProduitDejaUtiliseError,
+)
+from app.modules.credit.gestion_produits import (
+    ComptesNonRattachesError,
+    TauxDepasseUsureError,
+)
+from app.modules.credit.models import Application, DelinquencyTier, Installment, Product
 from app.modules.credit.reclassification import (
     executer_reclassification,
     previsualiser_reclassement,
@@ -77,10 +85,13 @@ from app.modules.credit.remboursement import (
     rembourser,
 )
 from app.modules.credit.schemas import (
+    ActivationProduit,
     ApercuReclassement,
+    CompteRattachement,
     CompteRattachementPalier,
     CreationDemande,
     CreationPalier,
+    CreationProduitCredit,
     DecaissementCorps,
     Decision,
     DemandeDecaissee,
@@ -93,11 +104,16 @@ from app.modules.credit.schemas import (
     LigneApercuReclassement,
     LigneReclassement,
     ModificationPalier,
+    ModificationProduitCredit,
+    ModificationRattachementsProduitCredit,
     PalierSouffrance,
+    ProduitCreditDetail,
     RapportReclassement,
+    RattachementsProduitCredit,
     Remboursement,
     RemboursementRecu,
     SuppressionPalier,
+    ValidationProduitResultat,
 )
 from app.modules.epargne.models import SavingsAccount
 from app.modules.epargne.operations import CompteInvalideError
@@ -110,6 +126,7 @@ router = APIRouter(tags=["credit"])
 MESSAGE_TIER_INTROUVABLE = "Tiers introuvable."
 MESSAGE_DEMANDE_INTROUVABLE = "Demande de crédit introuvable."
 MESSAGE_PALIER_INTROUVABLE = "Palier de souffrance introuvable."
+MESSAGE_PRODUIT_INTROUVABLE = "Produit de crédit introuvable."
 # Défaut du corps de décaissement (mode 'caisse', comportement historique si aucun corps
 # n'est envoyé) — singleton module, pas un appel dans la signature (immutable, jamais modifié).
 _DECAISSEMENT_CAISSE_PAR_DEFAUT = DecaissementCorps()
@@ -143,6 +160,256 @@ def lister_produits_endpoint(
         {"id": p.id, "code": p.code, "name": p.name, "is_provisional": p.is_provisional}
         for p in consultation.lister_produits(db)
     ]
+
+
+# --- Référentiel produit : consultation, création, modification métier, validation,
+# activation ---------------------------------------------------------------------------------
+# Gardé credit.product.read (lecture) / credit.product.manage (écriture) — ADMIN_FONCTIONNEL —
+# jamais compta.plan.manage, réservé aux rattachements/taux (lot 3b, pas encore construits).
+# Voir gestion_produits.py.
+
+
+def _vers_detail(produit: Product) -> ProduitCreditDetail:
+    return ProduitCreditDetail(
+        id=produit.id,
+        code=produit.code,
+        name=produit.name,
+        is_active=produit.is_active,
+        is_provisional=produit.is_provisional,
+        taux_bp=produit.taux_bp,
+        periodicite=produit.periodicite,
+        methode_amortissement=produit.methode_amortissement,
+        base_jours=produit.base_jours,
+        regle_arrondi=produit.regle_arrondi,
+        taux_usure_max_bp=produit.taux_usure_max_bp,
+    )
+
+
+@router.get("/credit/produits/referentiel", response_model=list[ProduitCreditDetail])
+def lister_produits_gestion_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.product.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ProduitCreditDetail]:
+    """TOUS les produits (actifs, inactifs, provisoires) — écran de gestion du référentiel.
+    Distinct de `GET /credit/produits` (choix à la demande, actifs seulement, schéma léger)."""
+    return [_vers_detail(p) for p in consultation.lister_produits_gestion(db)]
+
+
+@router.post(
+    "/credit/produits", response_model=ProduitCreditDetail, status_code=status.HTTP_201_CREATED
+)
+def creer_produit_endpoint(
+    corps: CreationProduitCredit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProduitCreditDetail:
+    """Crée un produit PROVISOIRE, sans compte comptable rattaché (voir l'écran de
+    rattachement, permission distincte, après création)."""
+    try:
+        produit = gestion_produits.creer_produit(
+            db,
+            code=corps.code,
+            name=corps.name,
+            taux_bp=corps.taux_bp,
+            periodicite=corps.periodicite,
+            methode_amortissement=corps.methode_amortissement,
+            base_jours=corps.base_jours,
+            regle_arrondi=corps.regle_arrondi,
+            taux_usure_max_bp=corps.taux_usure_max_bp,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except (CodeProduitDejaUtiliseError, TauxDepasseUsureError) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    except IntegrityError as erreur:
+        # Filet de sécurité : deux créations concurrentes du même code (rare).
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Le code « {corps.code} » est déjà utilisé par un autre produit de crédit.",
+        ) from erreur
+    return _vers_detail(produit)
+
+
+@router.patch("/credit/produits/{produit_id}", response_model=ProduitCreditDetail)
+def modifier_produit_endpoint(
+    produit_id: uuid.UUID,
+    corps: ModificationProduitCredit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProduitCreditDetail:
+    """Champs MÉTIER uniquement (nom, taux, amortissement) — ne touche jamais aux comptes
+    rattachés (endpoint dédié, `compta.plan.manage`, lot 3b)."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    try:
+        gestion_produits.modifier_produit(
+            db,
+            produit,
+            name=corps.name,
+            taux_bp=corps.taux_bp,
+            periodicite=corps.periodicite,
+            methode_amortissement=corps.methode_amortissement,
+            base_jours=corps.base_jours,
+            regle_arrondi=corps.regle_arrondi,
+            taux_usure_max_bp=corps.taux_usure_max_bp,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except TauxDepasseUsureError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_detail(produit)
+
+
+@router.post("/credit/produits/{produit_id}/valider", response_model=ValidationProduitResultat)
+def valider_produit_endpoint(
+    produit_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ValidationProduitResultat:
+    """Lève le provisoire — GARDE-FOU STRICT : refuse (422) si le compte membre n'est pas
+    rattaché, ou si le taux est non nul sans compte de produits d'intérêts rattaché. Le compte
+    client manquant ne bloque pas mais revient en avertissement explicite."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    try:
+        avertissements = gestion_produits.valider_produit(
+            db, produit, par=courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except ComptesNonRattachesError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return ValidationProduitResultat(
+        **_vers_detail(produit).model_dump(), avertissements=avertissements
+    )
+
+
+@router.patch("/credit/produits/{produit_id}/activation", response_model=ProduitCreditDetail)
+def changer_activation_produit_endpoint(
+    produit_id: uuid.UUID,
+    corps: ActivationProduit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.product.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProduitCreditDetail:
+    """(Dés)active le produit dans le catalogue proposé à la demande (jamais de suppression).
+    Motif obligatoire dans les deux sens."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    gestion_produits.changer_activation_produit(
+        db,
+        produit,
+        is_active=corps.is_active,
+        motif=corps.motif,
+        par=courant.user_id,
+        contexte=_contexte(request),
+    )
+    db.commit()
+    return _vers_detail(produit)
+
+
+# --- Rattachements comptables (lot 3b) : gardé compta.plan.manage, comme l'épargne ----------
+# Distinct des endpoints ci-dessus (credit.product.manage, admin fonctionnel) : ici, le
+# comptable pointe les 3 comptes. Voir rattachements.py. Modifiables même sur un produit déjà
+# VALIDÉ (le comptable doit pouvoir corriger une erreur après coup) — seule la validation
+# elle-même (`valider_produit`) contrôle leur présence.
+
+
+def _compte_rattachement(db: Session, account_id: uuid.UUID | None) -> CompteRattachement | None:
+    if account_id is None:
+        return None
+    compte = db.get(Account, account_id)
+    if compte is None:
+        return None
+    return CompteRattachement(account_number=compte.account_number, name=compte.name)
+
+
+def _vers_rattachements(db: Session, produit: Product) -> RattachementsProduitCredit:
+    return RattachementsProduitCredit(
+        id=produit.id,
+        code=produit.code,
+        name=produit.name,
+        compte_credit_membre=_compte_rattachement(db, produit.compte_credit_membre_id),
+        compte_credit_client=_compte_rattachement(db, produit.compte_credit_client_id),
+        compte_produits_interets=_compte_rattachement(db, produit.compte_produits_interets_id),
+    )
+
+
+@router.get(
+    "/credit/produits/{produit_id}/rattachements", response_model=RattachementsProduitCredit
+)
+def lire_rattachements_produit_endpoint(
+    produit_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RattachementsProduitCredit:
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    return _vers_rattachements(db, produit)
+
+
+@router.patch(
+    "/credit/produits/{produit_id}/rattachements", response_model=RattachementsProduitCredit
+)
+def modifier_rattachements_produit_endpoint(
+    produit_id: uuid.UUID,
+    corps: ModificationRattachementsProduitCredit,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> RattachementsProduitCredit:
+    """Ce changement s'applique aux PROCHAINES opérations seulement — les écritures déjà
+    posées référencent directement un compte, jamais ce paramètre."""
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
+        )
+    try:
+        rattachements.modifier_rattachements(
+            db,
+            produit,
+            compte_credit_membre_number=corps.compte_credit_membre,
+            compte_credit_client_number=corps.compte_credit_client,
+            compte_produits_interets_number=corps.compte_produits_interets,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except CompteInvalideRattachementError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_rattachements(db, produit)
 
 
 @router.get("/credit/demandes", response_model=list[DemandeResume])

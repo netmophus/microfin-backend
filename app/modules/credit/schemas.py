@@ -8,7 +8,113 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# --- Gestion du référentiel produit (création, modification, validation, activation) ------
+# Distinct des rattachements comptables / paramètres d'intérêt (à venir, lot 3b) : ici, le
+# CYCLE DE VIE du produit lui-même — credit.product.manage (ADMIN_FONCTIONNEL). Même patron
+# que epargne/schemas.py (CreationProduitEpargne, etc.), adapté : pas de `currency` (XOF
+# implicite, jamais paramétré côté crédit), `methode_amortissement` remplace
+# `methode_calcul_solde`, `taux_usure_max_bp` en plus (plafond paramétrable, migration 0050).
+
+
+class ProduitCreditDetail(BaseModel):
+    """Réponse des endpoints de gestion (création/modification/activation) — le produit
+    complet, motif exclu (déjà dans l'audit). Champs non-Literal (contrairement aux schémas
+    d'entrée ci-dessous) : c'est de la SORTIE, construite à partir de l'ORM (`Mapped[str]`),
+    même choix que `epargne.schemas.ProduitEpargneDetail`."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+    is_active: bool
+    is_provisional: bool
+    taux_bp: int
+    periodicite: str
+    methode_amortissement: str
+    base_jours: int
+    regle_arrondi: str
+    taux_usure_max_bp: int | None
+
+
+class CreationProduitCredit(BaseModel):
+    """Valeurs par défaut = celles de la migration 0031 (taux 0, mensuelle, échéance
+    constante, base 360, arrondi au plus proche) : un produit tout juste créé ne porte aucun
+    intérêt tant qu'il n'a pas été réglé explicitement. Ne reçoit AUCUN compte comptable — ça
+    reste le rôle de l'écran de rattachement (`compta.plan.manage`), après création."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=20)
+    name: str = Field(min_length=1, max_length=150)
+    taux_bp: int = Field(default=0, ge=0, le=10000)
+    periodicite: Literal["mensuelle", "trimestrielle", "annuelle"] = "mensuelle"
+    methode_amortissement: Literal["capital_constant", "echeance_constante"] = "echeance_constante"
+    base_jours: Literal[360, 365] = 360
+    regle_arrondi: Literal["plus_proche", "plancher"] = "plus_proche"
+    taux_usure_max_bp: int | None = Field(default=None, ge=0, le=10000)
+
+
+class ModificationProduitCredit(BaseModel):
+    """État complet soumis à chaque enregistrement — pas un PATCH partiel. Ne touche pas aux
+    comptes rattachés ni à `is_active`/`is_provisional`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=150)
+    taux_bp: int = Field(ge=0, le=10000)
+    periodicite: Literal["mensuelle", "trimestrielle", "annuelle"]
+    methode_amortissement: Literal["capital_constant", "echeance_constante"]
+    base_jours: Literal[360, 365]
+    regle_arrondi: Literal["plus_proche", "plancher"]
+    taux_usure_max_bp: int | None = Field(default=None, ge=0, le=10000)
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ActivationProduit(BaseModel):
+    """Motif obligatoire dans les deux sens (activer comme désactiver) — même discipline que
+    `caisse.poste`/`epargne.product`."""
+
+    is_active: bool
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class ValidationProduitResultat(ProduitCreditDetail):
+    """`avertissements` : messages non bloquants (ex. compte client non rattaché) —
+    structurés pour être exploités par le frontend, jamais noyés dans un texte libre."""
+
+    avertissements: list[str] = Field(default_factory=list)
+
+
+# --- Rattachements comptables (lot 3b, miroir de epargne.schemas) -------------------------
+# Distinct de CompteRattachementPalier (paliers de souffrance, même forme mais concern
+# différent) : gardé compta.plan.manage, comme le bloc épargne équivalent.
+
+
+class CompteRattachement(BaseModel):
+    """Un compte résolu — numéro + libellé, jamais l'UUID (règle du projet)."""
+
+    account_number: str
+    name: str
+
+
+class RattachementsProduitCredit(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    compte_credit_membre: CompteRattachement | None
+    compte_credit_client: CompteRattachement | None
+    compte_produits_interets: CompteRattachement | None
+
+
+class ModificationRattachementsProduitCredit(BaseModel):
+    """Les 3 rattachements TOUJOURS fournis ensemble — l'écran soumet l'état complet de ses 3
+    sélecteurs à chaque enregistrement, même discipline que l'épargne."""
+
+    compte_credit_membre: str | None
+    compte_credit_client: str | None
+    compte_produits_interets: str | None
+    motif: str = Field(min_length=3, max_length=500)
 
 
 class CreationDemande(BaseModel):
