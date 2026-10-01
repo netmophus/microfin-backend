@@ -88,6 +88,10 @@ class Exercice(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    # Affectation du résultat (chantier P1, lot b2a, migration 0052). NOT NULL == déjà affecté —
+    # pas de colonne booléenne séparée, même patron que solde_at/solde_by (crédit, migration 0051).
+    resultat_affecte_at: Mapped[datetime | None] = mapped_column(TS)
+    resultat_affecte_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
 
     def __repr__(self) -> str:
         return f"<Exercice {self.code} {self.status}>"

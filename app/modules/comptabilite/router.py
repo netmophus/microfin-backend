@@ -1,6 +1,7 @@
 """Endpoints HTTP — Plan de comptes : Bloc 1 (consultation + gestion unitaire) + Bloc 2
 (import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
-(chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1).
+(chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1) + Affectation du
+résultat (chantier P1, lot b2a).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
@@ -13,14 +14,16 @@ TABLE DES ERREURS (un seul endroit) :
     compte de saisie invalide -> 422, message humain (ecritures.py / ecritures_od.py)
   - clôture : exercice déjà clos, brouillons en attente, rien à clôturer, compte 591
     introuvable -> 422, message humain (cloture_exercice.py)
+  - affectation : exercice non clos, déjà affecté, rien à affecter, ventilation incorrecte,
+    compte de destination introuvable -> 422, message humain (affectation_resultat.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
 en 2 temps) -> compta.plan.manage. Rapports -> compta.rapport.read. Saisie manuelle OD :
 lecture -> compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post ;
 contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
-COMPTABLE — seed_security.py). Exercices (liste, aperçu de clôture, clôture) ->
-compta.exercice.manage, lecture et écriture confondues : ouvrir/clôturer un exercice est un
-acte de gestion, pas une simple consultation (permission déjà définie, sans route avant ce lot).
+COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation — aperçus compris) ->
+compta.exercice.manage, lecture et écriture confondues : ces actes sont de la gestion, pas une
+simple consultation.
 """
 
 import uuid
@@ -45,6 +48,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.audit.service import ecrire_audit
 from app.modules.comptabilite import (
+    affectation_resultat,
     cloture_exercice,
     comptes,
     ecritures,
@@ -71,6 +75,8 @@ from app.modules.comptabilite.ecritures_od import JournalODIntrouvableError
 from app.modules.comptabilite.models import Account, Exercice, JournalEntry
 from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
+    AffectationResultatResultat,
+    ApercuAffectation,
     ApercuCloture,
     ApercuImportComptes,
     Balance,
@@ -99,6 +105,7 @@ from app.modules.comptabilite.schemas import (
     PageComptes,
     PageEcrituresOD,
     PageGrandLivre,
+    VentilationAffectation,
     VerrouillageSaisie,
 )
 from app.modules.comptabilite.service import ModificationInterditeError
@@ -756,6 +763,7 @@ def _vers_resume_exercice(exercice: Exercice) -> ExerciceResume:
         date_debut=exercice.date_debut,
         date_fin=exercice.date_fin,
         status=cast(Literal["ouvert", "clos"], exercice.status),
+        resultat_affecte=exercice.resultat_affecte_at is not None,
     )
 
 
@@ -842,3 +850,81 @@ def cloturer_exercice_endpoint(
         entry_number=entry_number,
         resultat=resultat.resultat,
     )
+
+
+# --- Affectation du résultat, chantier P1 lot b2a --------------------------------------------
+# Ventilation à la main (591 -> réserves et/ou 58, jamais 592 — voir affectation_resultat.py).
+# compta.exercice.manage, même raisonnement que la clôture : affecter un résultat est un acte de
+# gestion, pas une simple lecture.
+
+
+@router.get(
+    "/exercices/{exercice_id}/previsualisation-affectation", response_model=ApercuAffectation
+)
+def previsualiser_affectation_endpoint(
+    exercice_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuAffectation:
+    """Dry-run : montant à affecter (lu depuis la pièce de clôture de CET exercice, jamais le
+    solde courant de 591 — voir affectation_resultat.py), et si c'est déjà fait."""
+    exercice = _charger_exercice(db, exercice_id)
+    try:
+        apercu = affectation_resultat.previsualiser_affectation(db, exercice)
+    except affectation_resultat.PieceClotureAmbigueError as erreur:
+        raise _422(erreur) from None
+    return ApercuAffectation(
+        exercice=_vers_resume_exercice(exercice),
+        montant=apercu.montant,
+        deja_affecte=apercu.deja_affecte,
+        affectable=apercu.affectable,
+    )
+
+
+@router.post("/exercices/{exercice_id}/affectation", response_model=AffectationResultatResultat)
+def affecter_resultat_endpoint(
+    exercice_id: uuid.UUID,
+    corps: VentilationAffectation,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> AffectationResultatResultat:
+    """Exécute l'affectation : voir affectation_resultat.affecter_resultat pour l'ordre des
+    contrôles et les refus possibles. Aucune confirmation supplémentaire côté API — l'aperçu
+    (dry-run) ci-dessus est la confirmation attendue avant cet appel, portée par l'écran."""
+    exercice = _charger_exercice(db, exercice_id)
+    ventilation = affectation_resultat.VentilationResultat(
+        reserve_generale=corps.reserve_generale,
+        reserves_facultatives=corps.reserves_facultatives,
+        autres_reserves=corps.autres_reserves,
+        report_a_nouveau=corps.report_a_nouveau,
+    )
+    try:
+        resultat = affectation_resultat.affecter_resultat(
+            db, exercice, ventilation, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except (
+        affectation_resultat.ExerciceNonClosError,
+        affectation_resultat.ResultatDejaAffecteError,
+        affectation_resultat.RienAAffecterError,
+        affectation_resultat.PieceClotureAmbigueError,
+        affectation_resultat.VentilationIncorrecteError,
+        affectation_resultat.CompteAffectationIntrouvableError,
+        ecritures.ExerciceError,
+        ecritures.CompteNonSaisissableError,
+        ecritures.LigneInvalideError,
+        ecritures.PieceIncompleteError,
+        ecritures.PieceDesequilibreeError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    entry_number = resultat.entry.entry_number
+    assert entry_number is not None  # valider() l'alloue toujours avant de rendre la main
+    return AffectationResultatResultat(
+        exercice=_vers_resume_exercice(exercice),
+        entry_number=entry_number,
+        montant=resultat.montant,
+        ventilation=corps,
+    )
+

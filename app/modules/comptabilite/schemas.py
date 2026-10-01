@@ -242,8 +242,9 @@ class PageEcrituresOD(BaseModel):
 
 # --- Clôture d'exercice (chantier P1, lot b1) ------------------------------------------------
 # Clôture TECHNIQUE uniquement : solde les comptes de charges/produits (classe 6/7) vers 591
-# (« Excédent ou déficit en instance d'approbation »). L'affectation du résultat (591 -> 592/58,
-# après approbation de l'assemblée générale) est un lot SÉPARÉ (b2), pas codé ici.
+# (« Excédent ou déficit en instance d'approbation »). L'affectation du résultat (591 -> réserves
+# et/ou 58, après approbation de l'assemblée générale) est le lot b2a, ci-dessous. 592 n'est
+# jamais utilisé (décision actée, voir affectation_resultat.py).
 
 
 class ExerciceResume(BaseModel):
@@ -253,6 +254,7 @@ class ExerciceResume(BaseModel):
     date_debut: date
     date_fin: date
     status: Literal["ouvert", "clos"]
+    resultat_affecte: bool
 
 
 class LigneResultatCloture(BaseModel):
@@ -289,3 +291,36 @@ class ClotureExerciceResultat(BaseModel):
     exercice: ExerciceResume
     entry_number: str
     resultat: int
+
+
+# --- Affectation du résultat (chantier P1, lot b2a) ------------------------------------------
+# Ventilation À LA MAIN (pas de taux automatique) : réserve générale (5521), réserves
+# facultatives (5522), autres réserves (5523), report à nouveau (58). Sur un déficit, seul
+# report_a_nouveau est autorisé (refusé côté service si les réserves sont non nulles).
+
+
+class VentilationAffectation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reserve_generale: int = Field(default=0, ge=0)
+    reserves_facultatives: int = Field(default=0, ge=0)
+    autres_reserves: int = Field(default=0, ge=0)
+    report_a_nouveau: int = Field(default=0, ge=0)
+
+
+class ApercuAffectation(BaseModel):
+    """Dry-run : montant à affecter (signé, None si rien), et si c'est déjà fait."""
+
+    exercice: ExerciceResume
+    montant: int | None
+    deja_affecte: bool
+    affectable: bool
+
+
+class AffectationResultatResultat(BaseModel):
+    """Résultat de l'exécution — l'écriture posée et la ventilation retenue."""
+
+    exercice: ExerciceResume
+    entry_number: str
+    montant: int
+    ventilation: VentilationAffectation
