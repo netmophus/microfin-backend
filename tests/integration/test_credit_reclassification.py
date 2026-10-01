@@ -10,11 +10,19 @@
   - un palier terminal (is_terminal) ne se reclasse jamais automatiquement vers un palier
     meilleur — gel, radiation manuelle hors périmètre ;
   - l'endpoint d'exécution est réservé à credit.delinquency.executer (DIRECTION).
+
+CHANTIER SUPERVISION DE LA SOUFFRANCE (lot 1, moteur) :
+  - un palier NON provisionné (taux_provision_bp = 0, ex. simple retard) n'exige AUCUN compte et
+    ne pose AUCUNE écriture — il étiquette seulement le retard (delinquency_tier_id mis à jour) ;
+  - la chaîne complète retard -> souffrance -> douteux -> irrécouvrable dote/reprend correctement
+    à chaque transition (jamais nettée, voir docstring de reclassification.py) ;
+  - l'aperçu (dry-run) reste juste y compris sur une transition vers/depuis un palier non
+    provisionné.
 """
 
 import uuid
 from collections.abc import Generator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -268,9 +276,9 @@ def test_credit_a_jour_nest_pas_reclasse(db: Session) -> None:
 
 
 def test_credit_en_souffrance_reclasse_encours_et_provision(db: Session) -> None:
-    # seuil_jours=35 : entre les vrais paliers seedés SOUFFRANCE(30) et DOUTEUX(180) — jamais
-    # en collision, et garanti d'être le palier retenu pour jours_retard=40 (base de dev
-    # partagée, voir [[blast-radius-comptes-partages]]).
+    # seuil_jours=35 : sous le vrai palier seedé SOUFFRANCE(90j) — jamais en collision, et
+    # garanti d'être le palier retenu pour jours_retard=40 (base de dev partagée, voir
+    # [[blast-radius-comptes-partages]]).
     agence = _agence(db, "RCA2")
     tier_id = _tier(db, agence)
     produit = _produit(db)
@@ -408,19 +416,21 @@ def test_endpoint_executer_refuse_sans_la_permission(db: Session, client: TestCl
 
 def test_endpoint_executer_reclasse_et_rapporte(db: Session, client: TestClient) -> None:
     # L'endpoint utilise CURRENT_DATE (pas de date injectable) : l'entry_date du décaissement
-    # est calculée RELATIVEMENT à aujourd'hui (pas une date en dur) pour rester ~100 jours de
-    # retard quel que soit le jour réel d'exécution de la suite — entre les vrais paliers
-    # seedés SOUFFRANCE(30j) et DOUTEUX(180j, comptes encore NULL sur cette base de dev : y
-    # tomber ferait échouer ce dossier en RattachementManquantError, pas ce qu'on veut prouver
-    # ici). Voir [[blast-radius-comptes-partages]].
+    # est calculée RELATIVEMENT à aujourd'hui (pas une date en dur), avec une MARGE généreuse
+    # (160 jours, periodicite mensuelle -> due_date ~30j plus tard -> retard réel ~130j, +/- la
+    # longueur du mois) pour rester solidement ENTRE les vrais paliers seedés SOUFFRANCE(90j) et
+    # DOUTEUX(180j, comptes encore NULL sur cette base de dev : y tomber ferait échouer ce
+    # dossier en RattachementManquantError, pas ce qu'on veut prouver ici). Seuil synthétique
+    # 110 (nettement > 90, nettement < ~130) : évite tout effet de bord si le retard réel varie
+    # de quelques jours selon le mois. Voir [[blast-radius-comptes-partages]].
     agence = _agence(db, "RCA6")
     tier_id = _tier(db, agence)
     produit = _produit(db)
     aujourdhui = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
     demande = _demande_decaissee_un_versement(
-        db, agence, tier_id, produit, montant=80000, entry_date=aujourdhui - timedelta(days=130)
+        db, agence, tier_id, produit, montant=80000, entry_date=aujourdhui - timedelta(days=160)
     )
-    _palier(db, "SOUFFRANCE-C", 50, 500, "SC")
+    _palier(db, "SOUFFRANCE-C", 110, 500, "SC")
     direction = _entete(db, agence, "DIRECTION_GENERALE")
 
     reponse = client.post("/credit/delinquency/executer", headers=direction)
@@ -584,9 +594,11 @@ def test_endpoint_apercu_repond_sans_rien_ecrire(db: Session, client: TestClient
     # et_rapporte.
     aujourdhui = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
     demande = _demande_decaissee_un_versement(
-        db, agence, tier_id, produit, montant=90000, entry_date=aujourdhui - timedelta(days=130)
+        db, agence, tier_id, produit, montant=90000, entry_date=aujourdhui - timedelta(days=160)
     )
-    _palier(db, "SOUFFRANCE-G", 45, 1000, "SG")
+    # Marge généreuse (seuil 110, entry_date -160j) — même raison que
+    # test_endpoint_executer_reclasse_et_rapporte ci-dessus.
+    _palier(db, "SOUFFRANCE-G", 110, 1000, "SG")
     direction = _entete(db, agence, "DIRECTION_GENERALE")
 
     reponse = client.post("/credit/delinquency/apercu", headers=direction)
@@ -601,3 +613,170 @@ def test_endpoint_apercu_repond_sans_rien_ecrire(db: Session, client: TestClient
 
     demande_rechargee = db.get(Application, demande.id)
     assert demande_rechargee.delinquency_tier_id is None  # rien écrit
+
+
+# --- Chantier supervision de la souffrance (lot 1) : palier non provisionné ----------------
+
+
+def test_palier_non_provisionne_netiquette_sans_rien_ecrire(db: Session) -> None:
+    """Un palier à taux 0 (ex. simple retard, sous le seuil réglementaire de souffrance) n'exige
+    AUCUN compte et ne pose AUCUNE écriture — il étiquette seulement le dossier pour la
+    supervision. `compte_encours_id` etc. explicitement None ici (comme le vrai palier RETARD du
+    seed) : la preuve que le job ne les exige pas."""
+    agence = _agence(db, "RCC1")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=100000)
+    retard = _palier(
+        db, "RETARD-Z", 3, 0, "RZ",
+        compte_encours_id=None, compte_dotation_id=None,
+        compte_provision_id=None, compte_reprise_id=None,
+    )
+    echeance = _seule_echeance(db, demande)
+    entries_avant = db.execute(
+        text("SELECT count(*) FROM comptabilite.journal_entries")
+    ).scalar_one()
+
+    event = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=echeance.due_date + timedelta(days=5), par=None
+    )
+    db.commit()
+
+    assert event is not None
+    assert event.tier_apres_id == retard.id
+    assert event.montant_encours_reclasse == 0
+    assert event.provision_avant == 0
+    assert event.provision_apres == 0
+    assert event.entry_id_encours is None
+    assert event.entry_id_dotation is None
+    assert event.entry_id_reprise is None
+
+    demande_rechargee = db.get(Application, demande.id)
+    assert demande_rechargee.delinquency_tier_id == retard.id  # étiqueté quand même
+
+    entries_apres = db.execute(
+        text("SELECT count(*) FROM comptabilite.journal_entries")
+    ).scalar_one()
+    assert entries_apres == entries_avant  # AUCUNE pièce posée
+
+
+def test_chaine_retard_souffrance_douteux_irrecouvrable_dote_et_reprend(db: Session) -> None:
+    """La chaîne complète du chantier souffrance lot 1 : RETARD (non provisionné, étiquette
+    seule) -> SOUFFRANCE (40 %) -> DOUTEUX (80 %) -> IRRECOUVRABLE (100 %, terminal). Chaque
+    transition reprend intégralement la provision du palier quitté et dote intégralement celle
+    du palier atteint — jamais nettées (voir docstring module). Montant rond (1 000 000) pour
+    des pourcentages exacts, sans arrondi à vérifier."""
+    agence = _agence(db, "RCC2")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=1_000_000)
+    echeance = _seule_echeance(db, demande)
+
+    retard = _palier(
+        db, "RETARD-Z1", 4, 0, "RZ1",
+        compte_encours_id=None, compte_dotation_id=None,
+        compte_provision_id=None, compte_reprise_id=None,
+    )
+    souffrance = _palier(db, "SOUFFRANCE-Z1", 55, 4000, "SZ1")  # 40 %, à valider
+    douteux = _palier(db, "DOUTEUX-Z1", 115, 8000, "DZ1")  # 80 %, à valider
+    irrecouvrable = _palier(db, "IRRECOUVRABLE-Z1", 160, 10000, "IZ1", is_terminal=True)
+
+    # `executed_at` horodaté EXPLICITEMENT et en ordre strictement croissant après chaque étape :
+    # la fixture `db` (SAVEPOINT, voir join_transaction_mode plus haut) garde la MÊME transaction
+    # PostgreSQL ouverte sur tout le test, donc NOW() (server_default de `executed_at`) renvoie la
+    # même valeur pour tous les événements — sans cet horodatage explicite, le tri "dernier
+    # événement" (reclassification.py, `dernier_evenement`) deviendrait ambigu dès le 2e palier
+    # franchi dans le MÊME test. Un vrai déploiement n'a jamais ce problème : chaque exécution du
+    # job est sa propre transaction, à un instant réel différent.
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+
+    # Sain -> RETARD : étiquette seule (déjà couvert en détail par le test dédié ci-dessus).
+    event_retard = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=echeance.due_date + timedelta(days=4), par=None
+    )
+    assert event_retard is not None
+    event_retard.executed_at = base
+    db.commit()
+    assert event_retard.tier_apres_id == retard.id
+    assert event_retard.provision_apres == 0
+
+    # RETARD -> SOUFFRANCE : transfert d'encours (depuis l'ancrage — RETARD n'avait rien
+    # déplacé) + dotation 40 %, AUCUNE reprise (rien n'était provisionné avant).
+    event_souffrance = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=echeance.due_date + timedelta(days=55), par=None
+    )
+    assert event_souffrance is not None
+    event_souffrance.executed_at = base + timedelta(seconds=1)
+    db.commit()
+    assert event_souffrance.tier_apres_id == souffrance.id
+    assert event_souffrance.montant_encours_reclasse == 1_000_000
+    assert event_souffrance.provision_avant == 0
+    assert event_souffrance.provision_apres == 400_000  # 40 %
+    assert event_souffrance.entry_id_encours is not None
+    assert event_souffrance.entry_id_dotation is not None
+    assert event_souffrance.entry_id_reprise is None
+    assert _solde_compte(db, souffrance.compte_encours_id) == 1_000_000
+    assert _solde_compte(db, souffrance.compte_provision_id) == -400_000
+
+    # SOUFFRANCE -> DOUTEUX : reprise intégrale des 40 % + dotation intégrale des 80 %.
+    event_douteux = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=echeance.due_date + timedelta(days=115), par=None
+    )
+    assert event_douteux is not None
+    event_douteux.executed_at = base + timedelta(seconds=2)
+    db.commit()
+    assert event_douteux.tier_apres_id == douteux.id
+    assert event_douteux.provision_avant == 400_000
+    assert event_douteux.provision_apres == 800_000  # 80 %
+    assert event_douteux.entry_id_reprise is not None
+    assert event_douteux.entry_id_dotation is not None
+    assert _solde_compte(db, souffrance.compte_provision_id) == 0  # reprise en entier
+    assert _solde_compte(db, douteux.compte_provision_id) == -800_000
+    assert _solde_compte(db, douteux.compte_encours_id) == 1_000_000
+    assert _solde_compte(db, souffrance.compte_encours_id) == 0  # déplacé vers douteux
+
+    # DOUTEUX -> IRRECOUVRABLE : reprise des 80 % + dotation des 100 %.
+    event_irrecouvrable = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=echeance.due_date + timedelta(days=160), par=None
+    )
+    db.commit()
+    assert event_irrecouvrable is not None
+    assert event_irrecouvrable.tier_apres_id == irrecouvrable.id
+    assert event_irrecouvrable.provision_avant == 800_000
+    assert event_irrecouvrable.provision_apres == 1_000_000  # 100 %
+    assert _solde_compte(db, douteux.compte_provision_id) == 0
+    assert _solde_compte(db, irrecouvrable.compte_provision_id) == -1_000_000
+
+    # Terminal : plus jamais reclassé automatiquement, quel que soit le retard.
+    event_fige = reclassification_module.reclasser_un_credit(
+        db, demande, aujourdhui=echeance.due_date + timedelta(days=5000), par=None
+    )
+    assert event_fige is None
+
+
+def test_apercu_juste_pour_un_palier_non_provisionne(db: Session) -> None:
+    """L'aperçu décrit correctement une transition vers un palier NON provisionné : aucun
+    rattachement manquant signalé (aucun compte n'est exigé), provision à 0 — mêmes chiffres que
+    ce que reclasser_un_credit ferait réellement (voir test dédié ci-dessus)."""
+    agence = _agence(db, "RCC3")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _demande_decaissee_un_versement(db, agence, tier_id, produit, montant=50000)
+    _palier(
+        db, "RETARD-Z2", 6, 0, "RZ2",
+        compte_encours_id=None, compte_dotation_id=None,
+        compte_provision_id=None, compte_reprise_id=None,
+    )
+    echeance = _seule_echeance(db, demande)
+    aujourdhui = echeance.due_date + timedelta(days=6)
+
+    apercu = reclassification_module.previsualiser_reclassement(db, aujourdhui=aujourdhui)
+
+    ligne = next(x for x in apercu.lignes if x.application_number == demande.application_number)
+    assert ligne.tier_apres_code == "RETARD-Z2"
+    assert ligne.provision_avant == 0
+    assert ligne.provision_apres == 0
+    assert ligne.rattachement_manquant is None  # aucun compte exigé pour un palier à taux 0
+
+    demande_rechargee = db.get(Application, demande.id)
+    assert demande_rechargee.delinquency_tier_id is None  # rien écrit par l'aperçu

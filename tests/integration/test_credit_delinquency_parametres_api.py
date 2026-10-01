@@ -111,24 +111,64 @@ def _palier(db: Session, code: str, seuil_jours: int, **overrides: object) -> De
 
 
 def test_seed_installe_les_4_paliers_provisoires(db: Session) -> None:
+    """Chantier supervision de la souffrance, lot 1 : barème 90/180/360 jours, RETARD (ex-IMPAYE)
+    NON provisionné et SANS compte, les 3 autres rattachés aux comptes RCSFD par le seed
+    lui-même SUR PREMIÈRE CRÉATION (voir _UPSERT_PALIER, app/cli/seed_credit.py). Table vidée
+    d'abord (rollback de fin de test, voir fixture `db`) pour tester le chemin INSERT : sur
+    cette base de dev partagée, les 4 paliers réels existent déjà SANS compte (état constaté,
+    pas celui décrit — de façon obsolète — par docs/conformite-credit.md §2bis), donc un
+    ré-import se bornerait à les mettre à jour (chemin UPDATE, qui ne touche jamais les
+    comptes — voir test_seed_ne_touche_pas_un_compte_deja_rattache ci-dessous)."""
+    db.execute(text("DELETE FROM credit.delinquency_tiers"))
     nb = executer_seed_paliers_souffrance(db)
     assert nb == 4
     codes = set(
         db.execute(text("SELECT code FROM credit.delinquency_tiers")).scalars().all()
     )
-    assert codes == {"IMPAYE", "SOUFFRANCE", "DOUTEUX", "IRRECOUVRABLE"}
+    assert codes == {"RETARD", "SOUFFRANCE", "DOUTEUX", "IRRECOUVRABLE"}
+
+    retard = db.execute(
+        select(DelinquencyTier).where(DelinquencyTier.code == "RETARD")
+    ).scalar_one()
+    assert retard.seuil_jours == 1
+    assert retard.taux_provision_bp == 0
+    assert retard.compte_encours_id is None  # non provisionné : aucun compte exigé
+
+    souffrance = db.execute(
+        select(DelinquencyTier).where(DelinquencyTier.code == "SOUFFRANCE")
+    ).scalar_one()
+    assert souffrance.seuil_jours == 90
+    assert souffrance.taux_provision_bp == 4000
+
+    douteux = db.execute(
+        select(DelinquencyTier).where(DelinquencyTier.code == "DOUTEUX")
+    ).scalar_one()
+    assert douteux.seuil_jours == 180
+    assert douteux.taux_provision_bp == 8000
+
     irrecouvrable = db.execute(
         select(DelinquencyTier).where(DelinquencyTier.code == "IRRECOUVRABLE")
     ).scalar_one()
+    assert irrecouvrable.seuil_jours == 360
     assert irrecouvrable.is_terminal is True
     assert irrecouvrable.taux_provision_bp == 10000
     assert irrecouvrable.is_provisional is True
-    # PAS d'assertion « compte_encours_id is None » ici : les 4 codes réels de cette base de
-    # dev partagée ont été délibérément rattachés (scénario de test CR5, section 7 du plan de
-    # test — voir docs/conformite-credit.md §2bis), un état désormais permanent et voulu, pas
-    # un artefact. La garantie « jamais codé en dur par le seed » reste couverte SANS dépendre
-    # d'un état pristine partagé par test_seed_ne_touche_pas_un_compte_deja_rattache ci-dessous
-    # (compte fraîchement créé DANS le test, jamais un des 4 codes réels).
+
+    # Les 3 paliers provisionnés ont bien leurs 4 comptes résolus par le seed — numéros vérifiés
+    # via jointure, jamais un UUID deviné.
+    comptes = db.execute(
+        text(
+            "SELECT ae.account_number, ad.account_number, "
+            "       ap.account_number, ar.account_number "
+            "FROM credit.delinquency_tiers t "
+            "JOIN comptabilite.accounts ae ON ae.id = t.compte_encours_id "
+            "JOIN comptabilite.accounts ad ON ad.id = t.compte_dotation_id "
+            "JOIN comptabilite.accounts ap ON ap.id = t.compte_provision_id "
+            "JOIN comptabilite.accounts ar ON ar.id = t.compte_reprise_id "
+            "WHERE t.code = 'SOUFFRANCE'"
+        )
+    ).one()
+    assert comptes == ("292", "66412", "2991", "764")
 
 
 def test_seed_idempotent_ne_duplique_pas(db: Session) -> None:
@@ -161,7 +201,7 @@ def test_seed_ne_touche_pas_un_compte_deja_rattache(db: Session) -> None:
 
 
 def test_lecture_triee_sur_seuil_jours(client: TestClient, db: Session) -> None:
-    # Seuils hors de {1, 30, 180, 365} (seed réel de démonstration) — une base de dev partagée
+    # Seuils hors de {1, 90, 180, 360} (seed réel de démonstration) — une base de dev partagée
     # porte déjà ces valeurs, un INSERT dessus violerait l'UNIQUE(seuil_jours).
     _palier(db, "P530", 530)
     _palier(db, "P505", 505)

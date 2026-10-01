@@ -120,21 +120,32 @@ def prochaine_echeance(db: Session, application_id: uuid.UUID) -> Installment | 
 
 def compte_encours_courant(db: Session, demande: Application) -> uuid.UUID:
     """Le compte qui porte ACTUELLEMENT l'encours de ce crédit (CR5c) : celui du palier de
-    souffrance si le dossier est classé (`delinquency_tier_id`), sinon l'ancrage
-    `compte_credit_id` figé au décaissement (CR3). Sert à la fois à `rembourser()` (créditer le
-    bon compte) et au job de reclassification (compte D'ORIGINE du transfert, lu AVANT mise à
-    jour de `delinquency_tier_id`).
+    souffrance si le dossier est classé ET RÉELLEMENT PROVISIONNÉ (`taux_provision_bp > 0`),
+    sinon l'ancrage `compte_credit_id` figé au décaissement (CR3). Sert à la fois à
+    `rembourser()` (créditer le bon compte) et au job de reclassification (compte D'ORIGINE du
+    transfert, lu AVANT mise à jour de `delinquency_tier_id`).
 
-    Refuse plutôt que deviner si le palier actuel n'a pas de compte d'encours rattaché — un
-    paramétrage incomplet ne doit jamais faire créditer silencieusement le mauvais compte."""
+    Un palier à `taux_provision_bp = 0` (ex. simple retard, supervision — chantier souffrance
+    lot 1) n'exige AUCUN compte : il étiquette un retard, il ne comptabilise rien. L'encours
+    reste alors sur l'ancrage initial exactement comme pour un dossier sain — c'est pour ça
+    qu'un dossier classé dans un tel palier ne doit JAMAIS exiger `compte_encours_id`.
+
+    Refuse plutôt que deviner si le palier actuel EST provisionné mais n'a pas de compte
+    d'encours rattaché — un paramétrage incomplet ne doit jamais faire créditer silencieusement
+    le mauvais compte."""
     if demande.delinquency_tier_id is None:
         assert demande.compte_credit_id is not None
         return demande.compte_credit_id
-    compte_encours = db.execute(
-        select(DelinquencyTier.compte_encours_id).where(
+    compte_encours: uuid.UUID | None
+    taux_provision_bp: int
+    compte_encours, taux_provision_bp = db.execute(
+        select(DelinquencyTier.compte_encours_id, DelinquencyTier.taux_provision_bp).where(
             DelinquencyTier.id == demande.delinquency_tier_id
         )
-    ).scalar_one()
+    ).one()
+    if taux_provision_bp == 0:
+        assert demande.compte_credit_id is not None
+        return demande.compte_credit_id
     if compte_encours is None:
         raise RattachementManquantError(
             "le palier de souffrance actuel de ce crédit n'a pas de compte d'encours rattaché "

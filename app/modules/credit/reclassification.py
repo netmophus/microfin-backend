@@ -28,6 +28,19 @@ PALIERS TERMINAUX (`is_terminal`) : jamais reclassés automatiquement, quel que 
 jours_retard calculé. La sortie d'un crédit irrécouvrable (radiation) est un acte manuel séparé,
 hors périmètre CR5c.
 
+PALIER NON PROVISIONNÉ (`taux_provision_bp = 0`, chantier supervision de la souffrance, lot 1) :
+sert UNIQUEMENT à ÉTIQUETER un retard pour la supervision (ex. un palier « retard simple » sous
+le seuil réglementaire de souffrance) — `Application.delinquency_tier_id` est mis à jour comme
+pour tout autre palier, mais AUCUNE écriture n'est posée (ni transfert d'encours, ni dotation :
+la dotation est déjà naturellement nulle puisque `provision_apres = encours * 0 / 10000 = 0`) et
+AUCUN compte n'est exigé (`compte_encours_id` peut rester NULL). Un dossier classé dans un tel
+palier est traité, côté comptes, EXACTEMENT comme un dossier sain (`compte_encours_courant()`
+dans `remboursement.py` applique la même règle) : son encours reste sur l'ancrage initial tant
+qu'il n'atteint pas un palier RÉELLEMENT provisionné. Une provision déjà accumulée sur un palier
+antérieur se reprend normalement s'il redescend vers un palier non provisionné (le calcul de
+`provision_apres` à 0 déclenche la reprise intégrale, voir plus bas) — un palier à taux nul ne
+« gèle » jamais une provision existante.
+
 CHAQUE DOSSIER EST COMMITTÉ SÉPARÉMENT (voir executer_reclassification, même patron que
 epargne.interets.verser_interets) : un paramétrage incomplet sur un dossier ne bloque pas le
 traitement des autres.
@@ -145,7 +158,12 @@ def reclasser_un_credit(
 
     encours = encours_actuel(db, demande.id)
     ancien_compte_encours = compte_encours_courant(db, demande)
-    if tier_apres is not None:
+    # Un palier NON provisionné (taux_provision_bp = 0, ex. simple retard — chantier souffrance
+    # lot 1) n'exige AUCUN compte d'encours : il sert uniquement à ÉTIQUETER le retard pour la
+    # supervision, pas à comptabiliser quoi que ce soit. L'encours reste alors sur l'ancrage
+    # initial, exactement comme pour un dossier sain (même branche ci-dessous) — voir aussi
+    # compte_encours_courant() dans remboursement.py, même règle, même discipline.
+    if tier_apres is not None and tier_apres.taux_provision_bp > 0:
         if tier_apres.compte_encours_id is None:
             raise RattachementManquantError(
                 f"le palier « {tier_apres.libelle} » n'a pas de compte d'encours rattaché "
@@ -442,8 +460,14 @@ def previsualiser_reclassement(
         encours = encours_actuel(db, demande.id)
 
         rattachement_manquant: str | None = None
-        # MÊME CONTRÔLE que reclasser_un_credit (compte d'encours du nouveau palier).
-        if tier_apres is not None and tier_apres.compte_encours_id is None:
+        # MÊME CONTRÔLE que reclasser_un_credit (compte d'encours du nouveau palier, EXIGÉ
+        # seulement s'il est RÉELLEMENT provisionné — taux_provision_bp > 0, chantier
+        # souffrance lot 1).
+        if (
+            tier_apres is not None
+            and tier_apres.taux_provision_bp > 0
+            and tier_apres.compte_encours_id is None
+        ):
             rattachement_manquant = (
                 f"le palier « {tier_apres.libelle} » n'a pas de compte d'encours rattaché "
                 "(paramétrage)"

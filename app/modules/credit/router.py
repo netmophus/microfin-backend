@@ -17,8 +17,9 @@ décaisser -> credit.decaissement.create (séparée de decide) ; rembourser ->
 credit.remboursement.create (voir seed_security) ; paliers de souffrance en LECTURE ->
 compta.plan.read OU credit.delinquency.read (exige_une_de — le comptable via le Bloc 5 entier,
 la direction en lecture seule avant de lancer le job, moindre privilège) ; en ÉCRITURE ->
-compta.plan.manage seul (inchangé) ; aperçu + exécution de la reclassification ->
-credit.delinquency.executer (DIRECTION seule, acte d'institution).
+compta.plan.manage seul (inchangé) ; aperçu de la reclassification (supervision permanente,
+chantier souffrance lot 1) -> credit.delinquency.executer OU credit.delinquency.read
+(exige_une_de) ; exécution -> credit.delinquency.executer SEUL (DIRECTION, acte d'institution).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                    -> 403 (exige(), en amont)
@@ -1089,11 +1090,17 @@ def supprimer_palier_souffrance_endpoint(
 
 @router.post("/credit/delinquency/apercu", response_model=ApercuReclassement)
 def previsualiser_reclassement_endpoint(
-    courant: Annotated[UtilisateurCourant, Depends(exige("credit.delinquency.executer"))],
+    courant: Annotated[
+        UtilisateurCourant,
+        Depends(exige_une_de("credit.delinquency.executer", "credit.delinquency.read")),
+    ],
     db: Annotated[Session, Depends(get_db)],
 ) -> ApercuReclassement:
-    """Prévisualisation OBLIGATOIRE avant exécution (dry-run) : CALCULE sans rien écrire — même
-    permission que l'exécution (voir reclassification.py, previsualiser_reclassement).
+    """CALCULE sans rien écrire (voir reclassification.py, previsualiser_reclassement) — à la
+    fois la prévisualisation OBLIGATOIRE avant exécution (DIRECTION, `.executer`) ET la
+    supervision PERMANENTE en lecture seule (`.read`, chantier supervision de la souffrance,
+    lot 1) : la même fonction sert les deux usages, aucune écriture dans les deux cas, seule
+    l'action qui suit (`POST /credit/delinquency/executer`) reste réservée à `.executer`.
     Ne liste que les dossiers dont le palier changerait réellement."""
     apercu = previsualiser_reclassement(db)
     return ApercuReclassement(
