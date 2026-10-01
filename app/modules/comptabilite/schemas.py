@@ -9,7 +9,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CompteResume(BaseModel):
@@ -179,3 +179,62 @@ class Balance(BaseModel):
     total_debit: int
     total_credit: int
     equilibree: bool
+
+
+# --- Saisie manuelle d'écriture (OD), chantier P1 lot 1 ------------------------------------
+# Journal OD (Opérations diverses) UNIQUEMENT — jamais un champ de ces schémas : la restriction
+# est posée côté service (ecritures_od.py), pas ici. extra="forbid" : un champ inattendu (ex.
+# "journal_id" envoyé par erreur) est un 422, pas une valeur silencieusement ignorée.
+
+
+class LigneSaisieOD(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_number: str = Field(min_length=1, max_length=20)
+    side: Literal["D", "C"]
+    amount: int = Field(gt=0)
+    label: str | None = Field(default=None, max_length=300)
+
+
+class CreationEcritureOD(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entry_date: date
+    description: str = Field(min_length=1, max_length=300)
+    lignes: list[LigneSaisieOD] = Field(min_length=1)
+
+
+class LigneEcritureODDetail(BaseModel):
+    account_number: str
+    name: str
+    side: Literal["D", "C"]
+    amount: int
+    label: str | None
+
+
+class EcritureODResume(BaseModel):
+    """Une ligne de la liste — sans le détail des lignes (voir EcritureODDetail). `equilibree`
+    et `deja_contre_passee` évitent à l'écran de recalculer ce que le moteur sait déjà."""
+
+    id: uuid.UUID
+    entry_number: str | None
+    entry_date: date
+    description: str
+    status: Literal["brouillon", "validee"]
+    nb_lignes: int
+    total_debit: int
+    total_credit: int
+    equilibree: bool
+    est_contre_passation: bool
+    deja_contre_passee: bool
+
+
+class EcritureODDetail(EcritureODResume):
+    lignes: list[LigneEcritureODDetail]
+
+
+class PageEcrituresOD(BaseModel):
+    lignes: list[EcritureODResume]
+    total: int
+    page: int
+    taille: int

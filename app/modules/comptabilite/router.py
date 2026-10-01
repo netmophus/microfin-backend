@@ -1,21 +1,27 @@
 """Endpoints HTTP — Plan de comptes : Bloc 1 (consultation + gestion unitaire) + Bloc 2
-(import/export CSV en masse).
+(import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
+(chantier P1, lot 1).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
-  - compte inexistant                           -> 404
+  - compte/écriture inexistant(e)                -> 404
   - numéro déjà utilisé / classe-numéro incohérente / parent invalide -> 422, message humain
   - garde-fou (système, mouvementé, enfants actifs) -> 422, message humain (service.py)
   - fichier CSV invalide / anomalies de validation -> 422, message humain (plan.py)
   - fichier changé entre l'aperçu et la confirmation -> 422, empreintes différentes
+  - écriture : exercice fermé, pièce incomplète/déséquilibrée, déjà validée/contre-passée,
+    compte de saisie invalide -> 422, message humain (ecritures.py / ecritures_od.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
-en 2 temps) -> compta.plan.manage.
+en 2 temps) -> compta.plan.manage. Rapports -> compta.rapport.read. Saisie manuelle OD :
+lecture -> compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post ;
+contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
+COMPTABLE — seed_security.py).
 """
 
 import uuid
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 from fastapi import (
     APIRouter,
@@ -34,16 +40,24 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.audit.service import ecrire_audit
-from app.modules.comptabilite import comptes, plan, rapports
+from app.modules.comptabilite import comptes, ecritures, ecritures_od, plan, rapports
 from app.modules.comptabilite.comptes import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
     ChampInvalideError,
+    CompteInvalideRattachementError,
     FiltresComptes,
     NumeroDejaUtiliseError,
     ParentIntrouvableError,
 )
-from app.modules.comptabilite.models import Account
+from app.modules.comptabilite.ecritures_od import (
+    TAILLE_PAGE_DEFAUT as TAILLE_PAGE_ECRITURES_DEFAUT,
+)
+from app.modules.comptabilite.ecritures_od import (
+    TAILLE_PAGE_MAX as TAILLE_PAGE_ECRITURES_MAX,
+)
+from app.modules.comptabilite.ecritures_od import JournalODIntrouvableError
+from app.modules.comptabilite.models import Account, JournalEntry
 from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
     ApercuImportComptes,
@@ -57,12 +71,17 @@ from app.modules.comptabilite.schemas import (
     CompteSelecteurRapport,
     ConfirmationImportComptes,
     CreationCompte,
+    CreationEcritureOD,
     DesactivationCompte,
     DiffChampSchema,
+    EcritureODDetail,
+    EcritureODResume,
     LigneBalance,
+    LigneEcritureODDetail,
     LigneGrandLivre,
     ModificationCompte,
     PageComptes,
+    PageEcrituresOD,
     PageGrandLivre,
     VerrouillageSaisie,
 )
@@ -502,4 +521,195 @@ def balance_endpoint(
         total_credit=resultat.total_credit,
         equilibree=(resultat.total_debit == resultat.total_credit),
     )
+
+
+# --- Saisie manuelle d'écriture (OD), chantier P1 lot 1 -------------------------------------
+# Journal OD UNIQUEMENT — jamais un champ accepté, voir ecritures_od.py. Permissions existantes,
+# déjà attribuées à COMPTABLE (seed_security.py) : compta.ecriture.read/post/reverse.
+
+
+MESSAGE_ECRITURE_INTROUVABLE = "Écriture introuvable."
+
+
+def _vers_resume_ecriture(resultat: ecritures_od.EcritureAvecTotaux) -> EcritureODResume:
+    entry = resultat.entry
+    return EcritureODResume(
+        id=entry.id,
+        entry_number=entry.entry_number,
+        entry_date=entry.entry_date,
+        description=entry.description,
+        status=cast(Literal["brouillon", "validee"], entry.status),
+        nb_lignes=resultat.nb_lignes,
+        total_debit=resultat.total_debit,
+        total_credit=resultat.total_credit,
+        equilibree=(resultat.total_debit == resultat.total_credit),
+        est_contre_passation=entry.reversal_of_id is not None,
+        deja_contre_passee=resultat.deja_contre_passee,
+    )
+
+
+def _vers_detail_ecriture(db: Session, entry: JournalEntry) -> EcritureODDetail:
+    resultat = ecritures_od.avec_totaux(db, entry)
+    base = _vers_resume_ecriture(resultat)
+    lignes = ecritures_od.lignes_avec_compte(db, entry.id)
+    return EcritureODDetail(
+        **base.model_dump(),
+        lignes=[
+            LigneEcritureODDetail(
+                account_number=ligne.account_number,
+                name=ligne.name,
+                side=cast(Literal["D", "C"], ligne.side),
+                amount=ligne.amount,
+                label=ligne.label,
+            )
+            for ligne in lignes
+        ],
+    )
+
+
+def _charger_ecriture_od(db: Session, entry_id: uuid.UUID) -> JournalEntry:
+    entry = ecritures_od.charger_od(db, entry_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_ECRITURE_INTROUVABLE
+        )
+    return entry
+
+
+@router.get("/ecritures", response_model=PageEcrituresOD)
+def lister_ecritures_od_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.ecriture.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    taille: Annotated[
+        int, Query(ge=1, le=TAILLE_PAGE_ECRITURES_MAX)
+    ] = TAILLE_PAGE_ECRITURES_DEFAUT,
+) -> PageEcrituresOD:
+    """Les pièces du journal OD (saisie manuelle) — JAMAIS celles des autres journaux (CA/BQ/AN,
+    pilotées par les modules métier), voir ecritures_od.py."""
+    resultats, total = ecritures_od.lister_od(db, page=page, taille=taille)
+    return PageEcrituresOD(
+        lignes=[_vers_resume_ecriture(r) for r in resultats], total=total, page=page, taille=taille
+    )
+
+
+@router.get("/ecritures/{entry_id}", response_model=EcritureODDetail)
+def lire_ecriture_od_endpoint(
+    entry_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.ecriture.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> EcritureODDetail:
+    entry = _charger_ecriture_od(db, entry_id)
+    return _vers_detail_ecriture(db, entry)
+
+
+@router.post("/ecritures", response_model=EcritureODDetail, status_code=status.HTTP_201_CREATED)
+def creer_ecriture_od_endpoint(
+    corps: CreationEcritureOD,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.ecriture.post"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> EcritureODDetail:
+    """Crée un BROUILLON dans le journal OD — le SEUL journal autorisé à la saisie manuelle
+    (jamais un champ du corps de requête : voir ecritures_od.py). L'équilibre n'est pas exigé
+    ici (brouillon = espace de travail) — voir POST .../validation."""
+    try:
+        journal_id = ecritures_od.journal_od_id(db)
+        lignes = ecritures_od.resoudre_lignes(
+            db,
+            [
+                ecritures_od.LigneSaisieNumero(
+                    account_number=ligne.account_number,
+                    side=ligne.side,
+                    amount=ligne.amount,
+                    label=ligne.label,
+                )
+                for ligne in corps.lignes
+            ],
+        )
+        entry = ecritures.creer_brouillon(
+            db,
+            journal_id=journal_id,
+            entry_date=corps.entry_date,
+            description=corps.description,
+            lignes=lignes,
+            par=courant.user_id,
+        )
+        db.commit()
+    except (
+        JournalODIntrouvableError,
+        CompteInvalideRattachementError,
+        ecritures.AucunExerciceOuvertError,
+        ecritures.LigneInvalideError,
+        ecritures.CompteNonSaisissableError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    return _vers_detail_ecriture(db, entry)
+
+
+@router.post("/ecritures/{entry_id}/validation", response_model=EcritureODDetail)
+def valider_ecriture_od_endpoint(
+    entry_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.ecriture.post"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> EcritureODDetail:
+    """Bascule le brouillon en pièce VALIDÉE, IMMUABLE — le moteur exige l'équilibre et alloue
+    le numéro (voir ecritures.valider)."""
+    entry = _charger_ecriture_od(db, entry_id)
+    try:
+        ecritures.valider(db, entry, courant.user_id, contexte=_contexte(request))
+        db.commit()
+    except (
+        ecritures.PieceDejaValideeError,
+        ecritures.ExerciceError,
+        ecritures.PieceIncompleteError,
+        ecritures.PieceDesequilibreeError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    return _vers_detail_ecriture(db, entry)
+
+
+@router.post(
+    "/ecritures/{entry_id}/contre-passation",
+    response_model=EcritureODDetail,
+    status_code=status.HTTP_201_CREATED,
+)
+def contre_passer_ecriture_od_endpoint(
+    entry_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.ecriture.reverse"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> EcritureODDetail:
+    """Contre-passe une pièce VALIDÉE du journal OD : pose et valide la pièce inverse (D↔C),
+    la pièce d'origine reste intacte. Renvoie la pièce inverse (nouvelle ressource, 201)."""
+    entry = _charger_ecriture_od(db, entry_id)
+    try:
+        inverse = ecritures.contre_passer(db, entry, courant.user_id, contexte=_contexte(request))
+        db.commit()
+    except (
+        ecritures.PieceNonValideeError,
+        ecritures.PieceDejaContrePasseeError,
+        ecritures.AucunExerciceOuvertError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    return _vers_detail_ecriture(db, inverse)
+
+
+@router.delete("/ecritures/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+def supprimer_ecriture_od_endpoint(
+    entry_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.ecriture.post"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Supprime un BROUILLON (jamais une pièce validée — contre-passer, voir ecritures.py)."""
+    entry = _charger_ecriture_od(db, entry_id)
+    try:
+        ecritures.supprimer_brouillon(db, entry)
+        db.commit()
+    except ecritures.PieceDejaValideeError as erreur:
+        db.rollback()
+        raise _422(erreur) from None
 

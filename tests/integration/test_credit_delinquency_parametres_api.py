@@ -277,7 +277,10 @@ def test_creation_reussie_avec_motif_trace(client: TestClient, db: Session) -> N
         json={
             "code": "NOUVEAU",
             "libelle": "Palier intermédiaire",
-            "seuil_jours": 90,
+            # Valeur HORS barème seedé (RETARD 1j, SOUFFRANCE 90j, DOUTEUX 180j, IRRECOUVRABLE
+            # 360j) pour éviter la collision UNIQUE(seuil_jours) — jamais une valeur « entre »
+            # deux seuils réels, qui redeviendrait occupée au prochain ajustement du barème.
+            "seuil_jours": 9999,
             "taux_provision_bp": 2500,
             "compte_encours": None,
             "compte_dotation": None,
