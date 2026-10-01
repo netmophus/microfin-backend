@@ -1,22 +1,26 @@
 """Endpoints HTTP — Plan de comptes : Bloc 1 (consultation + gestion unitaire) + Bloc 2
 (import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
-(chantier P1, lot 1).
+(chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
-  - compte/écriture inexistant(e)                -> 404
+  - compte/écriture/exercice inexistant(e)       -> 404
   - numéro déjà utilisé / classe-numéro incohérente / parent invalide -> 422, message humain
   - garde-fou (système, mouvementé, enfants actifs) -> 422, message humain (service.py)
   - fichier CSV invalide / anomalies de validation -> 422, message humain (plan.py)
   - fichier changé entre l'aperçu et la confirmation -> 422, empreintes différentes
   - écriture : exercice fermé, pièce incomplète/déséquilibrée, déjà validée/contre-passée,
     compte de saisie invalide -> 422, message humain (ecritures.py / ecritures_od.py)
+  - clôture : exercice déjà clos, brouillons en attente, rien à clôturer, compte 591
+    introuvable -> 422, message humain (cloture_exercice.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
 en 2 temps) -> compta.plan.manage. Rapports -> compta.rapport.read. Saisie manuelle OD :
 lecture -> compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post ;
 contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
-COMPTABLE — seed_security.py).
+COMPTABLE — seed_security.py). Exercices (liste, aperçu de clôture, clôture) ->
+compta.exercice.manage, lecture et écriture confondues : ouvrir/clôturer un exercice est un
+acte de gestion, pas une simple consultation (permission déjà définie, sans route avant ce lot).
 """
 
 import uuid
@@ -40,7 +44,14 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.modules.audit.service import ecrire_audit
-from app.modules.comptabilite import comptes, ecritures, ecritures_od, plan, rapports
+from app.modules.comptabilite import (
+    cloture_exercice,
+    comptes,
+    ecritures,
+    ecritures_od,
+    plan,
+    rapports,
+)
 from app.modules.comptabilite.comptes import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
@@ -57,12 +68,15 @@ from app.modules.comptabilite.ecritures_od import (
     TAILLE_PAGE_MAX as TAILLE_PAGE_ECRITURES_MAX,
 )
 from app.modules.comptabilite.ecritures_od import JournalODIntrouvableError
-from app.modules.comptabilite.models import Account, JournalEntry
+from app.modules.comptabilite.models import Account, Exercice, JournalEntry
 from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
+    ApercuCloture,
     ApercuImportComptes,
     Balance,
+    BrouillonBloquantSchema,
     ChangementSens,
+    ClotureExerciceResultat,
     CompteApercuSchema,
     CompteDetail,
     CompteRapport,
@@ -76,9 +90,11 @@ from app.modules.comptabilite.schemas import (
     DiffChampSchema,
     EcritureODDetail,
     EcritureODResume,
+    ExerciceResume,
     LigneBalance,
     LigneEcritureODDetail,
     LigneGrandLivre,
+    LigneResultatCloture,
     ModificationCompte,
     PageComptes,
     PageEcrituresOD,
@@ -713,3 +729,116 @@ def supprimer_ecriture_od_endpoint(
         db.rollback()
         raise _422(erreur) from None
 
+
+# --- Clôture d'exercice, chantier P1 lot (b1) ------------------------------------------------
+# Clôture TECHNIQUE uniquement (comptes 6/7 -> 591). compta.exercice.manage pour les trois
+# routes : consulter la liste des exercices ou l'aperçu de clôture est déjà un acte de gestion
+# sur ce périmètre, pas une simple lecture comptable (à la différence de compta.rapport.read).
+
+
+MESSAGE_EXERCICE_INTROUVABLE = "Exercice introuvable."
+
+
+def _charger_exercice(db: Session, exercice_id: uuid.UUID) -> Exercice:
+    exercice = db.get(Exercice, exercice_id)
+    if exercice is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_EXERCICE_INTROUVABLE
+        )
+    return exercice
+
+
+def _vers_resume_exercice(exercice: Exercice) -> ExerciceResume:
+    return ExerciceResume(
+        id=exercice.id,
+        code=exercice.code,
+        label=exercice.label,
+        date_debut=exercice.date_debut,
+        date_fin=exercice.date_fin,
+        status=cast(Literal["ouvert", "clos"], exercice.status),
+    )
+
+
+@router.get("/exercices", response_model=list[ExerciceResume])
+def lister_exercices_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ExerciceResume]:
+    return [_vers_resume_exercice(e) for e in cloture_exercice.lister_exercices(db)]
+
+
+@router.get("/exercices/{exercice_id}/previsualisation-cloture", response_model=ApercuCloture)
+def previsualiser_cloture_endpoint(
+    exercice_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuCloture:
+    """Dry-run obligatoire avant toute clôture : résultat calculé, détail par compte, brouillons
+    bloquants éventuels. Ne pose rien, ne modifie rien."""
+    exercice = _charger_exercice(db, exercice_id)
+    apercu = cloture_exercice.previsualiser_cloture(db, exercice)
+    return ApercuCloture(
+        exercice=_vers_resume_exercice(exercice),
+        resultat=apercu.resultat,
+        compte_resultat=cloture_exercice.COMPTE_RESULTAT_INSTANCE,
+        lignes=[
+            LigneResultatCloture(
+                account_number=ligne.account_number,
+                name=ligne.name,
+                account_class=ligne.account_class,
+                total_debit=ligne.total_debit,
+                total_credit=ligne.total_credit,
+                side=cast(Literal["D", "C"], ligne.side),
+                amount=ligne.amount,
+            )
+            for ligne in apercu.lignes
+        ],
+        brouillons_bloquants=[
+            BrouillonBloquantSchema(
+                entry_id=b.entry_id,
+                journal_code=b.journal_code,
+                entry_date=b.entry_date,
+                description=b.description,
+            )
+            for b in apercu.brouillons_bloquants
+        ],
+        cloturable=apercu.cloturable,
+    )
+
+
+@router.post("/exercices/{exercice_id}/cloture", response_model=ClotureExerciceResultat)
+def cloturer_exercice_endpoint(
+    exercice_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClotureExerciceResultat:
+    """Exécute la clôture technique : voir cloture_exercice.cloturer_exercice pour l'ordre et les
+    refus possibles. Aucune confirmation supplémentaire côté API — l'aperçu (dry-run) ci-dessus
+    est la confirmation attendue avant cet appel, portée par l'écran."""
+    exercice = _charger_exercice(db, exercice_id)
+    try:
+        resultat = cloture_exercice.cloturer_exercice(
+            db, exercice, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except (
+        cloture_exercice.ExerciceDejaClosError,
+        cloture_exercice.BrouillonsBloquantsError,
+        cloture_exercice.RienAClorerError,
+        cloture_exercice.CompteResultatIntrouvableError,
+        ecritures.ExerciceError,
+        ecritures.CompteNonSaisissableError,
+        ecritures.LigneInvalideError,
+        ecritures.PieceIncompleteError,
+        ecritures.PieceDesequilibreeError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    entry_number = resultat.entry.entry_number
+    assert entry_number is not None  # valider() l'alloue toujours avant de rendre la main
+    return ClotureExerciceResultat(
+        exercice=_vers_resume_exercice(exercice),
+        entry_number=entry_number,
+        resultat=resultat.resultat,
+    )

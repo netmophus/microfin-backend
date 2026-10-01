@@ -238,3 +238,54 @@ class PageEcrituresOD(BaseModel):
     total: int
     page: int
     taille: int
+
+
+# --- Clôture d'exercice (chantier P1, lot b1) ------------------------------------------------
+# Clôture TECHNIQUE uniquement : solde les comptes de charges/produits (classe 6/7) vers 591
+# (« Excédent ou déficit en instance d'approbation »). L'affectation du résultat (591 -> 592/58,
+# après approbation de l'assemblée générale) est un lot SÉPARÉ (b2), pas codé ici.
+
+
+class ExerciceResume(BaseModel):
+    id: uuid.UUID
+    code: str
+    label: str
+    date_debut: date
+    date_fin: date
+    status: Literal["ouvert", "clos"]
+
+
+class LigneResultatCloture(BaseModel):
+    account_number: str
+    name: str
+    account_class: int
+    total_debit: int
+    total_credit: int
+    side: Literal["D", "C"]
+    amount: int
+
+
+class BrouillonBloquantSchema(BaseModel):
+    entry_id: uuid.UUID
+    journal_code: str
+    entry_date: date
+    description: str
+
+
+class ApercuCloture(BaseModel):
+    """Dry-run obligatoire avant la confirmation à l'écran — rien n'est posé ici."""
+
+    exercice: ExerciceResume
+    resultat: int
+    compte_resultat: str
+    lignes: list[LigneResultatCloture]
+    brouillons_bloquants: list[BrouillonBloquantSchema]
+    cloturable: bool
+
+
+class ClotureExerciceResultat(BaseModel):
+    """Résultat de l'exécution — l'exercice (désormais clos) et l'écriture de clôture posée."""
+
+    exercice: ExerciceResume
+    entry_number: str
+    resultat: int
