@@ -455,6 +455,11 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.rapprochement.read",
             "tiers.shares.read",
             "credit.product.read",
+            # Supervision de la souffrance (lecture seule, chantier lot 2) : le comptable tient
+            # déjà le paramétrage des paliers (compta.plan.read) — il doit pouvoir consulter la
+            # reclassification qui en découle, sans pouvoir l'exécuter (credit.delinquency.
+            # executer reste DIRECTION seule, acte d'institution).
+            "credit.delinquency.read",
         }
     ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
@@ -491,6 +496,10 @@ MATRICE: dict[str, frozenset[str]] = {
             "credit.demande.read",
             "credit.decaissement.create",
             "credit.remboursement.create",
+            # Supervision de la souffrance de SON agence (lecture seule, chantier lot 2) : il
+            # décaisse et encaisse déjà les crédits de son agence, il doit pouvoir suivre leur
+            # retard — l'exécution de la reclassification reste DIRECTION seule.
+            "credit.delinquency.read",
             # Contrôle des manquants de caisse de SON agence (lettre de demande d'explication) —
             # cloisonné, jamais perimetre.reseau (voir plus haut : c'est tout l'intérêt du rôle).
             "caisse.session.read.autres",
