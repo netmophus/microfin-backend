@@ -446,6 +446,7 @@ def lire_demande_endpoint(
         montant_decide=demande.montant_decide,
         decided_at=demande.decided_at,
         motif_decision=demande.motif_decision,
+        solde_at=demande.solde_at,
     )
 
 
@@ -568,6 +569,7 @@ def decider_endpoint(
         montant_decide=demande.montant_decide,
         decided_at=demande.decided_at,
         motif_decision=demande.motif_decision,
+        solde_at=demande.solde_at,
     )
 
 
@@ -691,6 +693,7 @@ def decaisser_endpoint(
         montant_decide=demande.montant_decide,
         decided_at=demande.decided_at,
         motif_decision=demande.motif_decision,
+        solde_at=demande.solde_at,
         disbursed_at=demande.disbursed_at,
         compte_credit_number=compte_credit_number,
         mode_decaissement=demande.mode_decaissement,

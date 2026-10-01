@@ -158,6 +158,10 @@ class DemandeDetail(DemandeResume):
     montant_decide: int | None
     decided_at: datetime | None
     motif_decision: str | None
+    # Solde anticipé (remboursement anticipé, lot D) : seule façon pour l'écran de savoir QUAND
+    # le statut 'solde' a été atteint — l'échéancier ne le dit pas (échéances futures jamais
+    # réécrites, voir remboursement.py).
+    solde_at: datetime | None
 
 
 class DecaissementCorps(BaseModel):
