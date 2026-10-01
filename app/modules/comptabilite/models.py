@@ -92,6 +92,10 @@ class Exercice(Base):
     # pas de colonne booléenne séparée, même patron que solde_at/solde_by (crédit, migration 0051).
     resultat_affecte_at: Mapped[datetime | None] = mapped_column(TS)
     resultat_affecte_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    # Génération des à-nouveaux (chantier P1, lot b2b, migration 0053). Posé sur l'exercice
+    # RECEVEUR (celui dont le bilan d'ouverture vient d'être chargé), pas sur la source.
+    a_nouveaux_generes_at: Mapped[datetime | None] = mapped_column(TS)
+    a_nouveaux_generes_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
 
     def __repr__(self) -> str:
         return f"<Exercice {self.code} {self.status}>"

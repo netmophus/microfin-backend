@@ -255,6 +255,7 @@ class ExerciceResume(BaseModel):
     date_fin: date
     status: Literal["ouvert", "clos"]
     resultat_affecte: bool
+    a_nouveaux_generes: bool
 
 
 class LigneResultatCloture(BaseModel):
@@ -324,3 +325,37 @@ class AffectationResultatResultat(BaseModel):
     entry_number: str
     montant: int
     ventilation: VentilationAffectation
+
+
+# --- À-nouveaux (chantier P1, lot b2b) --------------------------------------------------------
+# Report des soldes de clôture des comptes de BILAN (classes 1-5) de l'exercice source vers
+# l'exercice suivant, journal AN. Indépendant de l'affectation du résultat (b2a, décision actée).
+
+
+class LigneANouveauxSchema(BaseModel):
+    account_number: str
+    name: str
+    account_class: int
+    side: Literal["D", "C"]
+    amount: int
+
+
+class ApercuANouveaux(BaseModel):
+    """Dry-run : comptes à reporter, totaux, exercice suivant (et son état) s'il existe."""
+
+    exercice_source: ExerciceResume
+    exercice_suivant: ExerciceResume | None
+    lignes: list[LigneANouveauxSchema]
+    total_debit: int
+    total_credit: int
+    equilibre: bool
+    deja_genere: bool
+    generable: bool
+
+
+class ANouveauxResultat(BaseModel):
+    """Résultat de l'exécution — l'exercice suivant (désormais pourvu de ses à-nouveaux)."""
+
+    exercice_suivant: ExerciceResume
+    entry_number: str
+    total: int

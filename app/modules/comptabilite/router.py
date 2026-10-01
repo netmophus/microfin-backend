@@ -1,7 +1,7 @@
 """Endpoints HTTP — Plan de comptes : Bloc 1 (consultation + gestion unitaire) + Bloc 2
 (import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
 (chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1) + Affectation du
-résultat (chantier P1, lot b2a).
+résultat (chantier P1, lot b2a) + À-nouveaux (chantier P1, lot b2b).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
@@ -16,14 +16,17 @@ TABLE DES ERREURS (un seul endroit) :
     introuvable -> 422, message humain (cloture_exercice.py)
   - affectation : exercice non clos, déjà affecté, rien à affecter, ventilation incorrecte,
     compte de destination introuvable -> 422, message humain (affectation_resultat.py)
+  - à-nouveaux : exercice source non clos, exercice suivant absent/pas ouvert, déjà générés,
+    rien à reporter, bilan déséquilibré, journal AN introuvable -> 422, message humain
+    (a_nouveaux.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
 en 2 temps) -> compta.plan.manage. Rapports -> compta.rapport.read. Saisie manuelle OD :
 lecture -> compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post ;
 contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
-COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation — aperçus compris) ->
-compta.exercice.manage, lecture et écriture confondues : ces actes sont de la gestion, pas une
-simple consultation.
+COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation, à-nouveaux — aperçus
+compris) -> compta.exercice.manage, lecture et écriture confondues : ces actes sont de la
+gestion, pas une simple consultation.
 """
 
 import uuid
@@ -48,6 +51,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.audit.service import ecrire_audit
 from app.modules.comptabilite import (
+    a_nouveaux,
     affectation_resultat,
     cloture_exercice,
     comptes,
@@ -76,7 +80,9 @@ from app.modules.comptabilite.models import Account, Exercice, JournalEntry
 from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
     AffectationResultatResultat,
+    ANouveauxResultat,
     ApercuAffectation,
+    ApercuANouveaux,
     ApercuCloture,
     ApercuImportComptes,
     Balance,
@@ -97,6 +103,7 @@ from app.modules.comptabilite.schemas import (
     EcritureODDetail,
     EcritureODResume,
     ExerciceResume,
+    LigneANouveauxSchema,
     LigneBalance,
     LigneEcritureODDetail,
     LigneGrandLivre,
@@ -764,6 +771,7 @@ def _vers_resume_exercice(exercice: Exercice) -> ExerciceResume:
         date_fin=exercice.date_fin,
         status=cast(Literal["ouvert", "clos"], exercice.status),
         resultat_affecte=exercice.resultat_affecte_at is not None,
+        a_nouveaux_generes=exercice.a_nouveaux_generes_at is not None,
     )
 
 
@@ -926,5 +934,86 @@ def affecter_resultat_endpoint(
         entry_number=entry_number,
         montant=resultat.montant,
         ventilation=corps,
+    )
+
+
+# --- À-nouveaux, chantier P1 lot b2b -----------------------------------------------------------
+# Report du bilan de clôture (classes 1-5) de l'exercice source vers l'exercice suivant, journal
+# AN. compta.exercice.manage, même raisonnement que la clôture et l'affectation.
+
+
+@router.get("/exercices/{exercice_id}/previsualisation-a-nouveaux", response_model=ApercuANouveaux)
+def previsualiser_a_nouveaux_endpoint(
+    exercice_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuANouveaux:
+    """Dry-run : comptes à reporter, totaux, détection de l'exercice suivant et de son état
+    (absent, pas ouvert, déjà pourvu) — voir a_nouveaux.py. Ne pose rien."""
+    exercice = _charger_exercice(db, exercice_id)
+    apercu = a_nouveaux.previsualiser_a_nouveaux(db, exercice)
+    return ApercuANouveaux(
+        exercice_source=_vers_resume_exercice(exercice),
+        exercice_suivant=(
+            _vers_resume_exercice(apercu.exercice_suivant)
+            if apercu.exercice_suivant is not None
+            else None
+        ),
+        lignes=[
+            LigneANouveauxSchema(
+                account_number=ligne.account_number,
+                name=ligne.name,
+                account_class=ligne.account_class,
+                side=cast(Literal["D", "C"], ligne.side),
+                amount=ligne.amount,
+            )
+            for ligne in apercu.lignes
+        ],
+        total_debit=apercu.total_debit,
+        total_credit=apercu.total_credit,
+        equilibre=apercu.equilibre,
+        deja_genere=apercu.deja_genere,
+        generable=apercu.generable,
+    )
+
+
+@router.post("/exercices/{exercice_id}/a-nouveaux", response_model=ANouveauxResultat)
+def generer_a_nouveaux_endpoint(
+    exercice_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.exercice.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ANouveauxResultat:
+    """Exécute la génération : voir a_nouveaux.generer_a_nouveaux pour l'ordre des contrôles et
+    les refus possibles. Aucune confirmation supplémentaire côté API — l'aperçu (dry-run)
+    ci-dessus est la confirmation attendue avant cet appel, portée par l'écran."""
+    exercice = _charger_exercice(db, exercice_id)
+    try:
+        resultat = a_nouveaux.generer_a_nouveaux(
+            db, exercice, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except (
+        a_nouveaux.ExerciceSourceNonClosError,
+        a_nouveaux.ExerciceSuivantIntrouvableError,
+        a_nouveaux.ExerciceSuivantNonOuvertError,
+        a_nouveaux.ANouveauxDejaGeneresError,
+        a_nouveaux.RienAReporterError,
+        a_nouveaux.BilanDesequilibreError,
+        a_nouveaux.JournalANIntrouvableError,
+        ecritures.ExerciceError,
+        ecritures.CompteNonSaisissableError,
+        ecritures.LigneInvalideError,
+        ecritures.PieceIncompleteError,
+        ecritures.PieceDesequilibreeError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    entry_number = resultat.entry.entry_number
+    assert entry_number is not None  # valider() l'alloue toujours avant de rendre la main
+    return ANouveauxResultat(
+        exercice_suivant=_vers_resume_exercice(resultat.exercice_suivant),
+        entry_number=entry_number,
+        total=resultat.total,
     )
 
