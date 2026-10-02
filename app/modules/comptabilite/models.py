@@ -241,3 +241,29 @@ class JournalLine(Base):
     amount: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     label: Mapped[str | None] = mapped_column(sa.String(300))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+
+
+class FinancialStatementMapping(Base):
+    """Un compte → son poste de bilan/compte de résultat RCSFD (chantier P1, lot c). UNE ligne par
+    compte (`account_id` est la clé primaire) — jamais par préfixe, voir migration 0054."""
+
+    __tablename__ = "financial_statement_mapping"
+    __table_args__: tuple[Any, ...] = ({"schema": "comptabilite"},)
+
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT), primary_key=True)
+    etat: Mapped[str] = mapped_column(sa.String(10), nullable=False)
+    masse: Mapped[str] = mapped_column(sa.String(20), nullable=False)
+    poste_libelle: Mapped[str] = mapped_column(sa.String(200), nullable=False)
+    poste_ordre: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False)
+    # Même discipline que security.roles.gere_manuellement : une fois ajustée à la main (écran
+    # d'admin), une ligne n'est plus jamais réécrite par le seed.
+    gere_manuellement: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, server_default=sa.false()
+    )
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<FinancialStatementMapping {self.account_id} {self.etat}/{self.masse}>"

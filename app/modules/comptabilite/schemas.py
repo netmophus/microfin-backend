@@ -359,3 +359,76 @@ class ANouveauxResultat(BaseModel):
     exercice_suivant: ExerciceResume
     entry_number: str
     total: int
+
+
+# --- États financiers : bilan + compte de résultat (chantier P1, dernier lot) ----------------
+# Mapping compte -> poste en base (comptabilite.financial_statement_mapping), seedé depuis
+# docs/reference/plan_comptable_enrichi.csv. CONTRA_ACTIF vient en déduction de l'actif, jamais
+# au passif (décision actée) — voir etats_financiers.py.
+
+MasseEtat = Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT"]
+
+
+class LignePosteSchema(BaseModel):
+    poste_libelle: str
+    poste_ordre: int
+    masse: MasseEtat
+    montant: int
+
+
+class CompteNonMappeSchema(BaseModel):
+    account_number: str
+    name: str
+    account_class: int
+    solde: int
+
+
+class BilanSchema(BaseModel):
+    date: date
+    actif: list[LignePosteSchema]
+    passif: list[LignePosteSchema]
+    total_actif_brut: int
+    total_contra_actif: int
+    total_actif_net: int
+    total_passif: int
+    ecart: int
+    equilibre: bool
+    comptes_non_mappes: list[CompteNonMappeSchema]
+
+
+class CompteResultatSchema(BaseModel):
+    exercice: ExerciceResume
+    date_debut: date
+    date_fin: date
+    exercice_clos: bool
+    charges: list[LignePosteSchema]
+    produits: list[LignePosteSchema]
+    total_charges: int
+    total_produits: int
+    resultat_net: int
+    source_resultat: Literal["periode", "cloture"]
+    comptes_non_mappes: list[CompteNonMappeSchema]
+
+
+# --- Administration du mapping (optionnel, lot c) --------------------------------------------
+
+
+class LigneMappingAdmin(BaseModel):
+    account_id: uuid.UUID
+    account_number: str
+    name: str
+    account_class: int
+    etat: Literal["BILAN", "RESULTAT"]
+    masse: Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT", "MIXTE"]
+    poste_libelle: str
+    poste_ordre: int
+    gere_manuellement: bool
+
+
+class ModificationMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    etat: Literal["BILAN", "RESULTAT"]
+    masse: Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT", "MIXTE"]
+    poste_libelle: str = Field(min_length=1, max_length=200)
+    poste_ordre: int = Field(ge=0, le=32767)

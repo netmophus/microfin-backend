@@ -1,11 +1,12 @@
 """Endpoints HTTP — Plan de comptes : Bloc 1 (consultation + gestion unitaire) + Bloc 2
 (import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
 (chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1) + Affectation du
-résultat (chantier P1, lot b2a) + À-nouveaux (chantier P1, lot b2b).
+résultat (chantier P1, lot b2a) + À-nouveaux (chantier P1, lot b2b) + États financiers, bilan et
+compte de résultat (chantier P1, dernier lot).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
-  - compte/écriture/exercice inexistant(e)       -> 404
+  - compte/écriture/exercice/mapping inexistant(e) -> 404
   - numéro déjà utilisé / classe-numéro incohérente / parent invalide -> 422, message humain
   - garde-fou (système, mouvementé, enfants actifs) -> 422, message humain (service.py)
   - fichier CSV invalide / anomalies de validation -> 422, message humain (plan.py)
@@ -19,10 +20,13 @@ TABLE DES ERREURS (un seul endroit) :
   - à-nouveaux : exercice source non clos, exercice suivant absent/pas ouvert, déjà générés,
     rien à reporter, bilan déséquilibré, journal AN introuvable -> 422, message humain
     (a_nouveaux.py)
+  - états financiers : aucune, bilan/compte de résultat se calculent toujours (un déséquilibre
+    ou des comptes non mappés sont SIGNALÉS dans la réponse, jamais une erreur HTTP)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
-en 2 temps) -> compta.plan.manage. Rapports -> compta.rapport.read. Saisie manuelle OD :
-lecture -> compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post ;
+en 2 temps, mapping états financiers) -> compta.plan.manage. Rapports (grand livre, balance,
+bilan, compte de résultat) -> compta.rapport.read. Saisie manuelle OD : lecture ->
+compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post ;
 contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
 COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation, à-nouveaux — aperçus
 compris) -> compta.exercice.manage, lecture et écriture confondues : ces actes sont de la
@@ -57,6 +61,7 @@ from app.modules.comptabilite import (
     comptes,
     ecritures,
     ecritures_od,
+    etats_financiers,
     plan,
     rapports,
 )
@@ -76,7 +81,12 @@ from app.modules.comptabilite.ecritures_od import (
     TAILLE_PAGE_MAX as TAILLE_PAGE_ECRITURES_MAX,
 )
 from app.modules.comptabilite.ecritures_od import JournalODIntrouvableError
-from app.modules.comptabilite.models import Account, Exercice, JournalEntry
+from app.modules.comptabilite.models import (
+    Account,
+    Exercice,
+    FinancialStatementMapping,
+    JournalEntry,
+)
 from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
     AffectationResultatResultat,
@@ -86,12 +96,15 @@ from app.modules.comptabilite.schemas import (
     ApercuCloture,
     ApercuImportComptes,
     Balance,
+    BilanSchema,
     BrouillonBloquantSchema,
     ChangementSens,
     ClotureExerciceResultat,
     CompteApercuSchema,
     CompteDetail,
+    CompteNonMappeSchema,
     CompteRapport,
+    CompteResultatSchema,
     CompteResume,
     CompteSelecteur,
     CompteSelecteurRapport,
@@ -107,8 +120,11 @@ from app.modules.comptabilite.schemas import (
     LigneBalance,
     LigneEcritureODDetail,
     LigneGrandLivre,
+    LigneMappingAdmin,
+    LignePosteSchema,
     LigneResultatCloture,
     ModificationCompte,
+    ModificationMapping,
     PageComptes,
     PageEcrituresOD,
     PageGrandLivre,
@@ -1016,4 +1032,142 @@ def generer_a_nouveaux_endpoint(
         entry_number=entry_number,
         total=resultat.total,
     )
+
+
+# --- États financiers : bilan + compte de résultat, chantier P1 dernier lot -------------------
+# Lecture pure, compta.rapport.read — même périmètre que grand livre/balance.
+
+
+def _vers_ligne_poste(ligne: etats_financiers.LignePoste) -> LignePosteSchema:
+    return LignePosteSchema(
+        poste_libelle=ligne.poste_libelle,
+        poste_ordre=ligne.poste_ordre,
+        masse=cast(
+            Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT"], ligne.masse
+        ),
+        montant=ligne.montant,
+    )
+
+
+def _vers_compte_non_mappe(compte: etats_financiers.CompteNonMappe) -> CompteNonMappeSchema:
+    return CompteNonMappeSchema(
+        account_number=compte.account_number,
+        name=compte.name,
+        account_class=compte.account_class,
+        solde=compte.solde,
+    )
+
+
+@router.get("/etats/bilan", response_model=BilanSchema)
+def bilan_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    date_param: Annotated[
+        date | None, Query(alias="date", description="Par défaut : aujourd'hui.")
+    ] = None,
+) -> BilanSchema:
+    """Bilan à une date — solde cumulé depuis l'origine de chaque compte de bilan, CONTRA_ACTIF
+    déduit de l'actif. Voir etats_financiers.bilan."""
+    resultat = etats_financiers.bilan(db, date_param)
+    return BilanSchema(
+        date=resultat.date,
+        actif=[_vers_ligne_poste(ligne) for ligne in resultat.actif],
+        passif=[_vers_ligne_poste(ligne) for ligne in resultat.passif],
+        total_actif_brut=resultat.total_actif_brut,
+        total_contra_actif=resultat.total_contra_actif,
+        total_actif_net=resultat.total_actif_net,
+        total_passif=resultat.total_passif,
+        ecart=resultat.ecart,
+        equilibre=resultat.equilibre,
+        comptes_non_mappes=[_vers_compte_non_mappe(c) for c in resultat.comptes_non_mappes],
+    )
+
+
+@router.get("/etats/compte-resultat", response_model=CompteResultatSchema)
+def compte_resultat_endpoint(
+    exercice_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> CompteResultatSchema:
+    """Compte de résultat d'un exercice — agrégation 6/7 sur la période s'il est ouvert, résultat
+    re-dérivé depuis la pièce de clôture (591) s'il est clos. Voir
+    etats_financiers.compte_resultat."""
+    exercice = _charger_exercice(db, exercice_id)
+    resultat = etats_financiers.compte_resultat(db, exercice)
+    return CompteResultatSchema(
+        exercice=_vers_resume_exercice(exercice),
+        date_debut=resultat.date_debut,
+        date_fin=resultat.date_fin,
+        exercice_clos=resultat.exercice_clos,
+        charges=[_vers_ligne_poste(ligne) for ligne in resultat.charges],
+        produits=[_vers_ligne_poste(ligne) for ligne in resultat.produits],
+        total_charges=resultat.total_charges,
+        total_produits=resultat.total_produits,
+        resultat_net=resultat.resultat_net,
+        source_resultat=cast(Literal["periode", "cloture"], resultat.source_resultat),
+        comptes_non_mappes=[_vers_compte_non_mappe(c) for c in resultat.comptes_non_mappes],
+    )
+
+
+# --- Administration du mapping états financiers, compta.plan.manage ---------------------------
+
+
+MESSAGE_MAPPING_INTROUVABLE = "Aucune ligne de mapping pour ce compte."
+
+
+def _vers_ligne_mapping(compte: Account, mapping: FinancialStatementMapping) -> LigneMappingAdmin:
+    return LigneMappingAdmin(
+        account_id=mapping.account_id,
+        account_number=compte.account_number,
+        name=compte.name,
+        account_class=compte.account_class,
+        etat=cast(Literal["BILAN", "RESULTAT"], mapping.etat),
+        masse=cast(
+            Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT", "MIXTE"],
+            mapping.masse,
+        ),
+        poste_libelle=mapping.poste_libelle,
+        poste_ordre=mapping.poste_ordre,
+        gere_manuellement=mapping.gere_manuellement,
+    )
+
+
+@router.get("/etats/mapping", response_model=list[LigneMappingAdmin])
+def lister_mapping_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[LigneMappingAdmin]:
+    return [
+        _vers_ligne_mapping(compte, mapping)
+        for compte, mapping in etats_financiers.lister_mapping(db)
+    ]
+
+
+@router.patch("/etats/mapping/{account_id}", response_model=LigneMappingAdmin)
+def modifier_mapping_endpoint(
+    account_id: uuid.UUID,
+    corps: ModificationMapping,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> LigneMappingAdmin:
+    """Ajuste une ligne À LA MAIN — verrouille contre le seed (gere_manuellement = TRUE)."""
+    try:
+        mapping = etats_financiers.modifier_mapping(
+            db,
+            account_id,
+            etat=corps.etat,
+            masse=corps.masse,
+            poste_libelle=corps.poste_libelle,
+            poste_ordre=corps.poste_ordre,
+            par=courant.user_id,
+        )
+        db.commit()
+    except etats_financiers.MappingIntrouvableError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_MAPPING_INTROUVABLE
+        ) from erreur
+    compte = db.get(Account, account_id)
+    assert compte is not None
+    return _vers_ligne_mapping(compte, mapping)
 

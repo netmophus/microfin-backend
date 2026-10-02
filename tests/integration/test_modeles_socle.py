@@ -32,6 +32,7 @@ from app.modules.comptabilite.models import (
     EntrySchema,
     EntrySchemaLine,
     Exercice,
+    FinancialStatementMapping,
     Journal,
     JournalEntry,
     JournalLine,
@@ -145,6 +146,8 @@ TABLES_ATTENDUES = frozenset(
         # Épargne E1 — pont comptable : modèles d'écriture (migration 0020).
         "comptabilite.entry_schemas",
         "comptabilite.entry_schema_lines",
+        # Mapping comptes -> postes d'états financiers, chantier P1 lot c (migration 0054).
+        "comptabilite.financial_statement_mapping",
         # Épargne E0+E2 — produits, comptes, mouvements, numérotation (migration 0018).
         "epargne.products",
         "epargne.accounts",
@@ -232,6 +235,7 @@ MODELES = [
     JournalLine,
     EntrySchema,
     EntrySchemaLine,
+    FinancialStatementMapping,
     Product,
     SavingsAccount,
     SavingsMovement,

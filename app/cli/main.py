@@ -26,6 +26,10 @@ from app.cli.seed_dev import (
     executer_seed_dev,
 )
 from app.cli.seed_epargne import executer_seed_produits
+from app.cli.seed_financial_statement_mapping import (
+    FichierMappingInvalideError,
+    executer_seed_mapping_etats,
+)
 from app.cli.seed_security import executer_seed
 from app.core.config import settings
 from app.core.database import SessionLocal
@@ -228,6 +232,34 @@ def seed_epargne() -> None:
     typer.secho(
         "  PROVISOIRES — à valider/compléter par l'IMF (taux, règles).", fg=typer.colors.YELLOW
     )
+    typer.echo("")
+
+
+@app.command("seed-mapping-etats")
+def seed_mapping_etats() -> None:
+    """Installe/complète le mapping comptes -> postes d'états financiers (bilan, compte de
+    résultat) depuis docs/reference/plan_comptable_enrichi.csv. NON DESTRUCTIF : une ligne déjà
+    ajustée à la main (écran d'admin) n'est jamais réécrite. Idempotente."""
+    with SessionLocal() as db:
+        try:
+            rapport = executer_seed_mapping_etats(db)
+        except FichierMappingInvalideError as erreur:
+            db.rollback()
+            typer.secho(f"Fichier invalide : {erreur.args[0]}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from None
+        db.commit()
+    typer.echo("")
+    typer.secho(
+        f"  Mapping états financiers à jour : {rapport.nb_lignes_csv} compte(s) du CSV.",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    if rapport.nb_geres_manuellement_ignores:
+        typer.secho(
+            f"  {rapport.nb_geres_manuellement_ignores} ligne(s) ajustée(s) à la main, non "
+            "réécrite(s).",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo("")
 
 

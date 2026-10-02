@@ -1,0 +1,394 @@
+﻿account_number;name;class;normal_side;is_posting;etat;masse;poste_libelle
+10;VALEURS EN CAISSE;1;D;FALSE;BILAN;ACTIF;Valeurs en caisse
+101;Billets et monnaies;1;D;FALSE;BILAN;ACTIF;Valeurs en caisse
+1011;Billets et monnaies émis par la BCEAO;1;D;FALSE;BILAN;ACTIF;Valeurs en caisse
+101111;Caisse (agence);1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
+101112;Caisse GAB;1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
+101114;Caisse principale (demo dev);1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
+101115;Coffre (demo dev);1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
+11;COMPTES ORDINAIRES CHEZ LES INSTITUTIONS FINANCIERES;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+113;Centre des Chèques postaux;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1131;Centre des Chèques postaux;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1136;Dettes rattachées;1;C;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1137;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+114;Banques et correspondants;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1141;Banques et correspondants;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1146;Dettes rattachées;1;C;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1147;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+116;Systèmes Financiers Décentralisés;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1161;Systèmes Financiers Décentralisés;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1166;Dettes rattachées;1;C;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1167;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+117;Autres institutions financières;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1171;Autres institutions financières;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1176;Dettes rattachées;1;C;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1177;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+12;AUTRES COMPTES DE DEPOTS CHEZ LES INSTITUTIONS FINANCIERES;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+126;Dépôts à terme constitués;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1261;Dépôts à terme constitués;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1267;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+127;Dépôts de garantie constitués;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1271;Dépôts de garantie constitués;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1277;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+128;Autres dépôts constitués;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
+1281;Autres dépôts constitués;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+1287;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
+13;COMPTES DE PRETS AUX INSTITUTIONS FINANCIERES;1;D;FALSE;BILAN;ACTIF;Prets aux institutions financieres
+131;Prêts à moins d’1 an;1;D;FALSE;BILAN;ACTIF;Prets aux institutions financieres
+1311;Prêts à moins d’1 an;1;D;TRUE;BILAN;ACTIF;Prets aux institutions financieres
+1317;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Prets aux institutions financieres
+133;Prêts à terme;1;D;FALSE;BILAN;ACTIF;Prets aux institutions financieres
+1331;Prêts à terme;1;D;TRUE;BILAN;ACTIF;Prets aux institutions financieres
+1337;Créances rattachées;1;D;TRUE;BILAN;ACTIF;Prets aux institutions financieres
+15;COMPTES ORDINAIRES DES INSTITUTIONS FINANCIERES;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+154;Banques et correspondants;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1541;Banques et correspondants;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1546;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1547;Créances rattachées;1;D;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+156;Systèmes Financiers Décentralisés;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1561;Systèmes Financiers Décentralisés;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1566;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1567;Créances rattachées;1;D;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+157;Autres institutions financières;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1571;Autres institutions financières;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1576;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1577;Créances rattachées;1;D;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+16;AUTRES COMPTES DE DEPOTS DES INSTITUTIONS FINANCIERES;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+161;Dépôts à terme reçus;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1611;Dépôts à terme reçus;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1616;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+162;Dépôts de garantie reçus;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1621;Dépôts de garantie reçus;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1626;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+165;Autres dépôts reçus;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1651;Autres dépôts reçus;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1656;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+17;COMPTES D'EMPRUNTS ET AUTRES SOMMES DUES AUX INSTITUTIONS FINANCIERES;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+175;Emprunts à moins d’un an;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1751;Emprunts à moins d’un an;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1756;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+178;Emprunts à terme;1;C;FALSE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1781;Emprunts à terme;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+1786;Dettes rattachées;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+179;Autres sommes dues aux institutions financières;1;C;TRUE;BILAN;PASSIF;Depots et emprunts des institutions financieres
+18;RESSOURCES AFFECTEES;1;C;FALSE;BILAN;PASSIF;Ressources affectees
+181;Ressources affectées à court terme;1;C;TRUE;BILAN;PASSIF;Ressources affectees
+182;Ressources affectées à moyen terme;1;C;TRUE;BILAN;PASSIF;Ressources affectees
+183;Ressources affectées à long terme;1;C;TRUE;BILAN;PASSIF;Ressources affectees
+184;Intérêts capitalisés;1;C;TRUE;BILAN;PASSIF;Ressources affectees
+19;COMPTES DE PRETS EN SOUFFRANCE ET IMMOBILISES;1;D;FALSE;BILAN;ACTIF;Prets en souffrance et immobilises
+191;Prêts immobilisés;1;D;TRUE;BILAN;ACTIF;Prets en souffrance et immobilises
+192;Prêts en souffrance de 6 mois au plus;1;D;FALSE;BILAN;ACTIF;Prets en souffrance et immobilises
+1921;Prêts en souffrance de 0 à 3 mois au plus;1;D;TRUE;BILAN;ACTIF;Prets en souffrance et immobilises
+1922;Prêts en souffrance de plus de 3 mois à 6 mois au plus;1;D;TRUE;BILAN;ACTIF;Prets en souffrance et immobilises
+193;Prêts en souffrance de plus de 6 mois à 12 mois au plus;1;D;TRUE;BILAN;ACTIF;Prets en souffrance et immobilises
+194;Prêts en souffrance de plus de 12 mois à 24 mois au plus;1;D;TRUE;BILAN;ACTIF;Prets en souffrance et immobilises
+199;Provisions sur prêts en souffrance;1;C;FALSE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+1991;Provisions sur prêts en souffrance de 6 mois au plus;1;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+1992;Provisions sur prêts en souffrance de plus de 6 mois à 12 mois au plus;1;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+1993;Provisions sur prêts en souffrance de plus de 12 mois à 24 mois au plus;1;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+20;CREDITS AUX MEMBRES, BENEFICIAIRES OU CLIENTS;2;D;FALSE;BILAN;ACTIF;Credits sains aux membres et clients
+202;Crédits à court terme;2;D;FALSE;BILAN;ACTIF;Credits sains aux membres et clients
+2022;Crédits ordinaires;2;D;FALSE;BILAN;ACTIF;Credits sains aux membres et clients
+202211;Crédits ordinaires court terme — membres;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+202221;Crédits ordinaires court terme — clients;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+20227;Créances rattachées;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+2023;Découverts;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+203;Crédits à moyen terme;2;D;FALSE;BILAN;ACTIF;Credits sains aux membres et clients
+2031;Crédits à moyen terme;2;D;FALSE;BILAN;ACTIF;Credits sains aux membres et clients
+203111;Crédits moyen terme — membres;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+203121;Crédits moyen terme — clients;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+2037;Créances rattachées;2;D;TRUE;BILAN;ACTIF;Credits sains aux membres et clients
+25;COMPTES DES MEMBRES, BENEFICIAIRES OU CLIENTS;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+251;Comptes ordinaires;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+2511;Comptes ordinaires;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+251111;Comptes ordinaires — membres;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+251121;Comptes ordinaires — clients;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+25116;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+25117;Créances rattachées;2;D;TRUE;BILAN;PASSIF;Depots des membres et clients
+2512;Comptes ordinaires sur livret;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+251211;Comptes ordinaires sur livret — membres;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+251221;Comptes ordinaires sur livret — clients;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+25126;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+252;Dépôts à terme reçus;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+2521;Dépôts à terme reçus;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+252111;Dépôts à terme reçus — membres;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+252121;Dépôts à terme reçus — clients;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+2526;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+253;Comptes d'épargne à régime spécial (livrets d'épargne, comptes d'épargne-logement, plan d'épargne-logement);2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+2531;Compte d’épargne sur livret;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+253111;Compte d'épargne sur livret — membres;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+253121;Compte d'épargne sur livret — clients;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+25316;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+254;Dépôts de garantie reçus;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+2545;Dépôts de garantie reçus;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+2546;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+255;Autres dépôts reçus;2;C;FALSE;BILAN;PASSIF;Depots des membres et clients
+2551;Autres dépôts reçus;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+2556;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Depots des membres et clients
+27;EMPRUNTS ET AUTRES SOMMES DUES AUX MEMBRES, BENEFICIAIRES OU CLIENTS;2;C;FALSE;BILAN;PASSIF;Emprunts aux membres et clients
+271;Emprunts aux membres, bénéficiaires ou clients;2;C;FALSE;BILAN;PASSIF;Emprunts aux membres et clients
+2711;Emprunts;2;C;TRUE;BILAN;PASSIF;Emprunts aux membres et clients
+2716;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Emprunts aux membres et clients
+272;Autres sommes dues aux membres, bénéficiaires ou clients;2;C;FALSE;BILAN;PASSIF;Emprunts aux membres et clients
+2721;Dispositions à payer;2;C;TRUE;BILAN;PASSIF;Emprunts aux membres et clients
+2722;Provisions pour chèques certifiés;2;C;TRUE;BILAN;PASSIF;Emprunts aux membres et clients
+2725;Divers;2;C;TRUE;BILAN;PASSIF;Emprunts aux membres et clients
+2726;Dettes rattachées;2;C;TRUE;BILAN;PASSIF;Emprunts aux membres et clients
+29;COMPTES DE CREDITS EN SOUFFRANCE;2;D;FALSE;BILAN;ACTIF;Credits en souffrance
+291;Crédits immobilisés;2;D;TRUE;BILAN;ACTIF;Credits en souffrance
+292;Crédits en souffrance de 6 mois au plus;2;D;TRUE;BILAN;ACTIF;Credits en souffrance
+293;Crédits en souffrance de plus de 6 mois à 12 mois au plus;2;D;TRUE;BILAN;ACTIF;Credits en souffrance
+294;Crédits en souffrance de plus de 12 mois à 24 mois au plus;2;D;TRUE;BILAN;ACTIF;Credits en souffrance
+299;Provisions sur crédits en souffrance;2;C;FALSE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+2991;Provisions sur crédits en souffrance de 6 mois au plus;2;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+2992;Provisions sur crédits en souffrance de plus de 6 mois à 12 mois au plus;2;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+2993;Provisions sur crédits en souffrance de plus de 12 mois;2;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+30;TITRES DE PLACEMENT;3;D;FALSE;BILAN;ACTIF;Titres de placement
+305;Versements restant à effectuer;3;D;TRUE;BILAN;ACTIF;Titres de placement
+307;Créances rattachées;3;D;TRUE;BILAN;ACTIF;Titres de placement
+309;Provisions pour dépréciation;3;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+32;COMPTES DE STOCKS ET EMPLOIS DIVERS;3;D;FALSE;BILAN;ACTIF;Stocks et emplois divers
+321;Stocks de biens meubles;3;D;FALSE;BILAN;ACTIF;Stocks et emplois divers
+3211;Stocks de biens meubles;3;D;TRUE;BILAN;ACTIF;Stocks et emplois divers
+3219;Provisions pour dépréciation;3;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+322;Stocks de marchandises;3;D;FALSE;BILAN;ACTIF;Stocks et emplois divers
+3221;Stocks de marchandises;3;D;TRUE;BILAN;ACTIF;Stocks et emplois divers
+3229;Provisions pour dépréciation;3;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+323;Stocks de fournitures;3;D;FALSE;BILAN;ACTIF;Stocks et emplois divers
+3231;Stocks de fournitures;3;D;TRUE;BILAN;ACTIF;Stocks et emplois divers
+3239;Provisions pour dépréciation;3;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+33;DEBITEURS ET CREDITEURS DIVERS;3;D;FALSE;BILAN;MIXTE;Debiteurs et crediteurs divers (regroupement)
+331;Débiteurs divers;3;D;FALSE;BILAN;ACTIF;Debiteurs divers
+3319;Autres créances en souffrance et provisions pour dépréciation;3;D;TRUE;BILAN;ACTIF;Debiteurs divers
+332;Créditeurs divers;3;C;TRUE;BILAN;PASSIF;Crediteurs divers
+37;COMPTES TRANSITOIRES ET D'ATTENTE;3;D;FALSE;BILAN;ACTIF;Comptes transitoires et d'attente - actif
+378;Autres comptes transitoires;3;D;TRUE;BILAN;ACTIF;Comptes transitoires et d'attente - actif
+378100;Virements internes de fonds - transit caisses;3;D;TRUE;BILAN;ACTIF;Comptes transitoires et d'attente - actif
+379;Comptes d'attente;3;D;FALSE;BILAN;ACTIF;Comptes d'attente - actif
+3791;Comptes d'attente - actif;3;D;TRUE;BILAN;ACTIF;Comptes d'attente - actif
+379110;Ecart de transfert - manquant;3;D;TRUE;BILAN;ACTIF;Comptes d'attente - actif
+3792;Comptes d'attente - passif;3;C;TRUE;BILAN;PASSIF;Comptes d'attente - passif
+379210;Ecart de transfert - excedent;3;C;TRUE;BILAN;PASSIF;Comptes d'attente - passif
+38;COMPTES DE REGULARISATION;3;D;FALSE;BILAN;MIXTE;Comptes de regularisation (regroupement)
+381;Comptes de régularisation - actif;3;D;FALSE;BILAN;ACTIF;Comptes de regularisation - actif
+3811;Charges à répartir sur plusieurs exercices;3;D;TRUE;BILAN;ACTIF;Comptes de regularisation - actif
+3812;Charges constatées d'avance;3;D;TRUE;BILAN;ACTIF;Comptes de regularisation - actif
+3814;Comptes d'abonnement de produits;3;D;TRUE;BILAN;ACTIF;Comptes de regularisation - actif
+3815;Produits à recevoir;3;D;TRUE;BILAN;ACTIF;Comptes de regularisation - actif
+382;Comptes de régularisation - passif;3;C;FALSE;BILAN;PASSIF;Comptes de regularisation - passif
+3822;Produits constatés d'avance;3;C;TRUE;BILAN;PASSIF;Comptes de regularisation - passif
+3824;Comptes d'abonnement de charges;3;C;TRUE;BILAN;PASSIF;Comptes de regularisation - passif
+3825;Charges à payer;3;C;TRUE;BILAN;PASSIF;Comptes de regularisation - passif
+41;IMMOBILISATIONS FINANCIERES;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
+412;Titres de participation;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
+4126;Versements restant à effectuer;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
+4127;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
+4129;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+42;DEPOTS ET CAUTIONNEMENTS;4;D;FALSE;BILAN;ACTIF;Depots et cautionnements
+421;Dépôts et cautionnements;4;D;TRUE;BILAN;ACTIF;Depots et cautionnements
+427;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Depots et cautionnements
+429;Provisions pour dépréciation des dépôts et cautionnements;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+43;IMMOBILISATIONS EN COURS;4;D;FALSE;BILAN;ACTIF;Immobilisations en cours
+431;Immobilisations incorporelles en cours;4;D;FALSE;BILAN;ACTIF;Immobilisations en cours
+4311;Immobilisations incorporelles en cours;4;D;TRUE;BILAN;ACTIF;Immobilisations en cours
+4319;Provisions pour dépréciation;4;D;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+432;Immobilisations corporelles en cours;4;D;FALSE;BILAN;ACTIF;Immobilisations en cours
+4321;Immobilisations corporelles en cours;4;D;TRUE;BILAN;ACTIF;Immobilisations en cours
+4329;Provisions pour dépréciation;4;D;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+44;IMMOBILISATIONS D'EXPLOITATION;4;D;FALSE;BILAN;ACTIF;Immobilisations d'exploitation
+441;Immobilisations incorporelles;4;D;FALSE;BILAN;ACTIF;Immobilisations d'exploitation
+4418;Amortissements;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+4419;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+442;Immobilisations corporelles;4;D;FALSE;BILAN;ACTIF;Immobilisations d'exploitation
+4428;Amortissements des immobilisations corporelles;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+4429;Provisions pour dépréciation des immobilisations corporelles;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+50;SUBVENTIONS ET AUTRES FONDS RECUS;5;C;FALSE;BILAN;PASSIF;Subventions et fonds recus
+501;Subventions d'investissement;5;C;FALSE;BILAN;PASSIF;Subventions et fonds recus
+5011;Subventions d'investissement;5;C;TRUE;BILAN;PASSIF;Subventions et fonds recus
+5012;Subventions d'investissement virées au compte de résultat;5;C;TRUE;BILAN;PASSIF;Subventions et fonds recus
+502;Fonds affectés (Fonds de garantie, fonds d'assurance, fonds de bonification, fonds de sécurité);5;C;TRUE;BILAN;PASSIF;Subventions et fonds recus
+503;Fonds de crédit;5;C;TRUE;BILAN;PASSIF;Subventions et fonds recus
+51;PROVISIONS POUR RISQUES ET CHARGES;5;C;FALSE;BILAN;PASSIF;Provisions pour risques et charges
+511;Provisions pour charges de retraite;5;C;TRUE;BILAN;PASSIF;Provisions pour risques et charges
+519;Autres provisions pour risques et charges;5;C;TRUE;BILAN;PASSIF;Provisions pour risques et charges
+52;PROVISIONS REGLEMENTEES;5;C;FALSE;BILAN;PASSIF;Provisions reglementees
+521;Provisions pour risques afférents aux opérations de crédits à moyen et long termes;5;C;TRUE;BILAN;PASSIF;Provisions reglementees
+53;EMPRUNTS ET TITRES EMIS SUBORDONNES;5;C;FALSE;BILAN;PASSIF;Emprunts et titres emis subordonnes
+532;Emprunts et titres émis subordonnés;5;C;TRUE;BILAN;PASSIF;Emprunts et titres emis subordonnes
+536;Dettes rattachées;5;C;TRUE;BILAN;PASSIF;Emprunts et titres emis subordonnes
+54;FONDS POUR RISQUES FINANCIERS GENERAUX;5;C;TRUE;BILAN;PASSIF;Fonds pour risques financiers generaux
+55;PRIMES LIEES AU CAPITAL ET RESERVES;5;C;FALSE;BILAN;PASSIF;Capital, primes et reserves
+551;Primes liées au capital;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
+552;Réserves;5;C;FALSE;BILAN;PASSIF;Capital, primes et reserves
+5521;Réserve générale;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
+5522;Réserves facultatives;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
+5523;Autres réserves;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
+56;FONDS DE DOTATION;5;C;TRUE;BILAN;PASSIF;Fonds de dotation
+57;CAPITAL SOCIAL;5;C;FALSE;BILAN;PASSIF;Capital social
+571;Capital;5;C;FALSE;BILAN;PASSIF;Capital social
+5711;Capital souscrit appelé;5;C;FALSE;BILAN;PASSIF;Capital social
+57111;Capital souscrit appelé versé;5;C;FALSE;BILAN;PASSIF;Capital social
+571111;Parts sociales libérées;5;C;TRUE;BILAN;PASSIF;Capital social
+57112;Capital souscrit appelé non versé;5;D;FALSE;BILAN;PASSIF;Capital social
+571121;Parts sociales non libérées;5;D;TRUE;BILAN;PASSIF;Capital social
+5712;Capital non appelé;5;D;TRUE;BILAN;PASSIF;Capital social
+573;Actionnaires, associés ou membres;5;C;FALSE;BILAN;PASSIF;Capital social
+5731;Actionnaires, associés ou membres, capital souscrit non appelé;5;D;TRUE;BILAN;PASSIF;Capital social
+5732;Actionnaires, associés ou membres, capital souscrit appelé non versé;5;D;TRUE;BILAN;PASSIF;Capital social
+58;REPORT A NOUVEAU;5;C;TRUE;BILAN;PASSIF;Report a nouveau
+59;RESULTAT;5;C;FALSE;BILAN;PASSIF;Resultat de l'exercice
+591;Excédent ou déficit en instance d'approbation;5;C;TRUE;BILAN;PASSIF;Resultat de l'exercice
+592;Excédent ou déficit de l'exercice;5;C;TRUE;BILAN;PASSIF;Resultat de l'exercice
+593;Marge;5;C;TRUE;BILAN;PASSIF;Resultat de l'exercice
+594;Produit financier net ou charge financière nette;5;C;TRUE;BILAN;PASSIF;Resultat de l'exercice
+595;Excédent ou déficit d’exploitation;5;C;TRUE;BILAN;PASSIF;Resultat de l'exercice
+596;Excédent ou déficit exceptionnel;5;C;TRUE;BILAN;PASSIF;Resultat de l'exercice
+60;CHARGES D'EXPLOITATION FINANCIERE;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+601;Charges sur opérations avec les institutions financières;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6011;Intérêts sur comptes ordinaires chez les institutions financières;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6015;Intérêts sur comptes ordinaires des institutions financières;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6016;Intérêts sur autres comptes de dépôts des institutions financières;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6017;Intérêts sur comptes d'emprunts;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6018;Autres intérêts;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6019;Commissions;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+602;Charges sur opérations avec les membres, bénéficiaires ou clients;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6025;Intérêts sur comptes des membres, bénéficiaires ou clients;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+60251;Intérêts sur comptes ordinaires créditeurs;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+602511;Intérêts sur comptes ordinaires créditeurs;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+602512;Intérêts sur comptes ordinaires sur livrets créditeurs;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+60252;Intérêts sur dépôts à terme reçus;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+60253;Intérêts sur comptes d’épargne à régime spécial;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+60254;Intérêts sur dépôts de garantie reçus;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+60255;Intérêts sur autres dépôts reçus;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6027;Intérêts sur emprunts et autres sommes dues aux membres, bénéficiaires ou clients;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6028;Autres intérêts;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6029;Commissions;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+603;Charges sur opérations sur titres et sur opérations diverses;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6031;Charges et pertes sur titres de placement;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6038;Charges sur opérations diverses;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6039;Commissions;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+604;Charges sur valeurs immobilisées;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6041;Charges sur immobilisations financières;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+605;Charges sur fonds propres et assimilés;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6053;Charges sur emprunts et titres émis subordonnés;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+608;Charges sur prestations de services financiers;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+609;Autres charges d'exploitation financière;6;D;FALSE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6091;Moins-values sur cession d'éléments d'actif;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6098;Transferts de produits d'exploitation financière;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+6099;Diverses charges d'exploitation financière;6;D;TRUE;RESULTAT;CHARGE;Charges d'exploitation financiere
+61;ACHATS ET VARIATIONS DE STOCKS;6;D;FALSE;RESULTAT;CHARGE;Achats et variations de stocks
+611;Achats;6;D;FALSE;RESULTAT;CHARGE;Achats et variations de stocks
+6112;Stocks vendus;6;D;TRUE;RESULTAT;CHARGE;Achats et variations de stocks
+6116;Achats non stockés de matières et fournitures;6;D;TRUE;RESULTAT;CHARGE;Achats et variations de stocks
+6117;Achats de marchandises;6;D;TRUE;RESULTAT;CHARGE;Achats et variations de stocks
+6118;Frais accessoires d'achat;6;D;TRUE;RESULTAT;CHARGE;Achats et variations de stocks
+6119;Rabais, remises et ristournes obtenus sur achats de marchandises;6;D;TRUE;RESULTAT;CHARGE;Achats et variations de stocks
+612;Variations de stocks;6;D;TRUE;RESULTAT;CHARGE;Achats et variations de stocks
+62;AUTRES CHARGES EXTERNES ET CHARGES DIVERSES D'EXPLOITATION;6;D;FALSE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+621;Services extérieurs;6;D;FALSE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6211;Redevances de crédit-bail;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6212;Loyers;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6213;Charges locatives et de co-propriété;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6214;Entretien et réparations;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6215;Primes d'assurance;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6216;Etudes et recherches;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6217;Frais de formation;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6218;Divers;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6219;Rabais, remises et ristournes obtenus sur services extérieurs;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+622;Autres services extérieurs;6;D;FALSE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6221;Personnel extérieur à l'institution;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6222;Rémunérations d'intermédiaires et honoraires;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6223;Publicité, publications et relations publiques;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6224;Transports de biens;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6225;Transports collectifs du personnel;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6226;Déplacements, missions et réceptions;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6227;Frais postaux et frais de communication;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6228;Divers;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6229;Rabais, remises et ristournes obtenus sur autres services extérieurs;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+623;Charges diverses d'exploitation;6;D;FALSE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6231;Redevances pour concessions, brevets, licences, procédés, droits et valeurs similaires;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6232;Indemnités de fonction versées;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6233;Frais de tenue des réunions des organes et des assemblées;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6235;Moins-values de cession sur immobilisations;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6238;Transferts de produits d'exploitation non financière;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+6239;Autres charges diverses d'exploitation non financière;6;D;TRUE;RESULTAT;CHARGE;Autres charges externes et charges diverses
+63;IMPOTS, TAXES ET VERSEMENTS ASSIMILES;6;D;FALSE;RESULTAT;CHARGE;Impots, taxes et versements assimiles
+631;Impôts, taxes et versements assimilés sur rémunérations;6;D;TRUE;RESULTAT;CHARGE;Impots, taxes et versements assimiles
+632;Autres impôts, taxes et prélèvements assimilés versés à l'Administration des impôts;6;D;TRUE;RESULTAT;CHARGE;Impots, taxes et versements assimiles
+633;Autres impôts, taxes et prélèvements assimilés versés aux autres organismes;6;D;TRUE;RESULTAT;CHARGE;Impots, taxes et versements assimiles
+64;CHARGES DE PERSONNEL;6;D;FALSE;RESULTAT;CHARGE;Charges de personnel
+641;Salaires et traitements;6;D;TRUE;RESULTAT;CHARGE;Charges de personnel
+642;Charges sociales;6;D;TRUE;RESULTAT;CHARGE;Charges de personnel
+643;Rémunérations versées aux stagiaires;6;D;TRUE;RESULTAT;CHARGE;Charges de personnel
+65;DOTATION AU FONDS POUR RISQUES FINANCIERS GENERAUX;6;D;TRUE;RESULTAT;CHARGE;Dotation au fonds pour risques financiers generaux
+66;DOTATIONS AUX AMORTISSEMENTS, AUX PROVISIONS ET PERTES SUR CREANCES IRRECOUVRABLES;6;D;FALSE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+661;Dotations aux amortissements des immobilisations;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+662;Dotations aux amortissements des charges à répartir;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+663;Dotations aux provisions pour dépréciation des immobilisations;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+664;Dotations aux provisions sur créances en souffrance;6;D;FALSE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+6641;Dotations aux provisions sur créances en souffrance de 6 mois au plus;6;D;FALSE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+66411;Dotations aux provisions sur créances en souffrance de 0 à 3 mois au plus;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+66412;Dotations aux provisions sur créances en souffrance de plus de 3 mois à 6 mois au plus;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+6642;Dotations aux provisions sur créances en souffrance de plus de 6 mois à 12 mois au plus;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+6643;Dotations aux provisions sur créances en souffrance de plus de 12 mois à 24 mois au plus;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+666;Dotations aux provisions pour dépréciation des autres éléments d'actif;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+667;Dotations aux provisions pour risques et charges;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+668;Dotations aux provisions réglementées;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+669;Pertes sur créances irrécouvrables;6;D;TRUE;RESULTAT;CHARGE;Dotations aux amortissements, provisions et pertes sur creances
+67;CHARGES EXCEPTIONNELLES ET PERTES SUR EXERCICES ANTERIEURS;6;D;FALSE;RESULTAT;CHARGE;Charges exceptionnelles et pertes sur exercices anterieurs
+671;Charges exceptionnelles;6;D;TRUE;RESULTAT;CHARGE;Charges exceptionnelles et pertes sur exercices anterieurs
+672;Pertes sur exercices antérieurs;6;D;TRUE;RESULTAT;CHARGE;Charges exceptionnelles et pertes sur exercices anterieurs
+69;IMPOTS SUR LES EXCEDENTS;6;D;FALSE;RESULTAT;CHARGE;Impots sur les excedents
+691;Impôts sur les excédents liés à l’activité d’épargne et de crédit;6;D;TRUE;RESULTAT;CHARGE;Impots sur les excedents
+692;Impôts sur les excédents liés aux activités autres que l’épargne et le crédit;6;D;TRUE;RESULTAT;CHARGE;Impots sur les excedents
+70;PRODUITS D'EXPLOITATION FINANCIERE;7;C;FALSE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+701;Produits sur opérations avec les institutions financières;7;C;FALSE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7011;Intérêts sur comptes ordinaires chez les institutions financières;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7012;Intérêts sur autres comptes de dépôts chez les institutions financières;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7013;Intérêts sur comptes de prêts aux institutions financières;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7015;Intérêts sur comptes ordinaires des institutions financières;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7018;Autres intérêts;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7019;Commissions (Cotisations et droits d'adhésion, commissions);7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+702;Produits sur opérations avec les membres, bénéficiaires ou clients;7;C;FALSE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7021;Intérêts sur crédits aux membres, bénéficiaires ou clients;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7025;Intérêts sur comptes des membres, bénéficiaires ou clients;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7028;Autres intérêts;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7029;Commissions (Cotisations et droits d'adhésion, commissions);7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+703;Produits sur opérations sur titres et sur opérations diverses;7;C;FALSE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7038;Produits sur opérations diverses;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7039;Commissions;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+704;Produits sur valeurs immobilisées;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+708;Produits sur prestations de services financiers;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+709;Autres produits d'exploitation financière;7;C;FALSE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7091;Plus - values sur cession d'éléments d'actif;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7098;Transferts de charges d'exploitation;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+7099;Divers produits d'exploitation;7;C;TRUE;RESULTAT;PRODUIT;Produits d'exploitation financiere
+71;VENTES;7;C;FALSE;RESULTAT;PRODUIT;Ventes
+711;Ventes;7;C;FALSE;RESULTAT;PRODUIT;Ventes
+7111;Ventes de marchandises;7;C;TRUE;RESULTAT;PRODUIT;Ventes
+7118;Produits accessoires d'achat;7;C;TRUE;RESULTAT;PRODUIT;Ventes
+7119;Rabais, remises et ristournes accordés sur ventes de marchandises;7;C;TRUE;RESULTAT;PRODUIT;Ventes
+72;PRODUITS DIVERS D'EXPLOITATION;7;C;FALSE;RESULTAT;PRODUIT;Produits divers d'exploitation
+722;Indemnités de fonction et rémunérations d'administrateurs, de gérants reçues;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+725;Plus-values de cession;7;C;FALSE;RESULTAT;PRODUIT;Produits divers d'exploitation
+7251;sur immobilisations incorporelles et corporelles;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+7252;sur immobilisations financières;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+728;Transferts de charges d'exploitation non financière;7;C;FALSE;RESULTAT;PRODUIT;Produits divers d'exploitation
+7281;Charges refacturées;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+7282;Charges à répartir sur plusieurs exercices;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+7289;Autres transferts de charges;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+729;Autres produits divers d'exploitation;7;C;TRUE;RESULTAT;PRODUIT;Produits divers d'exploitation
+74;SUBVENTIONS D'EXPLOITATION;7;C;TRUE;RESULTAT;PRODUIT;Subventions d'exploitation
+75;REPRISES DU FONDS POUR RISQUES FINANCIERS GENERAUX;7;C;TRUE;RESULTAT;PRODUIT;Reprises du fonds pour risques financiers generaux
+76;REPRISES D'AMORTISSEMENTS, DE PROVISIONS ET RECUPERATIONS SUR CREANCES IRRECOUVRABLES;7;C;FALSE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+761;Reprises d'amortissements des immobilisations;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+763;Reprises de provisions pour dépréciation des immobilisations;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+764;Reprises de provisions sur créances en souffrance;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+766;Reprises de provisions pour dépréciation des autres éléments d'actif;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+767;Reprises de provisions pour risques et charges;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+768;Reprises de provisions réglementées;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+769;Récupération sur créances amorties;7;C;TRUE;RESULTAT;PRODUIT;Reprises d'amortissements, provisions et recuperations
+77;PRODUITS EXCEPTIONNELS ET PROFITS SUR EXERCICES ANTERIEURS;7;C;FALSE;RESULTAT;PRODUIT;Produits exceptionnels et profits sur exercices anterieurs
+771;Produits exceptionnels;7;C;TRUE;RESULTAT;PRODUIT;Produits exceptionnels et profits sur exercices anterieurs
+772;Profits sur exercices antérieurs;7;C;TRUE;RESULTAT;PRODUIT;Produits exceptionnels et profits sur exercices anterieurs
