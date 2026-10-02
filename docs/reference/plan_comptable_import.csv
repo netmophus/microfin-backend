@@ -161,9 +161,12 @@
 332;Créditeurs divers;;3;33;C;TRUE;TRUE;
 37;COMPTES TRANSITOIRES ET D'ATTENTE;;3;;D;FALSE;TRUE;
 378;Autres comptes transitoires;;3;37;D;TRUE;TRUE;
+378100;Virements internes de fonds - transit caisses;;3;378;D;TRUE;TRUE;
 379;Comptes d'attente;;3;37;D;FALSE;TRUE;
 3791;Comptes d'attente - actif;;3;379;D;TRUE;TRUE;
+379110;Ecart de transfert - manquant;;3;3791;D;TRUE;TRUE;
 3792;Comptes d'attente - passif;;3;379;C;TRUE;TRUE;
+379210;Ecart de transfert - excedent;;3;3792;C;TRUE;TRUE;
 38;COMPTES DE REGULARISATION;;3;;D;FALSE;TRUE;
 381;Comptes de régularisation - actif;;3;38;D;FALSE;TRUE;
 3811;Charges à répartir sur plusieurs exercices;;3;381;D;TRUE;TRUE;

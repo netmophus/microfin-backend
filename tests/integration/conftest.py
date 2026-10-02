@@ -131,17 +131,19 @@ def _base_de_test_jetable() -> Generator[None, None, None]:
         db.commit()
 
     with SessionLocal() as db:
-        # PROVISOIRE P1ter lot 2 : à RETIRER dès que ces 6 comptes seront créés par un chemin
-        # officiel côté prod (CSV de référence complété, ou migration dédiée) — voir le rapport
-        # du chantier. Comptes de démo « coffre »/« principale » (101115/101114, DEV UNIQUEMENT,
-        # voir seed_comptabilite.py) — nécessaires à test_caisse_transferts.py et
-        # test_comptabilite_journee_datation.py, qui les supposent « déjà en base ».
+        # SETUP DE TEST (pas une rustine prod — voir docs/conformite-comptable.md, section
+        # « Amorçage d'une installation neuve ») : miroir de ce que `seed-dev` ferait sur une
+        # vraie installation de développement. Comptes de démo « coffre »/« principale »
+        # (101115/101114, DEV UNIQUEMENT, voir seed_comptabilite.py::COMPTES_DEMO_NIVEAUX) —
+        # nécessaires à test_caisse_transferts.py et test_comptabilite_journee_datation.py, qui
+        # les supposent « déjà en base ». Ne viennent d'AUCUN CSV (ni import, ni enrichi depuis
+        # le 02/10/2026 — voir la lacune corrigée dans conformite-comptable.md) : c'est
+        # `seed_niveaux_caisse_dev` lui-même, chemin applicatif réel, qui les crée.
         seed_niveaux_caisse_dev(db, agence_siege_id)
-        # 101112 existe sur la base de DEV PARTAGÉE par une édition manuelle jamais tracée dans
-        # aucun seed/migration (absent de la CSV et de seed_comptabilite.py) ; utilisé par
-        # test_caisse_transferts.py comme compte « secondaire » générique. Reproduit ICI, dans
-        # la seule couche de test, faute d'un mécanisme applicatif existant qui le crée — hors
-        # périmètre de ce chantier de modifier seed_comptabilite.py pour ça (voir le rapport).
+        # 101112 n'existe dans AUCUN mécanisme applicatif (ni seed-dev, ni aucun CSV) — pure
+        # convenance de ce fichier de test, pour test_caisse_transferts.py qui a besoin d'un
+        # troisième compte de caisse « secondaire », distinct de coffre/principale. À la
+        # différence de 101114/101115 ci-dessus, rien côté application ne le crée jamais.
         db.execute(
             text(
                 "INSERT INTO comptabilite.accounts "
@@ -152,33 +154,6 @@ def _base_de_test_jetable() -> Generator[None, None, None]:
                 "ON CONFLICT (account_number) DO NOTHING"
             )
         )
-        # PROVISOIRE P1ter lot 2 : à RETIRER dès que docs/reference/plan_comptable_import.csv
-        # (ou plan_comptable_enrichi.csv) sera corrigé côté prod pour inclure ces 3 comptes.
-        # GAP DÉCOUVERT PAR CE CHANTIER (hors périmètre de corriger ici, signalé au rapport) :
-        # docs/reference/plan_comptable_enrichi.csv (lu par seed-mapping-etats) suppose 3
-        # comptes-feuilles — 378100, 379110, 379210 (transit caisses / écarts de transfert) —
-        # que docs/reference/plan_comptable_import.csv (le SEUL chemin d'import officiel) ne
-        # crée PAS (il ne pose que leurs parents 378/3791/3792). Sur la base de dev partagée,
-        # ces 3 comptes ont été ajoutés à la main un jour, hors de tout seed traçable — un
-        # import-plan-comptable + seed-mapping-etats enchaînés sur une base VRAIMENT neuve
-        # (jamais exercé avant ce chantier) tombe donc sur l'écart. Reproduit ici, dans la
-        # seule couche de test, en attendant une correction du côté des CSV de référence.
-        for numero, nom, parent, cote in (
-            ("378100", "Virements internes de fonds - transit caisses", "378", "D"),
-            ("379110", "Ecart de transfert - manquant", "3791", "D"),
-            ("379210", "Ecart de transfert - excedent", "3792", "C"),
-        ):
-            db.execute(
-                text(
-                    "INSERT INTO comptabilite.accounts "
-                    "(account_number, name, account_class, parent_id, normal_side, is_posting, "
-                    " is_system, is_provisional) "
-                    "SELECT :numero, :nom, 3, id, :cote, TRUE, FALSE, TRUE "
-                    "FROM comptabilite.accounts WHERE account_number = :parent "
-                    "ON CONFLICT (account_number) DO NOTHING"
-                ),
-                {"numero": numero, "nom": nom, "parent": parent, "cote": cote},
-            )
         db.commit()
 
     with SessionLocal() as db:
@@ -196,15 +171,17 @@ def _base_de_test_jetable() -> Generator[None, None, None]:
         rattacher_caisse_agences(db)
         seed_parametres_parts(db)
         seed_parametres_caisse(db)
-        # PROVISOIRE P1ter lot 2 : à RETIRER si une future migration prod prend en charge le
-        # backfill pour les agences créées APRÈS coup (pas seulement celles déjà là en 0041).
-        # Backfill du premier poste de caisse ("01", code/libellé fixes) pour toute agence
-        # rattachée à un compte de caisse — exactement ce que fait la migration 0041
-        # (alembic/versions/0041_caisse_postes.py) pour les agences qui existaient DÉJÀ au
-        # moment où elle a tourné. Notre Siège est créé APRÈS les migrations (par
-        # `creer_admin`, ci-dessus) : sans ce backfill répété ici, aucun poste n'existe pour
-        # lui et plusieurs tests (ex. test_credit_engagements.py) qui en supposent un
-        # "backfillé par la migration 0041" échoueraient.
+        # SETUP DE TEST : amorçage manuel non automatisé côté prod par choix — voir
+        # docs/conformite-comptable.md, section « Amorçage d'une installation neuve ». Créer le
+        # premier poste de caisse d'une agence est un acte humain délibéré (écran Bloc A /
+        # `POST /caisse/postes` : code, libellé et compte rattaché sont un choix propre à
+        # l'agence, jamais déductible) — mais les tests, eux, ont besoin d'un poste immédiatement
+        # utilisable. Backfill du poste "01" pour toute agence rattachée à un compte de caisse,
+        # même principe que le backfill historique de la migration 0041
+        # (alembic/versions/0041_caisse_postes.py), qui ne couvrait que les agences déjà
+        # existantes à son passage — notre Siège, créé après coup par `creer_admin` ci-dessus,
+        # n'en bénéficie pas automatiquement, d'où ce pas répété ici pour les tests
+        # (ex. test_credit_engagements.py, qui suppose un poste "backfillé par la migration 0041").
         db.execute(
             text(
                 "INSERT INTO caisse.postes (agency_id, code, libelle, compte_caisse_id) "
@@ -222,13 +199,15 @@ def _base_de_test_jetable() -> Generator[None, None, None]:
         executer_seed_produits(db)
         db.commit()
 
-    # PROVISOIRE P1ter lot 2 : à RETIRER/généraliser si la suite cesse un jour de dépendre de
-    # dates 2026 écrites en dur. Exercice ambiant, calé sur l'ANNÉE CIVILE LITTÉRALE 2026 — pas
-    # `date.today().year` : la
-    # base de dev réelle n'a qu'un seul exercice ("2026", 2026-01-01 -> 2026-12-31) et une bonne
-    # partie de la suite poste des écritures sur des dates 2026 écrites en dur dans le code des
-    # tests (ex. 2026-06-15), pas sur « aujourd'hui ». Les tests qui ont besoin d'un exercice sur
-    # une autre période (2031-2033, pour rester loin de toute donnée réelle sur l'UNIQUE
+    # SETUP DE TEST : amorçage manuel non automatisé côté prod par choix — voir
+    # docs/conformite-comptable.md, section « Amorçage d'une installation neuve ». Les bornes
+    # d'un exercice sont une décision institutionnelle (jamais déductible), ouverte via la CLI
+    # `ouvrir-exercice` — mais les tests ont besoin d'un exercice immédiatement exploitable.
+    # Calé sur l'ANNÉE CIVILE LITTÉRALE 2026 — pas `date.today().year` : la base de dev réelle
+    # n'a qu'un seul exercice ("2026", 2026-01-01 -> 2026-12-31) et une bonne partie de la suite
+    # poste des écritures sur des dates 2026 écrites en dur dans le code des tests
+    # (ex. 2026-06-15), pas sur « aujourd'hui ». Les tests qui ont besoin d'un exercice sur une
+    # autre période (2031-2033, pour rester loin de toute donnée réelle sur l'UNIQUE
     # `date_comptable`) ouvrent le leur explicitement dans leur propre setup.
     with SessionLocal() as db:
         ouvrir_exercice(

@@ -185,6 +185,44 @@ change. Cette table mémorise, une fois pour toutes, quel compte a joué le rôl
 une souscription sur l'ancien 57111 et une nouvelle sur 571111 restent toutes deux comptées,
 rapprochement concordant.
 
+## Transit caisses et écarts de transfert — extension à 6 chiffres (02/10/2026)
+
+Chantier coffre-fort/caisses, sous-chantier 2 (transferts entre niveaux de caisse — coffre/
+principale/secondaire) : le pont comptable d'un transfert a besoin d'un compte de liaison
+(encaisse le montant envoyé, retombe à zéro à la réception) et de deux comptes d'écart DÉDIÉS
+(jamais ceux de l'écart de caisse, CA3), distincts par nature. 3 comptes ajoutés, sous des
+parents déjà officiels (37 — Comptes transitoires et d'attente) :
+
+| Compte | Libellé | Parent | Sens | `is_system` | `is_provisional` |
+|---|---|---|---|---|---|
+| 378100 | Virements internes de fonds - transit caisses | 378 | D | TRUE | TRUE |
+| 379110 | Ecart de transfert - manquant | 3791 | D | TRUE | TRUE |
+| 379210 | Ecart de transfert - excedent | 3792 | C | TRUE | TRUE |
+
+`is_system = TRUE` (contrairement aux 3 comptes caisse/parts du 03/08/2026, qui sont FALSE) :
+ici la décision suit la règle GÉNÉRALE du plan (comptes à 6 chiffres sous un parent 4 chiffres
+déjà officiel, même traitement que les extensions épargne `251111` et consœurs), pas
+l'exception du 03/08 — celle-ci ne s'applique qu'aux comptes qui REMPLACENT un compte officiel
+verrouillé pour la saisie (1011/57111/57112). Ici, 378/3791/3792 restent des comptes de
+regroupement ordinaires : aucun verrouillage de `is_posting` n'est nécessaire pour ces parents,
+378 reste par ailleurs un compte de saisie dans le fichier (hérité du RCSFD), sans conflit
+puisqu'aucun autre enfant ne s'y ajoute.
+
+Ajoutés à demeure dans [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv)
+(390 comptes désormais) — pas seulement importés une fois, une réinstallation fraîche les
+recrée. **Lacune corrigée au passage** : ces 3 comptes avaient été ajoutés à
+[`reference/plan_comptable_enrichi.csv`](reference/plan_comptable_enrichi.csv) (mapping bilan/
+compte de résultat) sans jamais être reportés dans le CSV d'import réel — une base migrée puis
+amorcée depuis zéro ne les créait donc jamais, bien que `seed-mapping-etats` les attende. Les
+deux fichiers portent maintenant exactement la même population de comptes (390 des deux côtés),
+chacun dans son propre rôle (import = création ; enrichi = mapping aux postes du bilan).
+
+À l'inverse, les comptes `101112`/`101114`/`101115` (« Caisse GAB », « Caisse principale (démo
+dev) », « Coffre (démo dev) ») ont été **retirés** de `plan_comptable_enrichi.csv` à cette même
+date : ce sont des comptes DEV UNIQUEMENT (créés par `seed-dev`, jamais par l'import officiel,
+voir `app/cli/seed_comptabilite.py`) — ils n'ont jamais eu leur place dans un fichier dont la
+promesse est de couvrir le plan d'une installation réelle.
+
 ## Concordance bilan / compte de résultat (Annexe 1 RCSFD) — décision provisoire
 
 Pour les rapports « à date » (grand livre, balance, et plus tard bilan/résultat provisoires —
@@ -406,6 +444,30 @@ seul : la souscription-engagement crédite 571111 (montant souscrit) ET débite 
 libérée, une créance — motif « capital souscrit appelé / non appelé »). Le net
 `571111 - 571121` = `Σ(crédit - débit)` sur les deux comptes (et, pour l'historique, `57111 -
 57112`). La libération crédite 571121 (la créance s'éteint) → le net monte. Un écart = anomalie.
+
+## Amorçage d'une installation neuve (02/10/2026)
+
+Après `alembic upgrade head` + `seed-security` + `creer-admin` + `import-plan-comptable` +
+`seed-comptabilite` (qui posent schéma, rôles, le compte admin + l'agence Siège, le plan de
+comptes, les journaux/modèles d'écriture), **deux étapes manuelles restent nécessaires avant tout
+usage réel de la caisse ou de la comptabilité** — ni l'une ni l'autre n'est automatisée, par
+choix, pas par oubli :
+
+1. **Créer le premier poste de caisse de l'agence**, via l'écran (Bloc A) ou
+   `POST /caisse/postes` — code, libellé et compte de caisse rattaché sont un **choix humain**
+   propre à chaque agence (plusieurs postes par agence sont possibles depuis la migration 0041,
+   ce n'est plus « un compte = une agence »). Automatiser ce choix par un trigger ou un seed à la
+   création d'agence court-circuiterait précisément ce que cet écran existe pour faire décider.
+2. **Ouvrir le premier exercice comptable**, via la CLI `ouvrir-exercice --code ... --debut ...
+   --fin ...`. Les bornes d'un exercice sont une **décision institutionnelle** propre à chaque
+   IMF (année civile ? décalée ? durée différente la première année ?), jamais une valeur
+   technique déductible — un seed qui imposerait des dates par défaut serait faux pour une
+   installation réelle. Il n'existe aujourd'hui aucun endpoint `POST /exercices` : l'ouverture
+   reste un acte d'installation en ligne de commande, pas une action d'exploitation courante.
+
+Sans ces deux étapes, une base fraîchement amorcée n'a ni poste de caisse ni exercice ouvert —
+toute tentative d'ouvrir une session de caisse ou de poser une écriture est refusée proprement
+(messages dédiés), jamais silencieusement.
 
 ## Journaux et exercice (C1)
 

@@ -3,9 +3,6 @@
 101;Billets et monnaies;1;D;FALSE;BILAN;ACTIF;Valeurs en caisse
 1011;Billets et monnaies émis par la BCEAO;1;D;FALSE;BILAN;ACTIF;Valeurs en caisse
 101111;Caisse (agence);1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
-101112;Caisse GAB;1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
-101114;Caisse principale (demo dev);1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
-101115;Coffre (demo dev);1;D;TRUE;BILAN;ACTIF;Valeurs en caisse
 11;COMPTES ORDINAIRES CHEZ LES INSTITUTIONS FINANCIERES;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
 113;Centre des Chèques postaux;1;D;FALSE;BILAN;ACTIF;Operations avec les institutions financieres
 1131;Centre des Chèques postaux;1;D;TRUE;BILAN;ACTIF;Operations avec les institutions financieres
