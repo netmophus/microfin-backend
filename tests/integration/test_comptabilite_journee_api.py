@@ -13,8 +13,10 @@ symétrique de la garde vit dans `caisse/service.py`, pas ici).
   - clôture refusée (chantier P1bis lot 2) si une session de caisse reste ouverte, quelle que
     soit son agence — la caisse ouverte dans ce test est posée via le VRAI service
     (`caisse.service.ouvrir_session`), jamais une ligne SQL à la main ;
-  - permissions : compta.journee.manage (COMPTABLE), 403 sinon — permission DISTINCTE de
-    compta.exercice.manage.
+  - permissions (réorganisation RBAC post lot 4b) : consultation (liste, courante) ->
+    compta.journee.read (COMPTABLE et ADMIN_FONCTIONNEL) ; ouverture/clôture ->
+    compta.journee.manage (ADMIN_FONCTIONNEL SEUL, le COMPTABLE n'ouvre/ne clôture plus),
+    403 sinon — permission DISTINCTE de compta.exercice.manage.
 
 Dates de test : lundis fixes (2031-06-02, 2031-06-09), loin de toute donnée réelle — aucun
 risque de collision avec l'UNIQUE sur `date_comptable` entre tests (chaque test roule dans sa
@@ -129,9 +131,11 @@ def test_courante_sans_permission_refuse_403(client: TestClient, db: Session) ->
 
 
 def test_ouverture_reussie(client: TestClient, db: Session) -> None:
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     reponse = client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
     assert reponse.status_code == 201
     corps = reponse.json()
@@ -140,42 +144,50 @@ def test_ouverture_reussie(client: TestClient, db: Session) -> None:
     assert corps["opened_par_nom"]
     assert corps["closed_at"] is None
 
-    courante = client.get("/comptabilite/journees/courante", headers=comptable)
+    courante = client.get("/comptabilite/journees/courante", headers=gestionnaire)
     assert courante.json()["journee"]["id"] == corps["id"]
 
 
 def test_refuse_une_seconde_ouverture_si_deja_ouverte(client: TestClient, db: Session) -> None:
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
     reponse = client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_2.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_2.isoformat()},
+        headers=gestionnaire,
     )
     assert reponse.status_code == 422
     assert "déjà ouverte" in reponse.json()["detail"]
 
 
 def test_refuse_une_date_deja_utilisee(client: TestClient, db: Session) -> None:
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
-    client.post("/comptabilite/journees/cloture", headers=comptable)
+    client.post("/comptabilite/journees/cloture", headers=gestionnaire)
 
     reponse = client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
     assert reponse.status_code == 422
     assert str(LUNDI_1) in reponse.json()["detail"]
 
 
 def test_ouverture_champ_inattendu_refuse_422(client: TestClient, db: Session) -> None:
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     reponse = client.post(
         "/comptabilite/journees",
         json={"date_comptable": LUNDI_1.isoformat(), "status": "cloturee"},
-        headers=comptable,
+        headers=gestionnaire,
     )
     assert reponse.status_code == 422
 
@@ -188,28 +200,42 @@ def test_ouverture_sans_permission_refuse_403(client: TestClient, db: Session) -
     assert reponse.status_code == 403
 
 
+def test_ouverture_refusee_au_comptable_depuis_la_reorganisation_rbac(
+    client: TestClient, db: Session
+) -> None:
+    """Réorganisation RBAC post lot 4b : le COMPTABLE garde journee.read mais perd
+    journee.manage — l'ouverture, acte d'exploitation, lui est désormais refusée."""
+    comptable = _entete(db, "COMPTABLE")
+    reponse = client.post(
+        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+    )
+    assert reponse.status_code == 403
+
+
 # --- Clôture ---------------------------------------------------------------------------------
 
 
 def test_cloture_reussie(client: TestClient, db: Session) -> None:
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
-    reponse = client.post("/comptabilite/journees/cloture", headers=comptable)
+    reponse = client.post("/comptabilite/journees/cloture", headers=gestionnaire)
     assert reponse.status_code == 200
     corps = reponse.json()
     assert corps["status"] == "cloturee"
     assert corps["closed_at"] is not None
     assert corps["closed_par_nom"]
 
-    courante = client.get("/comptabilite/journees/courante", headers=comptable)
+    courante = client.get("/comptabilite/journees/courante", headers=gestionnaire)
     assert courante.json()["journee"] is None
 
 
 def test_refuse_la_cloture_sans_journee_ouverte(client: TestClient, db: Session) -> None:
-    comptable = _entete(db, "COMPTABLE")
-    reponse = client.post("/comptabilite/journees/cloture", headers=comptable)
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
+    reponse = client.post("/comptabilite/journees/cloture", headers=gestionnaire)
     assert reponse.status_code == 422
     assert "Aucune journée" in reponse.json()["detail"]
 
@@ -217,6 +243,23 @@ def test_refuse_la_cloture_sans_journee_ouverte(client: TestClient, db: Session)
 def test_cloture_sans_permission_refuse_403(client: TestClient, db: Session) -> None:
     caissier = _entete(db, "CAISSIER")
     reponse = client.post("/comptabilite/journees/cloture", headers=caissier)
+    assert reponse.status_code == 403
+
+
+def test_cloture_refusee_au_comptable_depuis_la_reorganisation_rbac(
+    client: TestClient, db: Session
+) -> None:
+    """Réorganisation RBAC post lot 4b : le COMPTABLE garde journee.read mais perd
+    journee.manage — la clôture, acte d'exploitation, lui est désormais refusée."""
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
+    client.post(
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
+    )
+
+    comptable = _entete(db, "COMPTABLE")
+    reponse = client.post("/comptabilite/journees/cloture", headers=comptable)
     assert reponse.status_code == 403
 
 
@@ -267,20 +310,22 @@ def test_cloture_refusee_si_une_caisse_reste_ouverte(client: TestClient, db: Ses
     """Chantier P1bis lot 2 — la clôture refuse tant qu'il reste une session de caisse ouverte,
     quel que soit le réseau : la caisse est ouverte ici via le VRAI service
     (`caisse.service.ouvrir_session`), jamais une ligne SQL à la main."""
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
 
     poste = _agence_avec_poste_caisse(db, "CXJCL")
     caissier = _caissier_courant(db, poste, "CL")
     ouvrir_session(db, caissier, poste_id=poste.id, fonds_initial=10_000)
 
-    reponse = client.post("/comptabilite/journees/cloture", headers=comptable)
+    reponse = client.post("/comptabilite/journees/cloture", headers=gestionnaire)
     assert reponse.status_code == 422
     assert "1 caisse" in reponse.json()["detail"]
 
-    courante = client.get("/comptabilite/journees/courante", headers=comptable)
+    courante = client.get("/comptabilite/journees/courante", headers=gestionnaire)
     assert courante.json()["journee"]["status"] == "ouverte"
 
 
@@ -290,16 +335,20 @@ def test_cloture_refusee_si_une_caisse_reste_ouverte(client: TestClient, db: Ses
 def test_liste_les_journees_plus_recente_dabord_avec_noms_resolus(
     client: TestClient, db: Session
 ) -> None:
-    comptable = _entete(db, "COMPTABLE")
+    gestionnaire = _entete(db, "ADMIN_FONCTIONNEL")
     client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_1.isoformat()},
+        headers=gestionnaire,
     )
-    client.post("/comptabilite/journees/cloture", headers=comptable)
+    client.post("/comptabilite/journees/cloture", headers=gestionnaire)
     client.post(
-        "/comptabilite/journees", json={"date_comptable": LUNDI_2.isoformat()}, headers=comptable
+        "/comptabilite/journees",
+        json={"date_comptable": LUNDI_2.isoformat()},
+        headers=gestionnaire,
     )
 
-    reponse = client.get("/comptabilite/journees", headers=comptable)
+    reponse = client.get("/comptabilite/journees", headers=gestionnaire)
     assert reponse.status_code == 200
     corps = reponse.json()
     assert [ligne["date_comptable"] for ligne in corps] == [

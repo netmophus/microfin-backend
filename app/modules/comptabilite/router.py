@@ -36,11 +36,12 @@ compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post 
 contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
 COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation, à-nouveaux — aperçus
 compris) -> compta.exercice.manage, lecture et écriture confondues : ces actes sont de la
-gestion, pas une simple consultation. Journée comptable (liste, courante, ouverture, clôture) ->
-compta.journee.manage, même raisonnement, permission DISTINCTE de compta.exercice.manage
-(lifecycle quotidien, pas annuel). Calendrier des jours fériés (liste, ajout, suppression) ->
-compta.calendrier.manage, permission DISTINCTE de compta.journee.manage : paramétrage annuel,
-pas le cycle quotidien, même s'il l'alimente (prochaine_date_ouvree).
+gestion, pas une simple consultation. Journée comptable : CONSULTATION (liste, courante) ->
+compta.journee.read ; OUVERTURE/CLÔTURE -> compta.journee.manage — scindées (réorganisation
+RBAC post lot 4b, acte D'EXPLOITATION réservé à ADMIN_FONCTIONNEL, read resté à COMPTABLE
+ET ADMIN_FONCTIONNEL, voir seed_security.py). Calendrier des jours fériés (liste, ajout,
+suppression) -> compta.calendrier.manage, permission DISTINCTE de compta.journee.* :
+paramétrage annuel, pas le cycle quotidien, même s'il l'alimente (prochaine_date_ouvree).
 """
 
 import uuid
@@ -1196,10 +1197,11 @@ def modifier_mapping_endpoint(
 
 
 # --- Journée comptable, chantier P1bis lot 1 ---------------------------------------------------
-# ADDITIF STRICT : aucun autre module n'est branché dans ce lot (ni la caisse, ni la datation des
-# opérations). compta.journee.manage pour les quatre routes, même raisonnement que
-# compta.exercice.manage : consulter la liste ou la journée courante est déjà un acte de gestion
-# sur ce périmètre.
+# RÉORGANISATION RBAC (post lot 4b) : l'ouverture/fermeture de journée est un acte D'EXPLOITATION,
+# pas comptable — compta.journee.read (consultation : liste, courante) est DISTINCTE de
+# compta.journee.manage (ouverture, clôture). Ne concerne QUE l'API : la datation des opérations
+# (lot 3, `comptabilite.journee.date_comptable_obligatoire`/`journee_ouverte`) est appelée côté
+# SERVICE par les autres modules, jamais via ces permissions — aucun chemin métier n'en dépend.
 
 
 def _noms_acteurs(db: Session, ids: set[uuid.UUID | None]) -> dict[uuid.UUID, str]:
@@ -1233,7 +1235,7 @@ def _vers_journee_resume(
 
 @router.get("/journees", response_model=list[JourneeComptableResume])
 def lister_journees_endpoint(
-    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.manage"))],
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.read"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> list[JourneeComptableResume]:
     journees = journee.lister_journees(db)
@@ -1244,7 +1246,7 @@ def lister_journees_endpoint(
 
 @router.get("/journees/courante", response_model=JourneeCouranteSchema)
 def journee_courante_endpoint(
-    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.manage"))],
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.read"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> JourneeCouranteSchema:
     """La journée ouverte (ou son absence) ET la prochaine date ouvrée proposée — tout ce dont

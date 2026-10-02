@@ -221,10 +221,16 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("compta.ecriture.post", "compta", "Saisir un brouillon et valider une écriture"),
     Permission("compta.ecriture.reverse", "compta", "Contre-passer une écriture validée"),
     Permission("compta.exercice.manage", "compta", "Ouvrir/clôturer un exercice comptable"),
-    # --- Journée comptable (chantier P1bis, lot 1) : ouvrir/clôturer la journée centralisée,
-    # consulter son historique. Permission DISTINCTE de compta.exercice.manage (lifecycle
-    # quotidien, pas annuel) — même granularité fine que plan/exercice, pas de sur-découpage
-    # (une seule permission couvre lecture ET écriture, même raisonnement que exercice.manage).
+    # --- Journée comptable (chantier P1bis, lots 1-3 ; réorganisation RBAC post lot 4b) :
+    # SCINDÉE EN DEUX — l'ouverture/clôture est un acte D'EXPLOITATION, réservé à
+    # l'ADMIN_FONCTIONNEL SEUL (plus au COMPTABLE) ; la consultation reste ouverte au
+    # COMPTABLE (qui en a besoin au quotidien pour dater ses saisies) ET à l'ADMIN_FONCTIONNEL.
+    # Préfixe compta.* conservé (le module propriétaire de la ressource ne change pas, seul
+    # l'acteur qui la gère change — même logique que users.unlock, module security, accordé
+    # à RESPONSABLE_AGENCE).
+    Permission(
+        "compta.journee.read", "compta", "Consulter la journée comptable (ouverte et historique)"
+    ),
     Permission("compta.journee.manage", "compta", "Ouvrir/clôturer la journée comptable"),
     # --- Calendrier des jours fériés (chantier P1bis, lot 4a) : permission DISTINCTE de
     # compta.journee.manage (même granularité fine que plan/exercice/journee, une permission
@@ -459,7 +465,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.ecriture.post",
             "compta.ecriture.reverse",
             "compta.exercice.manage",
-            "compta.journee.manage",
+            "compta.journee.read",
             "compta.calendrier.manage",
             "compta.rapport.read",
             "epargne.account.read",
@@ -609,6 +615,11 @@ MATRICE: dict[str, frozenset[str]] = {
             "credit.product.read",
             "credit.product.manage",
             "perimetre.reseau",
+            # Journée comptable (réorganisation RBAC post lot 4b) : ouverture/clôture est un
+            # acte D'EXPLOITATION, pas comptable — ADMIN_FONCTIONNEL seul la détient, plus la
+            # lecture pour pouvoir consulter ce qu'il gère.
+            "compta.journee.read",
+            "compta.journee.manage",
         }
     ),
     # Administration système, pas administration des personnes : aucun droit sur users.*.
