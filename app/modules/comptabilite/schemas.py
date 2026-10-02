@@ -284,6 +284,23 @@ class OuvertureJournee(BaseModel):
     date_comptable: date
 
 
+# --- Calendrier des jours fériés (chantier P1bis, lot 4a) ---------------------------------------
+
+
+class JourFerieResume(BaseModel):
+    id: uuid.UUID
+    date_feriee: date
+    libelle: str
+    created_at: datetime
+
+
+class CreationJourFerie(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_feriee: date
+    libelle: str = Field(min_length=1, max_length=100)
+
+
 class LigneResultatCloture(BaseModel):
     account_number: str
     name: str

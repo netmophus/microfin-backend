@@ -1,4 +1,4 @@
-"""Journée comptable — chantier P1bis, lots 1, 2 et 3.
+"""Journée comptable — chantier P1bis, lots 1, 2, 3 et 4a.
 
 COUCHE MINCE : modèle, ouverture/fermeture, date comptable courante, branchement caisse,
 datation des opérations. `date_comptable_obligatoire` (lot 3) est LE point d'entrée que tous
@@ -23,17 +23,15 @@ précondition, par construction (caisse dépend de comptabilite, jamais l'invers
 
 import uuid
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import cast
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.comptabilite import calendrier
 from app.modules.comptabilite.models import JourneeComptable
-
-SAMEDI = 5
-DIMANCHE = 6
 
 
 class ActionsAudit:
@@ -100,15 +98,13 @@ def date_comptable_obligatoire(db: Session) -> date:
 
 
 def prochaine_date_ouvree(db: Session) -> date:
-    """Date proposée par défaut à l'ouverture : aujourd'hui si c'est un jour ouvré (lundi à
-    vendredi), sinon le prochain lundi. Pas de calendrier de jours fériés dans ce lot
-    (lot 4, séparable) — « ouvré » se limite ici à « ni samedi ni dimanche ». La date du jour
-    est lue côté base (`CURRENT_DATE`), même discipline que partout ailleurs dans ce
-    module."""
+    """Date proposée par défaut à l'ouverture : aujourd'hui si c'est un jour ouvré, sinon le
+    prochain jour ouvré suivant — « ouvré » tient compte du week-end ET des fériés paramétrés
+    (chantier P1bis, lot 4a : `calendrier.est_jour_ouvre`, mise à jour délibérée, voir son
+    docstring de module). La date du jour est lue côté base (`CURRENT_DATE`), même discipline
+    que partout ailleurs dans ce module."""
     jour = cast(date, db.execute(text("SELECT CURRENT_DATE")).scalar_one())
-    while jour.weekday() in (SAMEDI, DIMANCHE):
-        jour += timedelta(days=1)
-    return jour
+    return calendrier.prochain_jour_ouvre(db, jour)
 
 
 def journee_courante(db: Session) -> JourneeCourante:

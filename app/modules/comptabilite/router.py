@@ -2,7 +2,8 @@
 (import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
 (chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1) + Affectation du
 résultat (chantier P1, lot b2a) + À-nouveaux (chantier P1, lot b2b) + États financiers, bilan et
-compte de résultat (chantier P1, dernier lot) + Journée comptable (chantier P1bis, lot 1).
+compte de résultat (chantier P1, dernier lot) + Journée comptable (chantier P1bis, lots 1-3) +
+Calendrier des jours fériés (chantier P1bis, lot 4a).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
@@ -25,6 +26,8 @@ TABLE DES ERREURS (un seul endroit) :
   - journée comptable : déjà une journée ouverte, date déjà utilisée, aucune journée ouverte à
     clôturer, caisse(s) encore ouverte(s) (chantier P1bis lot 2) -> 422, message humain
     (journee.py)
+  - jour férié déjà saisi pour cette date -> 422 ; jour férié inexistant (suppression) -> 404
+    (chantier P1bis lot 4a, calendrier.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
 en 2 temps, mapping états financiers) -> compta.plan.manage. Rapports (grand livre, balance,
@@ -35,7 +38,9 @@ COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation, à-nou
 compris) -> compta.exercice.manage, lecture et écriture confondues : ces actes sont de la
 gestion, pas une simple consultation. Journée comptable (liste, courante, ouverture, clôture) ->
 compta.journee.manage, même raisonnement, permission DISTINCTE de compta.exercice.manage
-(lifecycle quotidien, pas annuel).
+(lifecycle quotidien, pas annuel). Calendrier des jours fériés (liste, ajout, suppression) ->
+compta.calendrier.manage, permission DISTINCTE de compta.journee.manage : paramétrage annuel,
+pas le cycle quotidien, même s'il l'alimente (prochaine_date_ouvree).
 """
 
 import uuid
@@ -63,6 +68,7 @@ from app.modules.audit.service import ecrire_audit
 from app.modules.comptabilite import (
     a_nouveaux,
     affectation_resultat,
+    calendrier,
     cloture_exercice,
     comptes,
     ecritures,
@@ -92,6 +98,7 @@ from app.modules.comptabilite.models import (
     Account,
     Exercice,
     FinancialStatementMapping,
+    JourFerie,
     JournalEntry,
     JourneeComptable,
 )
@@ -119,11 +126,13 @@ from app.modules.comptabilite.schemas import (
     ConfirmationImportComptes,
     CreationCompte,
     CreationEcritureOD,
+    CreationJourFerie,
     DesactivationCompte,
     DiffChampSchema,
     EcritureODDetail,
     EcritureODResume,
     ExerciceResume,
+    JourFerieResume,
     JourneeComptableResume,
     JourneeCouranteSchema,
     LigneANouveauxSchema,
@@ -1297,4 +1306,71 @@ def cloturer_journee_endpoint(
         db, {journee_cloturee.opened_by, journee_cloturee.closed_by}
     )
     return _vers_journee_resume(journee_cloturee, noms)
+
+
+# --- Calendrier des jours fériés, chantier P1bis lot 4a -----------------------------------------
+# compta.calendrier.manage pour les trois routes, même raisonnement que compta.journee.manage :
+# consulter la liste par année est déjà un acte de gestion sur ce périmètre.
+
+
+MESSAGE_JOUR_FERIE_INTROUVABLE = "Ce jour férié n'existe pas."
+
+
+def _vers_jour_ferie_resume(jour_ferie: JourFerie) -> JourFerieResume:
+    return JourFerieResume(
+        id=jour_ferie.id,
+        date_feriee=jour_ferie.date_feriee,
+        libelle=jour_ferie.libelle,
+        created_at=jour_ferie.created_at,
+    )
+
+
+@router.get("/jours-feries", response_model=list[JourFerieResume])
+def lister_jours_feries_endpoint(
+    annee: Annotated[int, Query(ge=1900, le=2200, description="Année des fériés à lister.")],
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.calendrier.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[JourFerieResume]:
+    return [_vers_jour_ferie_resume(j) for j in calendrier.lister_jours_feries(db, annee)]
+
+
+@router.post(
+    "/jours-feries", response_model=JourFerieResume, status_code=status.HTTP_201_CREATED
+)
+def ajouter_jour_ferie_endpoint(
+    corps: CreationJourFerie,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.calendrier.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> JourFerieResume:
+    try:
+        jour_ferie = calendrier.ajouter_jour_ferie(
+            db, corps.date_feriee, corps.libelle, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except calendrier.JourFerieExistantError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return _vers_jour_ferie_resume(jour_ferie)
+
+
+@router.delete("/jours-feries/{jour_ferie_id}", status_code=status.HTTP_204_NO_CONTENT)
+def supprimer_jour_ferie_endpoint(
+    jour_ferie_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.calendrier.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    try:
+        calendrier.supprimer_jour_ferie(
+            db, jour_ferie_id, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except calendrier.JourFerieIntrouvableError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_JOUR_FERIE_INTROUVABLE
+        ) from None
 

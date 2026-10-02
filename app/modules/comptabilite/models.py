@@ -138,6 +138,28 @@ class JourneeComptable(Base):
         return f"<JourneeComptable {self.date_comptable} {self.status}>"
 
 
+class JourFerie(Base):
+    """Un jour férié (chantier P1bis, lot 4a) — saisi PAR DATE précise, jamais une règle
+    récurrente : les fêtes musulmanes (Tabaski, Maouloud...) suivent le calendrier lunaire et
+    changent de date chaque année. Consommé par `comptabilite.calendrier.est_jour_ouvre` et,
+    par extension, par `journee.prochaine_date_ouvree`."""
+
+    __tablename__ = "jours_feries"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("date_feriee"),
+        {"schema": "comptabilite"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    date_feriee: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    libelle: Mapped[str] = mapped_column(sa.String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<JourFerie {self.date_feriee} {self.libelle!r}>"
+
+
 class Journal(Base):
     """Un journal comptable (caisse, banque, opérations diverses…). Donnée provisoire."""
 

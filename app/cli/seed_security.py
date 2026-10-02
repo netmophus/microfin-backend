@@ -226,6 +226,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     # quotidien, pas annuel) — même granularité fine que plan/exercice, pas de sur-découpage
     # (une seule permission couvre lecture ET écriture, même raisonnement que exercice.manage).
     Permission("compta.journee.manage", "compta", "Ouvrir/clôturer la journée comptable"),
+    # --- Calendrier des jours fériés (chantier P1bis, lot 4a) : permission DISTINCTE de
+    # compta.journee.manage (même granularité fine que plan/exercice/journee, une permission
+    # par ressource) — le calendrier est un paramétrage annuel, pas le cycle quotidien
+    # d'ouverture/fermeture, même s'il alimente ce dernier.
+    Permission("compta.calendrier.manage", "compta", "Gérer le calendrier des jours fériés"),
     # --- Rapports (R1/R2) : grand livre et balance — lecture pure, aucune écriture. Même
     # patron d'octroi que epargne.rapprochement.read (comptable + supervision).
     Permission("compta.rapport.read", "compta", "Consulter les rapports comptables (grand livre, balance)"),
@@ -455,6 +460,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.ecriture.reverse",
             "compta.exercice.manage",
             "compta.journee.manage",
+            "compta.calendrier.manage",
             "compta.rapport.read",
             "epargne.account.read",
             "epargne.product.read",

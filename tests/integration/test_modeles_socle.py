@@ -33,6 +33,7 @@ from app.modules.comptabilite.models import (
     EntrySchemaLine,
     Exercice,
     FinancialStatementMapping,
+    JourFerie,
     Journal,
     JournalEntry,
     JournalLine,
@@ -151,6 +152,8 @@ TABLES_ATTENDUES = frozenset(
         "comptabilite.financial_statement_mapping",
         # Journée comptable, chantier P1bis lot 1 (migration 0055).
         "comptabilite.journees_comptables",
+        # Calendrier des jours fériés, chantier P1bis lot 4a (migration 0056).
+        "comptabilite.jours_feries",
         # Épargne E0+E2 — produits, comptes, mouvements, numérotation (migration 0018).
         "epargne.products",
         "epargne.accounts",
@@ -240,6 +243,7 @@ MODELES = [
     EntrySchemaLine,
     FinancialStatementMapping,
     JourneeComptable,
+    JourFerie,
     Product,
     SavingsAccount,
     SavingsMovement,
