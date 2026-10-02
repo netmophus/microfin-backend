@@ -19,11 +19,11 @@ du seuil de tolérance, donc jamais nul), le cas ecart=0 n'existe pas par constr
 
 import uuid
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete
 from app.modules.caisse.models import CaisseParametres, CaisseSession
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.comptabilite.schemas_ecriture import ResolveurRole, poser_depuis_schema
 
@@ -82,7 +82,7 @@ def poser_ecriture_ecart(
     )
     nature = "manquant" if manquant else "excédent"
 
-    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    jour = date_comptable_obligatoire(db)
     return poser_depuis_schema(
         db,
         code=code,

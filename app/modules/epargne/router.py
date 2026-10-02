@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account
 from app.modules.epargne import consultation, gestion_produits, rattachements
 from app.modules.epargne.gestion_produits import CodeDejaUtiliseError, ComptesNonRattachesError
@@ -499,7 +500,11 @@ def deposer_endpoint(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
         ) from None
     except (
-        MontantInvalideError, OperationGeleeError, CompteClotureError, AucuneSessionOuverteError,
+        MontantInvalideError,
+        OperationGeleeError,
+        CompteClotureError,
+        AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         raise _422(erreur) from None
     return ResultatOperation(
@@ -640,6 +645,7 @@ def retirer_endpoint(
         OperationGeleeError,
         CompteClotureError,
         AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         raise _422(erreur) from None
     return ResultatOperation(

@@ -47,6 +47,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import Account, Exercice, Journal, JournalEntry, JournalLine
 
 CODE_JOURNAL_AFFECTATION = "OD"
@@ -279,7 +280,7 @@ def affecter_resultat(
     journal_id = db.execute(
         select(Journal.id).where(Journal.code == CODE_JOURNAL_AFFECTATION)
     ).scalar_one()
-    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    jour = date_comptable_obligatoire(db)
 
     entry = ecritures.creer_brouillon(
         db,

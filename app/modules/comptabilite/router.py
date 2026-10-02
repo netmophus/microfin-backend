@@ -750,6 +750,7 @@ def contre_passer_ecriture_od_endpoint(
         ecritures.PieceNonValideeError,
         ecritures.PieceDejaContrePasseeError,
         ecritures.AucunExerciceOuvertError,
+        journee.AucuneJourneeOuverteError,
     ) as erreur:
         db.rollback()
         raise _422(erreur) from None
@@ -952,6 +953,7 @@ def affecter_resultat_endpoint(
         ecritures.LigneInvalideError,
         ecritures.PieceIncompleteError,
         ecritures.PieceDesequilibreeError,
+        journee.AucuneJourneeOuverteError,
     ) as erreur:
         db.rollback()
         raise _422(erreur) from None

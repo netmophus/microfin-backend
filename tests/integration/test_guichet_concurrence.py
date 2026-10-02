@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from app.core.database import SessionLocal, engine
+from app.modules.comptabilite import journee
 from app.modules.epargne import guichet
 from app.modules.epargne.guichet import SoldeInsuffisantError
 from app.modules.security.autorisation import UtilisateurCourant
@@ -26,6 +27,17 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def donnees() -> Generator[dict[str, uuid.UUID], None, None]:
     """Compte d'épargne à solde 1000, committé (deux connexions doivent le voir). Nettoyé après."""
+    # Chantier P1bis, lot 3 : guichet.deposer/retirer datent désormais sur la journée comptable
+    # ouverte — vraie connexion, vrai commit, EN PREMIER (avant tout autre commit de ce décor) :
+    # si `date_comptable` du jour est déjà prise par une journée réelle d'un essai précédent
+    # (`JourneeExistanteError`), rien d'autre n'a encore été créé, donc rien à nettoyer. La
+    # ligne est SUPPRIMÉE (pas seulement clôturée) en fin de test pour libérer la date — pure
+    # scaffolding de test, pas une donnée métier à conserver.
+    j = SessionLocal()
+    journee_id = journee.ouvrir_journee(j, journee.prochaine_date_ouvree(j), None).id
+    j.commit()
+    j.close()
+
     s = SessionLocal()
     caisse = s.execute(
         text("SELECT id FROM comptabilite.accounts WHERE account_number = '101111'")
@@ -92,6 +104,9 @@ def donnees() -> Generator[dict[str, uuid.UUID], None, None]:
     finally:
         c = SessionLocal()
         c.execute(text("DELETE FROM caisse.sessions WHERE id = :s"), {"s": session_caisse})
+        c.execute(
+            text("DELETE FROM comptabilite.journees_comptables WHERE id = :j"), {"j": journee_id}
+        )
         c.execute(text("DELETE FROM caisse.poste_assignations WHERE poste_id = :p"), {"p": poste})
         c.execute(text("DELETE FROM caisse.postes WHERE id = :p"), {"p": poste})
         c.execute(text("DELETE FROM epargne.movements WHERE account_id = :a"), {"a": acc})

@@ -18,7 +18,8 @@ TABLE DES ERREURS :
   - poste hors périmètre, inactif, ou non assigné à l'acteur -> 404 (même discipline IDOR)
   - seuil de tolérance non paramétré             -> 404
   - session déjà ouverte / déjà fermée           -> 422
-  - aucune journée comptable ouverte (chantier P1bis, lot 2) -> 422
+  - aucune journée comptable ouverte (ouverture de caisse, lot 2 ; régularisation d'écart,
+    lot 3) -> 422
   - poste sans compte de caisse rattaché         -> 422
   - écart au-delà du seuil sans motif (CA2)      -> 422
   - écart déjà validé / non significatif (CA2)   -> 422
@@ -42,6 +43,7 @@ lui-même au-delà de la permission de route. Table de traduction dédiée : `_t
   - double regard (receveur = envoyeur)                         -> 422
   - responsabilité des niveaux (sous-chantier 3) : caissier principal non désigné, mauvais
     caissier principal, ou responsable coffre non autorisé      -> 422
+  - aucune journée comptable ouverte (chantier P1bis, lot 3)     -> 422
 
 CAISSIER PRINCIPAL (sous-chantier 3, Lot B) : GET/PUT/DELETE gardés par caisse.principale.manage
 (RESPONSABLE_AGENCE, SON agence — ÉGALITÉ STRICTE, même discipline que le coffre, voir
@@ -125,6 +127,7 @@ from app.modules.caisse.service import (
     valider_ecart,
 )
 from app.modules.comptabilite.comptes import CompteHorsCaisseError, CompteInvalideRattachementError
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
@@ -494,6 +497,7 @@ def valider_ecart_endpoint(
         SessionDejaValideeError,
         EcartNonSignificatifError,
         RattachementEcartManquantError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         db.rollback()
         raise HTTPException(
@@ -906,6 +910,9 @@ def _traduire_transfert(erreur: Exception) -> HTTPException:
             transferts_caisse.CaissierPrincipalNonDesigneError,
             transferts_caisse.CaissierPrincipalRequisError,
             transferts_caisse.ResponsableCoffreRequisError,
+            # Chantier P1bis, lot 3 : aucune journée comptable ouverte (_jour -> initiation ET
+            # réception) — sans cette entrée, ce refus légitime remonterait en 500, pas en 422.
+            AucuneJourneeOuverteError,
         ),
     ):
         return HTTPException(

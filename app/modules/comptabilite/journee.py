@@ -1,8 +1,8 @@
-"""Journée comptable — chantier P1bis, lots 1 et 2.
+"""Journée comptable — chantier P1bis, lots 1, 2 et 3.
 
-COUCHE MINCE : modèle, ouverture/fermeture, date comptable courante, branchement caisse.
-Personne ne consomme encore `date_comptable_courante` — la datation des opérations (lot 3)
-n'est pas touchée ici.
+COUCHE MINCE : modèle, ouverture/fermeture, date comptable courante, branchement caisse,
+datation des opérations. `date_comptable_obligatoire` (lot 3) est LE point d'entrée que tous
+les modules datant une opération consomment désormais — voir son docstring pour la liste.
 
 CENTRALISÉE (globale, pas par agence), au plus une 'ouverte' à la fois — le garde-fou
 définitif est l'index unique partiel posé par la migration 0055
@@ -79,11 +79,24 @@ def journee_ouverte(db: Session) -> JourneeComptable | None:
 
 
 def date_comptable_courante(db: Session) -> date | None:
-    """LA fonction que les lots 2 et 3 consommeront — personne ne l'appelle encore dans ce
-    lot. `None` si aucune journée n'est ouverte (le lot 3 devra alors refuser l'opération
-    appelante, pas deviner une date)."""
+    """La date de la journée ouverte, ou `None` si aucune journée n'est ouverte. Usage interne
+    (`date_comptable_obligatoire`) ou pour un écran qui affiche l'état sans rien dater — tout
+    module qui DATE une opération doit passer par `date_comptable_obligatoire`, jamais par
+    celle-ci directement (un `None` ne doit jamais se propager jusqu'à une écriture)."""
     journee = journee_ouverte(db)
     return journee.date_comptable if journee is not None else None
+
+
+def date_comptable_obligatoire(db: Session) -> date:
+    """LE point d'entrée unique pour dater une opération métier (chantier P1bis, lot 3) :
+    decaissement, remboursement, épargne, OD/contre-passation, affectation du résultat, parts,
+    transferts, régularisation d'écart de caisse, retard de recouvrement. Lève
+    `AucuneJourneeOuverteError` si aucune journée n'est ouverte — JAMAIS un retour silencieux
+    à la date système, JAMAIS un `None` qui se propagerait jusqu'à une écriture."""
+    jour = date_comptable_courante(db)
+    if jour is None:
+        raise AucuneJourneeOuverteError("Aucune journée comptable n'est ouverte.")
+    return jour
 
 
 def prochaine_date_ouvree(db: Session) -> date:

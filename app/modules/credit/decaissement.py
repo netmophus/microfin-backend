@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.caisse.service import resoudre_session_active
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.comptabilite.schemas_ecriture import poser_depuis_schema
 from app.modules.credit.demandes import (
@@ -178,7 +179,7 @@ def decaisser(
 
     jour = entry_date
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
 
     # Résolution du côté DESTINATION (C) : caisse (comme toujours) ou compte du tiers choisi.
     compte_epargne = None

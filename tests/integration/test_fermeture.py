@@ -248,6 +248,17 @@ def test_boucle_complete_compte_ouvert_bloque_puis_fermeture_libere(db: Session)
 
 
 def test_fermeture_interrompue_ne_laisse_rien(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Chantier P1bis, lot 3 : la restitution date désormais sur la journée comptable ouverte —
+    # vraie connexion, vrai commit, EN PREMIER (avant tout autre commit de ce test) : si la
+    # date du jour est déjà prise par une journée réelle d'un essai précédent
+    # (`JourneeExistanteError`), rien d'autre n'a encore été créé, donc rien à nettoyer. La
+    # ligne est SUPPRIMÉE (pas seulement clôturée) dans le `finally` pour libérer la date —
+    # scaffolding de test, pas une donnée métier à conserver.
+    j = SessionLocal()
+    journee_id = journee.ouvrir_journee(j, journee.prochaine_date_ouvree(j), None).id
+    j.commit()
+    j.close()
+
     s = SessionLocal()
     caisse = s.execute(
         text("SELECT id FROM comptabilite.accounts WHERE account_number = '101111'")
@@ -324,6 +335,9 @@ def test_fermeture_interrompue_ne_laisse_rien(monkeypatch: pytest.MonkeyPatch) -
         assert nb_mvt == 0
     finally:
         c = SessionLocal()
+        c.execute(
+            text("DELETE FROM comptabilite.journees_comptables WHERE id = :j"), {"j": journee_id}
+        )
         c.execute(text("DELETE FROM epargne.movements WHERE account_id = :a"), {"a": acc})
         c.execute(text("DELETE FROM epargne.accounts WHERE id = :a"), {"a": acc})
         c.execute(text("DELETE FROM tiers.tiers WHERE id = :t"), {"t": tid})

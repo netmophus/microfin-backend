@@ -76,6 +76,7 @@ from app.modules.caisse.models import (
 from app.modules.caisse.service import TAILLE_PAGE_DEFAUT, TAILLE_PAGE_MAX
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import Account, EntrySchema
 from app.modules.comptabilite.schemas_ecriture import (
     SchemaIntrouvableError,
@@ -338,7 +339,10 @@ def _maintenant(db: Session) -> datetime:
 
 
 def _jour(db: Session) -> date:
-    return cast(date, db.execute(text("SELECT CURRENT_DATE")).scalar_one())
+    """Date de la journée comptable ouverte (chantier P1bis, lot 3) — utilisée à l'envoi ET à
+    la réception du transfert, voir ses deux appels. Lève `AucuneJourneeOuverteError` si
+    aucune journée n'est ouverte (`date_comptable_obligatoire`)."""
+    return date_comptable_obligatoire(db)
 
 
 def _agence_courante(courant: UtilisateurCourant) -> uuid.UUID:

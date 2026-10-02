@@ -34,6 +34,8 @@ TABLE DES ERREURS (un seul endroit) :
   - échéance en cours déjà partiellement payée (solde anticipé, v1) -> 422
   - code/seuil de palier déjà utilisé par un autre palier, compte de rattachement invalide -> 422
   - palier encore classé sur un dossier (suppression refusée) -> 422
+  - aucune journée comptable ouverte (chantier P1bis, lot 3 : décaissement, remboursement,
+    solde anticipé, aperçu/exécution de la reclassification) -> 422
 """
 
 import uuid
@@ -47,6 +49,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account, JournalEntry
 from app.modules.credit import consultation, delinquency_parametres, gestion_produits, rattachements
 from app.modules.credit.decaissement import (
@@ -661,6 +664,7 @@ def decaisser_endpoint(
         EcheancierImpossibleError,
         CompteInvalideError,
         AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         db.rollback()
         raise HTTPException(
@@ -806,6 +810,7 @@ def rembourser_endpoint(
         MontantIncorrectError,
         RattachementManquantError,
         AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         db.rollback()
         raise HTTPException(
@@ -911,6 +916,7 @@ def solder_par_anticipation_endpoint(
         EcheanceEnCoursDejaVerseeError,
         RattachementManquantError,
         AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         db.rollback()
         raise HTTPException(
@@ -1105,7 +1111,12 @@ def previsualiser_reclassement_endpoint(
     lot 1) : la même fonction sert les deux usages, aucune écriture dans les deux cas, seule
     l'action qui suit (`POST /credit/delinquency/executer`) reste réservée à `.executer`.
     Ne liste que les dossiers dont le palier changerait réellement."""
-    apercu = previsualiser_reclassement(db)
+    try:
+        apercu = previsualiser_reclassement(db)
+    except AucuneJourneeOuverteError as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
     return ApercuReclassement(
         dossiers_evalues=apercu.dossiers_evalues,
         a_reclasser=apercu.a_reclasser,
@@ -1137,9 +1148,14 @@ def executer_reclassification_endpoint(
     """Reclasse tous les crédits décaissés (CR5c) — acte D'INSTITUTION réservé DIRECTION,
     même patron que epargne.interet.executer. Chaque dossier est committé séparément : un
     paramétrage incomplet sur l'un ne bloque pas les autres (voir reclassification.py)."""
-    rapport = executer_reclassification(
-        db, par=courant.user_id, contexte=_contexte(request)
-    )
+    try:
+        rapport = executer_reclassification(
+            db, par=courant.user_id, contexte=_contexte(request)
+        )
+    except AucuneJourneeOuverteError as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
     return RapportReclassement(
         dossiers_evalues=rapport.dossiers_evalues,
         reclasses=rapport.reclasses,

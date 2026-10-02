@@ -62,12 +62,13 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE
@@ -343,7 +344,7 @@ def executer_reclassification(
     suivants plutôt que de tout bloquer."""
     jour = aujourdhui
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
 
     ids = list(
         db.execute(select(Application.id).where(Application.status == "decaisse")).scalars()
@@ -429,7 +430,7 @@ def previsualiser_reclassement(
     CONTRÔLE » dans les deux fonctions si l'un des messages change)."""
     jour = aujourdhui
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
 
     ids = list(
         db.execute(select(Application.id).where(Application.status == "decaisse")).scalars()

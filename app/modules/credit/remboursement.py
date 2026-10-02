@@ -67,6 +67,7 @@ from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_aud
 from app.modules.caisse.service import resoudre_session_active
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE, CreditError
@@ -271,7 +272,7 @@ def rembourser(
 
     jour = entry_date
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
 
     entry: JournalEntry = ecritures.creer_brouillon(
         db,
@@ -509,7 +510,7 @@ def solder_par_anticipation(
     automatique."""
     jour = entry_date
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
 
     detail = _detail_solde_anticipe(db, demande, jour=jour)
     capital_restant = detail.capital_restant

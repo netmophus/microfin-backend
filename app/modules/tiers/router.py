@@ -25,6 +25,7 @@ from app.core.database import get_db
 from app.core.engagements import engagements_bloquants
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
@@ -571,7 +572,7 @@ def souscrire_parts_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError) as erreur:
+    except (PartsError, RattachementPartsManquantError, AucuneJourneeOuverteError) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 
@@ -595,7 +596,12 @@ def souscrire_comptant_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError, AucuneSessionOuverteError) as erreur:
+    except (
+        PartsError,
+        RattachementPartsManquantError,
+        AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
+    ) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 
@@ -616,7 +622,7 @@ def liberer_parts_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError) as erreur:
+    except (PartsError, RattachementPartsManquantError, AucuneJourneeOuverteError) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 
@@ -637,7 +643,7 @@ def rembourser_parts_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError) as erreur:
+    except (PartsError, RattachementPartsManquantError, AucuneJourneeOuverteError) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 
@@ -660,7 +666,7 @@ def annuler_parts_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError) as erreur:
+    except (PartsError, RattachementPartsManquantError, AucuneJourneeOuverteError) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 

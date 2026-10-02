@@ -22,11 +22,13 @@ maître de SA transaction.
 """
 
 import uuid
+from datetime import date
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.comptabilite.schemas_ecriture import ResolveurRole, poser_depuis_schema
 from app.modules.epargne.models import Product, SavingsAccount, SavingsMovement
@@ -225,7 +227,7 @@ def poser_ecriture_operation(
     montant: int,
     par: uuid.UUID | None,
     *,
-    entry_date: object | None = None,
+    entry_date: date | None = None,
     compte_caisse_id: uuid.UUID | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> JournalEntry:
@@ -239,7 +241,7 @@ def poser_ecriture_operation(
     """
     jour = entry_date
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
     return poser_depuis_schema(
         db,
         code=code_operation,

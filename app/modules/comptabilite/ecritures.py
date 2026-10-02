@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.comptabilite import numerotation
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import Exercice, Journal, JournalEntry, JournalLine
 
 
@@ -267,9 +268,9 @@ def contre_passer(
 ) -> JournalEntry:
     """Contre-passe une pièce validée : crée et valide une pièce INVERSE (D↔C), les deux visibles.
 
-    La date de contre-passation est celle du jour (côté base) ; elle doit tomber dans un exercice
-    ouvert. La pièce d'origine n'est PAS modifiée (son immuabilité est intacte) ; le lien se lit
-    par `reversal_of_id` sur la pièce inverse.
+    La date de contre-passation est celle de la journée comptable ouverte (chantier P1bis,
+    lot 3) ; elle doit tomber dans un exercice ouvert. La pièce d'origine n'est PAS modifiée
+    (son immuabilité est intacte) ; le lien se lit par `reversal_of_id` sur la pièce inverse.
     """
     if entry.status != "validee":
         raise PieceNonValideeError("seule une pièce validée se contre-passe")
@@ -280,7 +281,7 @@ def contre_passer(
     if deja is not None:
         raise PieceDejaContrePasseeError(f"pièce {entry.entry_number} déjà contre-passée")
 
-    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    jour = date_comptable_obligatoire(db)
     exercice = exercice_ouvert_pour(db, jour)
 
     lignes_origine = (

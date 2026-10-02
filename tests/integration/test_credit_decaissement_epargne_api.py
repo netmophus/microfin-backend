@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.comptabilite import journee
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Application, Installment
 from app.modules.credit.models import Product as CreditProduct
@@ -51,6 +52,18 @@ def db() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _journee_ouverte(request: pytest.FixtureRequest) -> None:
+    """Chantier P1bis lot 3 : les points de datation (decaissement, remboursement, épargne,
+    OD/contre-passation, affectation du résultat...) exigent désormais une journée comptable
+    ouverte — ouverte ici, via le VRAI service, pour les tests qui utilisent la fixture `db`
+    partagée. `request.fixturenames` évite de la créer pour un test qui ne l'utilise pas."""
+    if "db" not in request.fixturenames:
+        return
+    db = request.getfixturevalue("db")
+    journee.ouvrir_journee(db, journee.prochaine_date_ouvree(db), None)
 
 
 @pytest.fixture

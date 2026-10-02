@@ -13,11 +13,13 @@ Ne touche NI au solde de parts NI au registre : ce module pose SEULEMENT la piè
 """
 
 import uuid
+from datetime import date
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.comptabilite.schemas_ecriture import ResolveurRole, poser_depuis_schema
 from app.modules.parameters.models import Agency
@@ -84,14 +86,23 @@ def poser_ecriture_parts(
     compte_non_liberees_id: uuid.UUID | None,
     libelle: str,
     compte_caisse_id: uuid.UUID | None = None,
+    entry_date: date | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> JournalEntry:
-    """Pose la pièce équilibrée d'une opération de parts (date du jour). Ne touche ni cache ni
-    registre : l'appelant s'en charge, dans la même transaction.
+    """Pose la pièce équilibrée d'une opération de parts. Ne touche ni cache ni registre :
+    l'appelant s'en charge, dans la même transaction.
 
     `compte_caisse_id` : ANCRÉ, fourni par l'appelant (Bloc C3 — souscription au comptant,
-    voir en-tête de module) ; `None` pour toute autre opération, comportement inchangé."""
-    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    voir en-tête de module) ; `None` pour toute autre opération, comportement inchangé.
+
+    `entry_date` (chantier P1bis, lot 3) : date de la pièce, par défaut la journée comptable
+    ouverte — même patron que `epargne.operations.poser_ecriture_operation`. Paramètre AJOUTÉ
+    dans ce lot (absent jusqu'ici) ; son unique appelant (`tiers.parts.*`) ne le fournit pas
+    encore, il reçoit donc la date de la journée par défaut, pas de changement de comportement
+    en semaine (journée = date système)."""
+    jour = entry_date
+    if jour is None:
+        jour = date_comptable_obligatoire(db)
     return poser_depuis_schema(
         db,
         code=code_operation,

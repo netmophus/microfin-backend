@@ -55,6 +55,7 @@ from app.modules.caisse.transferts import (
     initier_transfert,
     receptionner_transfert,
 )
+from app.modules.comptabilite import journee
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
@@ -85,6 +86,20 @@ def db() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _journee_ouverte(request: pytest.FixtureRequest) -> None:
+    """Chantier P1bis lot 3 : `transferts._jour` (envoi ET réception) exige désormais une
+    journée comptable ouverte — ce fichier construit ses sessions de caisse par INSERT direct
+    (`_session_ouverte`), pas via `caisse.service.ouvrir_session`, donc le lot 2 ne l'a jamais
+    concerné ; le lot 3 l'atteint quand même via `_jour`. Même garde-fou anti-interblocage que
+    les 19 fichiers du lot 2 : n'agit que si `db` est déjà dans la fermeture de fixtures du
+    test."""
+    if "db" not in request.fixturenames:
+        return
+    db = request.getfixturevalue("db")
+    journee.ouvrir_journee(db, journee.prochaine_date_ouvree(db), None)
 
 
 @pytest.fixture
