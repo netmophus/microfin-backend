@@ -1,8 +1,8 @@
-"""Journée comptable — chantier P1bis, lot 1.
+"""Journée comptable — chantier P1bis, lots 1 et 2.
 
-COUCHE MINCE, FONDATION ADDITIVE : modèle, ouverture/fermeture, date comptable courante.
-Personne ne consomme encore `date_comptable_courante` dans ce lot — ni la caisse (lot 2),
-ni la datation des opérations (lot 3). Ce fichier ne touche à aucun module existant.
+COUCHE MINCE : modèle, ouverture/fermeture, date comptable courante, branchement caisse.
+Personne ne consomme encore `date_comptable_courante` — la datation des opérations (lot 3)
+n'est pas touchée ici.
 
 CENTRALISÉE (globale, pas par agence), au plus une 'ouverte' à la fois — le garde-fou
 définitif est l'index unique partiel posé par la migration 0055
@@ -13,8 +13,12 @@ commodité de message, pas le dernier rempart, même philosophie que
 DÉFINITIVE (même décision que l'exercice comptable, `cloture_exercice.py`) : aucune
 réouverture, aucune colonne ni fonction pour ça.
 
-PRÉCONDITION CAISSE (lot 2, PAS ICI) : `cloturer_journee` ne vérifie pas encore qu'aucune
-session de caisse ne reste ouverte — voir le TODO explicite dans la fonction.
+BRANCHEMENT CAISSE (chantier P1bis, lot 2) : `cloturer_journee` refuse si une session de
+caisse reste ouverte quelque part sur le réseau (`_nombre_de_caisses_ouvertes`, requête
+DIRECTE sur `caisse.sessions`, aucun import du module caisse — voir la fonction). Côté
+ouverture, c'est `caisse.service.ouvrir_session` qui refuse si aucune journée n'est ouverte
+(`caisse.service.JourneeFermeeError`) : ce fichier ne contient pas cette moitié de la
+précondition, par construction (caisse dépend de comptabilite, jamais l'inverse).
 """
 
 import uuid
@@ -49,6 +53,12 @@ class JourneeExistanteError(Exception):
 
 class AucuneJourneeOuverteError(Exception):
     """Aucune journée ouverte à clôturer."""
+
+
+class CaissesOuvertesError(Exception):
+    """Au moins une session de caisse reste ouverte quelque part sur le réseau (chantier
+    P1bis, lot 2) : la journée ne peut pas être clôturée tant qu'un caissier n'a pas fermé
+    son tiroir."""
 
 
 @dataclass(frozen=True)
@@ -94,6 +104,18 @@ def journee_courante(db: Session) -> JourneeCourante:
     return JourneeCourante(
         journee=journee_ouverte(db), prochaine_date_proposee=prochaine_date_ouvree(db)
     )
+
+
+def _nombre_de_caisses_ouvertes(db: Session) -> int:
+    """Requête DIRECTE sur caisse.sessions, PAS d'import du module caisse (chantier P1bis, lot
+    2) — même discipline que `caisse.service.calculer_solde_theorique`, qui interroge
+    comptabilite en sens inverse par SQL direct plutôt que par import croisé. Lit le même
+    index unique partiel que caisse.sessions utilise pour garantir « une session ouverte par
+    caissier » ; aucune nouvelle migration."""
+    resultat = db.execute(
+        text("SELECT count(*) FROM caisse.sessions WHERE status = 'ouverte'")
+    ).scalar_one()
+    return int(resultat)
 
 
 def lister_journees(db: Session) -> list[JourneeComptable]:
@@ -151,16 +173,22 @@ def cloturer_journee(
     db: Session, par: uuid.UUID | None, *, contexte: ContexteRequete = CONTEXTE_VIDE
 ) -> JourneeComptable:
     """Clôture DÉFINITIVEMENT la journée ouverte — refuse s'il n'y en a aucune
-    (`AucuneJourneeOuverteError`). FOR UPDATE anti double-clic : deux clics simultanés sur
-    « Clôturer » ne doivent jamais produire deux clôtures.
-
-    TODO (lot 2) : refuser si une session de caisse reste ouverte quelque part sur le
-    réseau — précondition volontairement absente de ce lot (additif strict)."""
+    (`AucuneJourneeOuverteError`), ou si une session de caisse reste ouverte quelque part sur
+    le réseau (`CaissesOuvertesError`, chantier P1bis lot 2 — tout le réseau, pas seulement
+    l'agence de l'acteur : la journée est centralisée). FOR UPDATE anti double-clic : deux
+    clics simultanés sur « Clôturer » ne doivent jamais produire deux clôtures."""
     journee = db.execute(
         select(JourneeComptable).where(JourneeComptable.status == "ouverte").with_for_update()
     ).scalar_one_or_none()
     if journee is None:
         raise AucuneJourneeOuverteError("Aucune journée comptable ouverte à clôturer.")
+
+    caisses_ouvertes = _nombre_de_caisses_ouvertes(db)
+    if caisses_ouvertes > 0:
+        raise CaissesOuvertesError(
+            f"{caisses_ouvertes} caisse(s) encore ouverte(s) : fermez-les avant de clôturer "
+            "la journée comptable."
+        )
 
     maintenant = db.execute(text("SELECT NOW()")).scalar_one()
     journee.status = "cloturee"

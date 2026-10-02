@@ -18,6 +18,7 @@ TABLE DES ERREURS :
   - poste hors périmètre, inactif, ou non assigné à l'acteur -> 404 (même discipline IDOR)
   - seuil de tolérance non paramétré             -> 404
   - session déjà ouverte / déjà fermée           -> 422
+  - aucune journée comptable ouverte (chantier P1bis, lot 2) -> 422
   - poste sans compte de caisse rattaché         -> 422
   - écart au-delà du seuil sans motif (CA2)      -> 422
   - écart déjà validé / non significatif (CA2)   -> 422
@@ -105,6 +106,7 @@ from app.modules.caisse.service import (
     TAILLE_PAGE_DEFAUT,
     TAILLE_PAGE_MAX,
     EcartNonSignificatifError,
+    JourneeFermeeError,
     MotifRequisError,
     RattachementManquantError,
     SessionDejaFermeeError,
@@ -250,7 +252,7 @@ def ouvrir_session_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_POSTE_INTROUVABLE
         ) from None
-    except (SessionDejaOuverteError, RattachementManquantError) as erreur:
+    except (JourneeFermeeError, SessionDejaOuverteError, RattachementManquantError) as erreur:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)

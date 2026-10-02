@@ -1,14 +1,18 @@
-"""API — Journée comptable (chantier P1bis, lot 1).
+"""API — Journée comptable (chantier P1bis, lots 1 et 2).
 
-ADDITIF STRICT : ce lot ne crée que le modèle, l'ouverture/fermeture et l'écran. Aucun autre
-module (caisse, datation des opérations) n'est branché dessus — `date_comptable_courante`
-existe mais n'est consommée par personne encore.
+LOT 1 : modèle, ouverture/fermeture, écran. LOT 2 : branchement caisse — la clôture refuse s'il
+reste une session de caisse ouverte quelque part sur le réseau (côté ouverture de caisse, voir
+`test_caisse_sessions.py::test_ouverture_refusee_si_aucune_journee_comptable_ouverte`, la moitié
+symétrique de la garde vit dans `caisse/service.py`, pas ici).
 
   - au plus une journée OUVERTE à la fois, garanti par l'index unique partiel en base
     (migration 0055) — le test `test_refuse_une_seconde_ouverture_si_deja_ouverte` couvre le
     contrôle applicatif, pas l'index lui-même (pas testable depuis une connexion unique) ;
   - une date déjà utilisée (ouverte OU clôturée) ne peut pas servir à une nouvelle ouverture ;
   - clôture DÉFINITIVE, aucune réouverture ;
+  - clôture refusée (chantier P1bis lot 2) si une session de caisse reste ouverte, quelle que
+    soit son agence — la caisse ouverte dans ce test est posée via le VRAI service
+    (`caisse.service.ouvrir_session`), jamais une ligne SQL à la main ;
   - permissions : compta.journee.manage (COMPTABLE), 403 sinon — permission DISTINCTE de
     compta.exercice.manage.
 
@@ -28,6 +32,10 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.caisse.models import Poste, PosteAssignation
+from app.modules.caisse.service import ouvrir_session
+from app.modules.parameters.models import Agency
+from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
@@ -210,6 +218,70 @@ def test_cloture_sans_permission_refuse_403(client: TestClient, db: Session) -> 
     caissier = _entete(db, "CAISSIER")
     reponse = client.post("/comptabilite/journees/cloture", headers=caissier)
     assert reponse.status_code == 403
+
+
+def _cid(db: Session, numero: str) -> uuid.UUID:
+    return db.execute(
+        text("SELECT id FROM comptabilite.accounts WHERE account_number = :n"), {"n": numero}
+    ).scalar_one()
+
+
+def _agence_avec_poste_caisse(db: Session, code: str) -> Poste:
+    """Agence + poste de caisse principal, même patron que test_caisse_sessions.py::_agence."""
+    compte_id = _cid(db, "101111")
+    agence = Agency(code=code, name=f"Agence {code}", compte_caisse_id=compte_id)
+    db.add(agence)
+    db.flush()
+    poste = Poste(
+        agency_id=agence.id, code="01", libelle="Caisse principale", compte_caisse_id=compte_id
+    )
+    db.add(poste)
+    db.flush()
+    return poste
+
+
+def _caissier_courant(db: Session, poste: Poste, suffixe: str) -> UtilisateurCourant:
+    role = db.execute(select(Role).where(Role.code == "CAISSIER")).scalar_one()
+    user = User(
+        matricule=f"MAT-JRN-{suffixe}", email=f"jrn{suffixe}@ex.com", username=f"jrn{suffixe}",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"),
+        last_name="Caissier", first_name=suffixe,
+        primary_agency_id=poste.agency_id,
+    )
+    db.add(user)
+    db.flush()
+    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.add(PosteAssignation(poste_id=poste.id, user_id=user.id))
+    db.flush()
+    return UtilisateurCourant(
+        user_id=user.id,
+        roles=("CAISSIER",),
+        permissions=frozenset({"caisse.session.open"}),
+        primary_agency_id=poste.agency_id,
+        agency_id=poste.agency_id,
+        voit_tout=False,
+    )
+
+
+def test_cloture_refusee_si_une_caisse_reste_ouverte(client: TestClient, db: Session) -> None:
+    """Chantier P1bis lot 2 — la clôture refuse tant qu'il reste une session de caisse ouverte,
+    quel que soit le réseau : la caisse est ouverte ici via le VRAI service
+    (`caisse.service.ouvrir_session`), jamais une ligne SQL à la main."""
+    comptable = _entete(db, "COMPTABLE")
+    client.post(
+        "/comptabilite/journees", json={"date_comptable": LUNDI_1.isoformat()}, headers=comptable
+    )
+
+    poste = _agence_avec_poste_caisse(db, "CXJCL")
+    caissier = _caissier_courant(db, poste, "CL")
+    ouvrir_session(db, caissier, poste_id=poste.id, fonds_initial=10_000)
+
+    reponse = client.post("/comptabilite/journees/cloture", headers=comptable)
+    assert reponse.status_code == 422
+    assert "1 caisse" in reponse.json()["detail"]
+
+    courante = client.get("/comptabilite/journees/courante", headers=comptable)
+    assert courante.json()["journee"]["status"] == "ouverte"
 
 
 # --- Historique --------------------------------------------------------------------------------

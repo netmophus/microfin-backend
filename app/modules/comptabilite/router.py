@@ -23,7 +23,8 @@ TABLE DES ERREURS (un seul endroit) :
   - états financiers : aucune, bilan/compte de résultat se calculent toujours (un déséquilibre
     ou des comptes non mappés sont SIGNALÉS dans la réponse, jamais une erreur HTTP)
   - journée comptable : déjà une journée ouverte, date déjà utilisée, aucune journée ouverte à
-    clôturer -> 422, message humain (journee.py)
+    clôturer, caisse(s) encore ouverte(s) (chantier P1bis lot 2) -> 422, message humain
+    (journee.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
 en 2 temps, mapping états financiers) -> compta.plan.manage. Rapports (grand livre, balance,
@@ -1278,13 +1279,14 @@ def cloturer_journee_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> JourneeComptableResume:
     """Clôture DÉFINITIVEMENT la journée ouverte — voir journee.cloturer_journee pour le détail
-    (aucune précondition de caisse dans ce lot, voir le TODO explicite du service)."""
+    (chantier P1bis lot 2 : refuse aussi s'il reste une session de caisse ouverte quelque part
+    sur le réseau)."""
     try:
         journee_cloturee = journee.cloturer_journee(
             db, courant.user_id, contexte=_contexte(request)
         )
         db.commit()
-    except journee.AucuneJourneeOuverteError as erreur:
+    except (journee.AucuneJourneeOuverteError, journee.CaissesOuvertesError) as erreur:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)

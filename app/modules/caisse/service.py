@@ -20,6 +20,10 @@ caissier, pas par agence).
 UNE SEULE SESSION OUVERTE PAR CAISSIER : vérifié ici (message clair) ET en base (index unique
 partiel `uq_caisse_sessions_caissier_ouverte`, dernier rempart si ce contrôle était contourné).
 
+JOURNÉE COMPTABLE (chantier P1bis, lot 2) : `ouvrir_session` refuse si aucune journée n'est
+ouverte (`JourneeFermeeError`) — voir `comptabilite/journee.py`. `fermer_session` N'A PAS cette
+précondition : une caisse doit toujours pouvoir se fermer, journée ouverte ou non.
+
 LECTURE : deux publics, un seul chemin (`lire_session`/`lister_sessions_manquantes`). Le
 CAISSIER voit TOUJOURS ses propres sessions (caisse.session.read, sans condition d'agence —
 c'est SA donnée, comme consulter sa propre fiche). Un tiers (responsable/audit/direction) ne
@@ -42,6 +46,7 @@ from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_aud
 from app.modules.caisse.ecart_operations import RattachementEcartManquantError, poser_ecriture_ecart
 from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.postes import PosteIntrouvableError
+from app.modules.comptabilite import journee
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
@@ -54,6 +59,11 @@ PERMISSION_LECTURE_AUTRES = "caisse.session.read.autres"
 
 TAILLE_PAGE_DEFAUT = 25
 TAILLE_PAGE_MAX = 100
+
+
+class JourneeFermeeError(Exception):
+    """Aucune journée comptable n'est ouverte (chantier P1bis, lot 2) : une caisse ne peut pas
+    ouvrir hors d'une journée — le mouvement n'aurait aucune date comptable à porter."""
 
 
 class SessionDejaOuverteError(Exception):
@@ -138,7 +148,18 @@ def ouvrir_session(
     403 : IDOR, on ne révèle pas qu'un poste hors de portée existe).
 
     `compte_caisse_id` est ANCRÉ ici, copié depuis le POSTE choisi à cet instant — jamais
-    recalculé ensuite, même si le rattachement change après coup."""
+    recalculé ensuite, même si le rattachement change après coup.
+
+    PRÉCONDITION JOURNÉE (chantier P1bis, lot 2) : refuse AVANT toute autre lecture si aucune
+    journée comptable n'est ouverte (`JourneeFermeeError`) — une caisse ne s'ouvre jamais hors
+    d'une journée. `fermer_session` n'a PAS cette précondition, volontairement : une caisse doit
+    toujours pouvoir se fermer, journée ouverte ou non."""
+    if journee.journee_ouverte(db) is None:
+        raise JourneeFermeeError(
+            "Aucune journée comptable n'est ouverte. Demandez l'ouverture de la journée avant "
+            "d'ouvrir une caisse."
+        )
+
     deja = db.execute(
         select(CaisseSession.id).where(
             CaisseSession.caissier_id == courant.user_id, CaisseSession.status == "ouverte"

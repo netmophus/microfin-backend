@@ -21,6 +21,7 @@ from app.core.database import engine, get_db
 from app.main import app
 from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.service import ouvrir_session
+from app.modules.comptabilite import journee
 from app.modules.credit import remboursement as remboursement_module
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
@@ -47,6 +48,24 @@ def db() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _journee_ouverte(request: pytest.FixtureRequest) -> None:
+    """Chantier P1bis lot 2 : `ouvrir_session` exige désormais une journée comptable ouverte
+    — ouverte ici, via le VRAI service (jamais une ligne SQL à la main), pour les tests qui
+    utilisent la fixture `db` partagée (directement ou via `client`). PAS pour les tests qui
+    gèrent leurs propres connexions `SessionLocal()` (ex. simulation de panne/interruption,
+    `test_fermeture.py::test_fermeture_interrompue_ne_laisse_rien`) : forcer `db` pour eux ouvre
+    une seconde connexion qui GARDE le verrou consultatif du chaînage d'audit pendant toute la
+    durée du test (la transaction du fixture `db` ne se termine qu'à son teardown) — si cette
+    seconde connexion propre au test a elle-même besoin de ce verrou (via `ecrire_audit`), c'est
+    un INTERBLOCAGE certain entre les deux connexions du même test. `request.fixturenames` dit
+    si `db` est déjà dans la fermeture de fixtures du test SANS la créer elle-même."""
+    if "db" not in request.fixturenames:
+        return
+    db = request.getfixturevalue("db")
+    journee.ouvrir_journee(db, journee.prochaine_date_ouvree(db), None)
 
 
 @pytest.fixture

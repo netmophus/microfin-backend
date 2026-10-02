@@ -26,6 +26,7 @@ from app.main import app
 from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.service import (
     AucuneSessionOuverteError,
+    JourneeFermeeError,
     RattachementManquantError,
     SessionDejaOuverteError,
     SessionIntrouvableError,
@@ -36,6 +37,7 @@ from app.modules.caisse.service import (
     ouvrir_session,
     resoudre_session_active,
 )
+from app.modules.comptabilite import journee
 from app.modules.credit.decaissement import decaisser
 from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Product as CreditProduct
@@ -65,6 +67,24 @@ def db() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _journee_ouverte(request: pytest.FixtureRequest) -> None:
+    """Chantier P1bis lot 2 : `ouvrir_session` exige désormais une journée comptable ouverte
+    — ouverte ici, via le VRAI service (jamais une ligne SQL à la main), pour les tests qui
+    utilisent la fixture `db` partagée (directement ou via `client`). PAS pour les tests qui
+    gèrent leurs propres connexions `SessionLocal()` (ex. simulation de panne/interruption,
+    `test_fermeture.py::test_fermeture_interrompue_ne_laisse_rien`) : forcer `db` pour eux ouvre
+    une seconde connexion qui GARDE le verrou consultatif du chaînage d'audit pendant toute la
+    durée du test (la transaction du fixture `db` ne se termine qu'à son teardown) — si cette
+    seconde connexion propre au test a elle-même besoin de ce verrou (via `ecrire_audit`), c'est
+    un INTERBLOCAGE certain entre les deux connexions du même test. `request.fixturenames` dit
+    si `db` est déjà dans la fermeture de fixtures du test SANS la créer elle-même."""
+    if "db" not in request.fixturenames:
+        return
+    db = request.getfixturevalue("db")
+    journee.ouvrir_journee(db, journee.prochaine_date_ouvree(db), None)
 
 
 @pytest.fixture
@@ -363,6 +383,34 @@ def test_solde_theorique_avant_toute_operation_egale_le_fonds_initial(db: Sessio
 
 
 # --- Garde-fous vus mordre, pas seulement déclarés ------------------------------------------
+
+
+def test_ouverture_refusee_si_aucune_journee_comptable_ouverte(db: Session) -> None:
+    """Chantier P1bis lot 2 — la fixture `_journee_ouverte` (autouse) en a déjà ouvert une pour
+    CE test ; on la clôture explicitement ici pour retomber dans l'état « aucune journée »,
+    sans jamais fabriquer cet état à la main en SQL (clôture via le vrai service)."""
+    journee.cloturer_journee(db, None)
+    db.flush()
+
+    agence = _agence(db, "CXJ1")
+    caissier_user = _utilisateur(db, agence, "J1")
+    caissier = _courant(caissier_user, agence)
+
+    with pytest.raises(JourneeFermeeError):
+        _ouvrir(db, caissier, agence, fonds_initial=10_000)
+
+
+def test_ouverture_acceptee_si_une_journee_comptable_est_ouverte(db: Session) -> None:
+    """Chantier P1bis lot 2 — le cas nominal : la fixture autouse a déjà ouvert une journée,
+    l'ouverture de caisse doit réussir normalement (même chemin que tous les autres tests de ce
+    fichier, mais explicite ici pour documenter la règle)."""
+    agence = _agence(db, "CXJ2")
+    caissier_user = _utilisateur(db, agence, "J2")
+    caissier = _courant(caissier_user, agence)
+
+    session = _ouvrir(db, caissier, agence, fonds_initial=10_000)
+
+    assert session.status == "ouverte"
 
 
 def test_deux_sessions_ouvertes_pour_le_meme_caissier_refuse(db: Session) -> None:
