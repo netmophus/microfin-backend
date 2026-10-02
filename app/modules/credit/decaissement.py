@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.caisse.service import resoudre_session_active
+from app.modules.comptabilite import calendrier
 from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.comptabilite.schemas_ecriture import poser_depuis_schema
@@ -101,16 +102,27 @@ def _ajouter_periode(depart: date, periodicite: str) -> date:
 
 
 def _dater_echeances(
-    echeances: list[Echeance], depart: date, periodicite: str
+    db: Session, echeances: list[Echeance], depart: date, periodicite: str
 ) -> list[tuple[Echeance, date]]:
-    """Associe à chaque échéance sa date calendaire, par pas de période depuis `depart`.
-    PARTAGÉ par decaisser() (persisté) et generer_apercu() (pur) : même datation, même moteur
-    — pour que les deux ne puissent jamais diverger par accident."""
+    """Associe à chaque échéance sa date calendaire, par pas de période depuis `depart`, PUIS
+    reporte au prochain jour ouvré (chantier P1bis, lot 4b — `calendrier.prochain_jour_ouvre`,
+    jour INCLUS) si la date théorique tombe un week-end ou un férié.
+
+    AUCUNE DÉRIVE CUMULATIVE (décision actée) : `echeance_date`, la date THÉORIQUE, reste SEULE
+    base du calcul de l'échéance SUIVANTE — le report ne s'applique QU'À la date renvoyée dans
+    le tuple, jamais à la variable de chaînage. Sans ce découplage, un report glisserait le
+    rythme de TOUTES les échéances restantes (ex. mensualités au 31 qui dériveraient au fil de
+    l'année) au lieu de rester ancré sur le jour théorique du mois.
+
+    PARTAGÉ par decaisser() (persisté) et generer_apercu() (pur, aperçu AUSSI reporté depuis ce
+    lot pour rester fidèle à ce qui sera réellement généré) : même datation, même moteur — pour
+    que les deux ne puissent jamais diverger par accident."""
     resultat: list[tuple[Echeance, date]] = []
     echeance_date = depart
     for echeance in echeances:
         echeance_date = _ajouter_periode(echeance_date, periodicite)
-        resultat.append((echeance, echeance_date))
+        date_reportee = calendrier.prochain_jour_ouvre(db, echeance_date)
+        resultat.append((echeance, date_reportee))
     return resultat
 
 
@@ -240,7 +252,7 @@ def decaisser(
         regle_arrondi=produit.regle_arrondi,
     )
 
-    for echeance, echeance_date in _dater_echeances(echeances, jour, produit.periodicite):
+    for echeance, echeance_date in _dater_echeances(db, echeances, jour, produit.periodicite):
         db.add(
             Installment(
                 application_id=demande.id,
@@ -304,9 +316,13 @@ def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
 
     Les MONTANTS (capital/intérêts/total/capital restant dû) sont GARANTIS identiques à
     l'échéancier réellement décaissé : ils ne dépendent que du montant, de la durée et des
-    paramètres du produit, jamais de la date. Les DATES, elles, sont calculées comme si le
-    décaissement avait lieu AUJOURD'HUI — illustratives : le décaissement réel ancre ses
-    propres dates sur SA date d'exécution, qui peut différer du jour où l'aperçu a été vu.
+    paramètres du produit, jamais de la date (chantier P1bis lot 4b : le calcul périodique des
+    intérêts est proportionnel — taux annuel / nb de périodes fixe, voir echeancier.py — le
+    report d'une date sur le prochain jour ouvré ne change AUCUN montant). Les DATES, elles,
+    sont calculées comme si le décaissement avait lieu AUJOURD'HUI, PUIS reportées au prochain
+    jour ouvré comme le sera l'échéancier réel (même moteur, `_dater_echeances`) — illustratives
+    seulement parce que le décaissement réel ancre ses propres dates sur SA date d'exécution,
+    qui peut différer du jour où l'aperçu a été vu.
 
     Refuse si la demande n'est pas approuvée (rien à prévisualiser) ou si le produit est
     devenu indisponible. Peut lever EcheancierImpossibleError — même garde-fou qu'au
@@ -339,5 +355,5 @@ def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
             total=echeance.total,
             capital_restant_du=echeance.capital_restant_du,
         )
-        for echeance, echeance_date in _dater_echeances(echeances, jour, produit.periodicite)
+        for echeance, echeance_date in _dater_echeances(db, echeances, jour, produit.periodicite)
     ]
