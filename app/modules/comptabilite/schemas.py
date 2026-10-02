@@ -258,6 +258,32 @@ class ExerciceResume(BaseModel):
     a_nouveaux_generes: bool
 
 
+# --- Journée comptable (chantier P1bis, lot 1) -------------------------------------------------
+# Noms d'acteur RÉSOLUS en clair (opened_par_nom/closed_par_nom) — jamais un UUID nu à l'écran,
+# même discipline que caisse.schemas.SessionCaisse (caissier_nom).
+
+
+class JourneeComptableResume(BaseModel):
+    id: uuid.UUID
+    date_comptable: date
+    status: Literal["ouverte", "cloturee"]
+    opened_at: datetime
+    opened_par_nom: str | None
+    closed_at: datetime | None
+    closed_par_nom: str | None
+
+
+class JourneeCouranteSchema(BaseModel):
+    journee: JourneeComptableResume | None
+    prochaine_date_proposee: date
+
+
+class OuvertureJournee(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date_comptable: date
+
+
 class LigneResultatCloture(BaseModel):
     account_number: str
     name: str

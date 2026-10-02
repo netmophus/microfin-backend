@@ -36,6 +36,7 @@ from app.modules.comptabilite.models import (
     Journal,
     JournalEntry,
     JournalLine,
+    JourneeComptable,
 )
 from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
@@ -148,6 +149,8 @@ TABLES_ATTENDUES = frozenset(
         "comptabilite.entry_schema_lines",
         # Mapping comptes -> postes d'états financiers, chantier P1 lot c (migration 0054).
         "comptabilite.financial_statement_mapping",
+        # Journée comptable, chantier P1bis lot 1 (migration 0055).
+        "comptabilite.journees_comptables",
         # Épargne E0+E2 — produits, comptes, mouvements, numérotation (migration 0018).
         "epargne.products",
         "epargne.accounts",
@@ -236,6 +239,7 @@ MODELES = [
     EntrySchema,
     EntrySchemaLine,
     FinancialStatementMapping,
+    JourneeComptable,
     Product,
     SavingsAccount,
     SavingsMovement,

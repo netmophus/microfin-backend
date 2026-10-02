@@ -44,14 +44,15 @@ def test_les_donnees_declarees_sont_coherentes() -> None:
 
     assert len(ROLES) == 11
     # 20 Sécurité (18 + roles.permissions.read lot 1 + roles.permissions.manage lot 2,
-    # écran Rôles et habilitations) + 14 Tiers (10 + 4 parts) + 7 Compta + 9 Épargne
+    # écran Rôles et habilitations) + 14 Tiers (10 + 4 parts) + 8 Compta (7 + journee.manage,
+    # chantier P1bis lot 1) + 9 Épargne
     # + 9 Crédit (2 produit + 3 demande + 1 décaissement + 1 remboursement
     #             + 2 reclassification : executer + read)
     # + 3 Caisse (open + close + read) + read.autres + poste.manage
     # + 1 Caisse CA2 (session.valider)
     # + 2 Caisse sous-chantier 2 (transfert.initier + transfert.valider)
     # + 2 Caisse sous-chantier 3 (coffre.gerer + principale.manage)
-    assert len(PERMISSIONS) == 69
+    assert len(PERMISSIONS) == 70
     assert set(MATRICE) == codes_roles
     for role_code, accordees in MATRICE.items():
         assert accordees <= codes_permissions, f"{role_code} cite une permission inconnue"
@@ -87,7 +88,7 @@ def test_le_seed_installe_les_roles_et_permissions(session: Session) -> None:
     nb_permissions = session.execute(text("SELECT count(*) FROM security.permissions")).scalar_one()
 
     assert nb_roles == 11
-    assert nb_permissions == 69
+    assert nb_permissions == 70
 
 
 def test_le_seed_est_idempotent(session: Session) -> None:

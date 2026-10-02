@@ -2,7 +2,7 @@
 (import/export CSV en masse) + Rapports (grand livre, balance) + Saisie manuelle d'écriture OD
 (chantier P1, lot 1) + Clôture TECHNIQUE d'exercice (chantier P1, lot b1) + Affectation du
 résultat (chantier P1, lot b2a) + À-nouveaux (chantier P1, lot b2b) + États financiers, bilan et
-compte de résultat (chantier P1, dernier lot).
+compte de résultat (chantier P1, dernier lot) + Journée comptable (chantier P1bis, lot 1).
 
 TABLE DES ERREURS (un seul endroit) :
   - permission absente                          -> 403 (exige(), en amont)
@@ -22,6 +22,8 @@ TABLE DES ERREURS (un seul endroit) :
     (a_nouveaux.py)
   - états financiers : aucune, bilan/compte de résultat se calculent toujours (un déséquilibre
     ou des comptes non mappés sont SIGNALÉS dans la réponse, jamais une erreur HTTP)
+  - journée comptable : déjà une journée ouverte, date déjà utilisée, aucune journée ouverte à
+    clôturer -> 422, message humain (journee.py)
 
 Lecture (+ export) -> compta.plan.read. Écriture (créer, modifier, sens, désactiver, import
 en 2 temps, mapping états financiers) -> compta.plan.manage. Rapports (grand livre, balance,
@@ -30,7 +32,9 @@ compta.ecriture.read ; brouillon/validation/suppression -> compta.ecriture.post 
 contre-passation -> compta.ecriture.reverse (permissions existantes, déjà attribuées à
 COMPTABLE — seed_security.py). Exercices (liste, clôture, affectation, à-nouveaux — aperçus
 compris) -> compta.exercice.manage, lecture et écriture confondues : ces actes sont de la
-gestion, pas une simple consultation.
+gestion, pas une simple consultation. Journée comptable (liste, courante, ouverture, clôture) ->
+compta.journee.manage, même raisonnement, permission DISTINCTE de compta.exercice.manage
+(lifecycle quotidien, pas annuel).
 """
 
 import uuid
@@ -49,6 +53,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -62,6 +67,7 @@ from app.modules.comptabilite import (
     ecritures,
     ecritures_od,
     etats_financiers,
+    journee,
     plan,
     rapports,
 )
@@ -86,6 +92,7 @@ from app.modules.comptabilite.models import (
     Exercice,
     FinancialStatementMapping,
     JournalEntry,
+    JourneeComptable,
 )
 from app.modules.comptabilite.rapports import TAILLE_PAGE_GRAND_LIVRE, CompteNonSaisieError
 from app.modules.comptabilite.schemas import (
@@ -116,6 +123,8 @@ from app.modules.comptabilite.schemas import (
     EcritureODDetail,
     EcritureODResume,
     ExerciceResume,
+    JourneeComptableResume,
+    JourneeCouranteSchema,
     LigneANouveauxSchema,
     LigneBalance,
     LigneEcritureODDetail,
@@ -125,6 +134,7 @@ from app.modules.comptabilite.schemas import (
     LigneResultatCloture,
     ModificationCompte,
     ModificationMapping,
+    OuvertureJournee,
     PageComptes,
     PageEcrituresOD,
     PageGrandLivre,
@@ -133,6 +143,7 @@ from app.modules.comptabilite.schemas import (
 )
 from app.modules.comptabilite.service import ModificationInterditeError
 from app.modules.security.autorisation import UtilisateurCourant, exige
+from app.modules.security.models import User
 from app.modules.security.router import _contexte
 
 router = APIRouter(prefix="/comptabilite", tags=["comptabilite"])
@@ -1170,4 +1181,116 @@ def modifier_mapping_endpoint(
     compte = db.get(Account, account_id)
     assert compte is not None
     return _vers_ligne_mapping(compte, mapping)
+
+
+# --- Journée comptable, chantier P1bis lot 1 ---------------------------------------------------
+# ADDITIF STRICT : aucun autre module n'est branché dans ce lot (ni la caisse, ni la datation des
+# opérations). compta.journee.manage pour les quatre routes, même raisonnement que
+# compta.exercice.manage : consulter la liste ou la journée courante est déjà un acte de gestion
+# sur ce périmètre.
+
+
+def _noms_acteurs(db: Session, ids: set[uuid.UUID | None]) -> dict[uuid.UUID, str]:
+    """Résout un lot d'identifiants d'acteur en noms complets, UNE seule requête — jamais un
+    aller-retour base par ligne d'historique."""
+    ids_valides = {i for i in ids if i is not None}
+    if not ids_valides:
+        return {}
+    nom_complet = func.concat_ws(" ", User.first_name, User.last_name)
+    resultats = db.execute(
+        select(User.id, nom_complet).where(User.id.in_(ids_valides))
+    ).all()
+    return {row[0]: row[1] for row in resultats}
+
+
+def _vers_journee_resume(
+    journee_obj: JourneeComptable, noms: dict[uuid.UUID, str]
+) -> JourneeComptableResume:
+    opened_by = journee_obj.opened_by
+    closed_by = journee_obj.closed_by
+    return JourneeComptableResume(
+        id=journee_obj.id,
+        date_comptable=journee_obj.date_comptable,
+        status=cast(Literal["ouverte", "cloturee"], journee_obj.status),
+        opened_at=journee_obj.opened_at,
+        opened_par_nom=noms.get(opened_by) if opened_by is not None else None,
+        closed_at=journee_obj.closed_at,
+        closed_par_nom=noms.get(closed_by) if closed_by is not None else None,
+    )
+
+
+@router.get("/journees", response_model=list[JourneeComptableResume])
+def lister_journees_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[JourneeComptableResume]:
+    journees = journee.lister_journees(db)
+    ids = {j.opened_by for j in journees} | {j.closed_by for j in journees}
+    noms = _noms_acteurs(db, ids)
+    return [_vers_journee_resume(j, noms) for j in journees]
+
+
+@router.get("/journees/courante", response_model=JourneeCouranteSchema)
+def journee_courante_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> JourneeCouranteSchema:
+    """La journée ouverte (ou son absence) ET la prochaine date ouvrée proposée — tout ce dont
+    le formulaire d'ouverture a besoin en un seul appel."""
+    etat = journee.journee_courante(db)
+    ids_acteurs: set[uuid.UUID | None] = (
+        {etat.journee.opened_by, etat.journee.closed_by} if etat.journee else set()
+    )
+    noms = _noms_acteurs(db, ids_acteurs)
+    return JourneeCouranteSchema(
+        journee=_vers_journee_resume(etat.journee, noms) if etat.journee is not None else None,
+        prochaine_date_proposee=etat.prochaine_date_proposee,
+    )
+
+
+@router.post(
+    "/journees", response_model=JourneeComptableResume, status_code=status.HTTP_201_CREATED
+)
+def ouvrir_journee_endpoint(
+    corps: OuvertureJournee,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> JourneeComptableResume:
+    try:
+        nouvelle_journee = journee.ouvrir_journee(
+            db, corps.date_comptable, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except (journee.UneSeuleJourneeError, journee.JourneeExistanteError) as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    noms = _noms_acteurs(db, {nouvelle_journee.opened_by})
+    return _vers_journee_resume(nouvelle_journee, noms)
+
+
+@router.post("/journees/cloture", response_model=JourneeComptableResume)
+def cloturer_journee_endpoint(
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.journee.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> JourneeComptableResume:
+    """Clôture DÉFINITIVEMENT la journée ouverte — voir journee.cloturer_journee pour le détail
+    (aucune précondition de caisse dans ce lot, voir le TODO explicite du service)."""
+    try:
+        journee_cloturee = journee.cloturer_journee(
+            db, courant.user_id, contexte=_contexte(request)
+        )
+        db.commit()
+    except journee.AucuneJourneeOuverteError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    noms = _noms_acteurs(
+        db, {journee_cloturee.opened_by, journee_cloturee.closed_by}
+    )
+    return _vers_journee_resume(journee_cloturee, noms)
 

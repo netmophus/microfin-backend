@@ -221,6 +221,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("compta.ecriture.post", "compta", "Saisir un brouillon et valider une écriture"),
     Permission("compta.ecriture.reverse", "compta", "Contre-passer une écriture validée"),
     Permission("compta.exercice.manage", "compta", "Ouvrir/clôturer un exercice comptable"),
+    # --- Journée comptable (chantier P1bis, lot 1) : ouvrir/clôturer la journée centralisée,
+    # consulter son historique. Permission DISTINCTE de compta.exercice.manage (lifecycle
+    # quotidien, pas annuel) — même granularité fine que plan/exercice, pas de sur-découpage
+    # (une seule permission couvre lecture ET écriture, même raisonnement que exercice.manage).
+    Permission("compta.journee.manage", "compta", "Ouvrir/clôturer la journée comptable"),
     # --- Rapports (R1/R2) : grand livre et balance — lecture pure, aucune écriture. Même
     # patron d'octroi que epargne.rapprochement.read (comptable + supervision).
     Permission("compta.rapport.read", "compta", "Consulter les rapports comptables (grand livre, balance)"),
@@ -449,6 +454,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "compta.ecriture.post",
             "compta.ecriture.reverse",
             "compta.exercice.manage",
+            "compta.journee.manage",
             "compta.rapport.read",
             "epargne.account.read",
             "epargne.product.read",

@@ -101,6 +101,43 @@ class Exercice(Base):
         return f"<Exercice {self.code} {self.status}>"
 
 
+class JourneeComptable(Base):
+    """La journée comptable (chantier P1bis, lot 1) — CENTRALISÉE (globale, pas par agence),
+    au plus une 'ouverte' à la fois (`uq_journees_comptables_ouverte`, migration 0055).
+    `date_comptable` n'est pas forcément la date système (ex. ouverture le vendredi de la
+    journée du lundi). DÉFINITIVE : aucune réouverture possible.
+
+    FONDATION DORMANTE dans ce lot : rien ne la consomme encore (ni la caisse, ni la
+    datation des écritures) — voir `comptabilite/journee.py::date_comptable_courante`."""
+
+    __tablename__ = "journees_comptables"
+    __table_args__: tuple[Any, ...] = (
+        sa.UniqueConstraint("date_comptable"),
+        # LE garde-fou : au plus une journée ouverte à la fois, tout le réseau confondu —
+        # même technique que caisse.sessions (migration 0040).
+        sa.Index(
+            "uq_journees_comptables_ouverte",
+            "status",
+            unique=True,
+            postgresql_where=sa.text("status = 'ouverte'"),
+        ),
+        {"schema": "comptabilite"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    date_comptable: Mapped[date] = mapped_column(sa.Date, nullable=False)
+    status: Mapped[str] = mapped_column(
+        sa.String(10), nullable=False, server_default=sa.text("'ouverte'")
+    )
+    opened_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    opened_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    closed_at: Mapped[datetime | None] = mapped_column(TS)
+    closed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+    def __repr__(self) -> str:
+        return f"<JourneeComptable {self.date_comptable} {self.status}>"
+
+
 class Journal(Base):
     """Un journal comptable (caisse, banque, opérations diverses…). Donnée provisoire."""
 
