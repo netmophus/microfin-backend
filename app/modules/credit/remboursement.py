@@ -477,13 +477,16 @@ def _detail_solde_anticipe(db: Session, demande: Application, *, jour: date) -> 
 def apercevoir_solde_anticipe(
     db: Session, demande: Application, *, jour: date | None = None
 ) -> DetailSoldeAnticipe:
-    """Aperçu PUR (CR6b-like) de ce que coûterait un solde anticipé AUJOURD'HUI (ou `jour`) —
-    RIEN N'EST ÉCRIT EN BASE, aucun db.add, aucun db.commit. Les montants sont GARANTIS
-    identiques à ceux réellement posés par `solder_par_anticipation` LE MÊME JOUR (même
-    fonction de calcul, voir `_detail_solde_anticipe`) — un jour différent recalcule sur SA
-    propre date, l'aperçu n'est qu'indicatif au-delà d'aujourd'hui."""
+    """Aperçu PUR (CR6b-like) de ce que coûterait un solde anticipé à la date de la journée
+    comptable ouverte (ou `jour`, qui reste prioritaire s'il est fourni explicitement) — RIEN
+    N'EST ÉCRIT EN BASE, aucun db.add, aucun db.commit. Les montants sont GARANTIS identiques à
+    ceux réellement posés par `solder_par_anticipation` LE MÊME JOUR (même fonction de calcul,
+    voir `_detail_solde_anticipe`, et désormais la MÊME source de date par défaut —
+    `date_comptable_obligatoire`, chantier P1quater — plus de divergence possible entre
+    l'aperçu et le réel, y compris le week-end). Un `jour` différent recalcule sur SA propre
+    date, l'aperçu n'est qu'indicatif au-delà de la journée ouverte."""
     if jour is None:
-        jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+        jour = date_comptable_obligatoire(db)
     return _detail_solde_anticipe(db, demande, jour=jour)
 
 

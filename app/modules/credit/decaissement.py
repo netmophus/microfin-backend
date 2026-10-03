@@ -311,22 +311,25 @@ def decaisser(
 def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
     """Aperçu PUR de l'échéancier d'une demande APPROUVÉE — même moteur que decaisser()
     (generer_echeancier + _dater_echeances). RIEN N'EST ÉCRIT EN BASE : aucun db.add, aucun
-    db.commit — juste deux lectures (produit, date du jour) et un calcul. À présenter au
-    client avant signature/décaissement.
+    db.commit — juste deux lectures (produit, date de la journée comptable ouverte) et un
+    calcul. À présenter au client avant signature/décaissement.
 
     Les MONTANTS (capital/intérêts/total/capital restant dû) sont GARANTIS identiques à
     l'échéancier réellement décaissé : ils ne dépendent que du montant, de la durée et des
     paramètres du produit, jamais de la date (chantier P1bis lot 4b : le calcul périodique des
     intérêts est proportionnel — taux annuel / nb de périodes fixe, voir echeancier.py — le
     report d'une date sur le prochain jour ouvré ne change AUCUN montant). Les DATES, elles,
-    sont calculées comme si le décaissement avait lieu AUJOURD'HUI, PUIS reportées au prochain
-    jour ouvré comme le sera l'échéancier réel (même moteur, `_dater_echeances`) — illustratives
-    seulement parce que le décaissement réel ancre ses propres dates sur SA date d'exécution,
-    qui peut différer du jour où l'aperçu a été vu.
+    sont désormais ancrées sur la MÊME source que le décaissement réel
+    (`date_comptable_obligatoire`, chantier P1quater) — exige une journée comptable ouverte,
+    comme `decaisser()` et comme `previsualiser_reclassement` (reclassification.py) : plus de
+    divergence possible entre l'aperçu et le réel vu le même jour, y compris le week-end où la
+    date civile et la journée ouverte (prochain jour ouvré) pouvaient différer de plusieurs
+    jours.
 
     Refuse si la demande n'est pas approuvée (rien à prévisualiser) ou si le produit est
     devenu indisponible. Peut lever EcheancierImpossibleError — même garde-fou qu'au
-    décaissement, révélé PLUS TÔT (dès l'approbation, avant toute tentative réelle)."""
+    décaissement, révélé PLUS TÔT (dès l'approbation, avant toute tentative réelle). Lève
+    AucuneJourneeOuverteError si aucune journée n'est ouverte — propagée, pas absorbée."""
     if demande.status != "approuve":
         raise DemandeNonApprouveeError(
             f"Cette demande ({demande.application_number}) n'est pas approuvée "
@@ -337,7 +340,7 @@ def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
     if produit is None or not produit.is_active:
         raise ProduitIntrouvableError("Produit de crédit inexistant ou devenu indisponible.")
 
-    jour = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    jour = date_comptable_obligatoire(db)
     echeances = generer_echeancier(
         montant=demande.montant_decide,
         taux_bp=produit.taux_bp,

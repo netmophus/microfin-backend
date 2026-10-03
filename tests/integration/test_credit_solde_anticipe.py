@@ -453,7 +453,12 @@ def test_api_apercu_renvoie_les_bons_montants(client: TestClient, db: Session) -
     agence = _agence(db, "CSA10")
     tier_id = _tier(db, agence)
     produit = _produit(db)
-    date_decaissement = _aujourdhui(db) - timedelta(days=15)
+    # Ancré sur la date de la JOURNÉE COMPTABLE OUVERTE (chantier P1quater) — la source que
+    # `apercevoir_solde_anticipe` utilise désormais par défaut, PAS CURRENT_DATE : les deux
+    # divergent le week-end (journée ouverte = prochain jour ouvré). 15 jours courus reste
+    # vrai n'importe quel jour de la semaine, parce que l'ancrage ET le calcul lisent la même
+    # source — plus de CURRENT_DATE en dur ici.
+    date_decaissement = journee.date_comptable_obligatoire(db) - timedelta(days=15)
     demande = _credit_decaisse(db, agence, tier_id, produit, entry_date=date_decaissement)
     caissier = _entete(db, agence, "CAISSIER")
 
@@ -497,8 +502,14 @@ def test_api_post_solde_bascule_statut_et_pose_la_piece(
     agence = _agence(db, "CSA12")
     tier_id = _tier(db, agence)
     produit = _produit(db)
+    # Même raison que test_api_apercu_renvoie_les_bons_montants ci-dessus : ancré sur la
+    # journée comptable ouverte, pas CURRENT_DATE.
     demande = _credit_decaisse(
-        db, agence, tier_id, produit, entry_date=_aujourdhui(db) - timedelta(days=15)
+        db,
+        agence,
+        tier_id,
+        produit,
+        entry_date=journee.date_comptable_obligatoire(db) - timedelta(days=15),
     )
     caissier = _entete(db, agence, "CAISSIER")
     _ouvrir_session_caisse_acteur(db, agence, caissier)
