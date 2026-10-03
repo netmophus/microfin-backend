@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.database import engine, get_db
 from app.main import app
 from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
-from app.modules.caisse.service import ouvrir_session
+from app.modules.caisse.service import fermer_session, ouvrir_session
 from app.modules.comptabilite import journee
 from app.modules.comptabilite.models import Account
 from app.modules.credit.decaissement import RattachementManquantError, decaisser
@@ -494,6 +494,52 @@ def test_api_apercu_erreur_claire_si_non_decaissable(client: TestClient, db: Ses
 
     assert reponse.status_code == 422
     assert "décaissée" in reponse.json()["detail"]
+
+
+def test_api_apercu_refuse_proprement_sans_journee_ouverte(
+    client: TestClient, db: Session
+) -> None:
+    """Chantier P1quater : apercevoir_solde_anticipe exige désormais date_comptable_obligatoire,
+    comme l'action réelle — doit refuser en 422 avec le message métier, jamais un 500 brut. La
+    journée ouverte par l'autouse `_journee_ouverte` est explicitement clôturée ICI (pas de
+    désactivation globale de l'autouse) ; aucune session de caisse n'est ouverte dans ce test,
+    la clôture ne peut donc pas être refusée."""
+    agence = _agence(db, "CSA16")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande = _credit_decaisse(db, agence, tier_id, produit)
+    caissier = _entete(db, agence, "CAISSIER")
+
+    # _credit_decaisse ouvre une session de caisse (mode 'caisse' par défaut) qui reste
+    # ouverte : cloturer_journee refuse tout le réseau tant qu'il en reste une — fermer la
+    # SIENNE avant de clôturer, via le VRAI service (jamais une ligne SQL à la main). Motif
+    # fourni d'office : l'écart (décaissement réel sorti du tiroir) dépasse le seuil de
+    # tolérance, peu importe ici — ce n'est pas ce que ce test vérifie.
+    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    session_ouverte_id = db.execute(
+        select(CaisseSession.id).where(
+            CaisseSession.caissier_id == uid, CaisseSession.status == "ouverte"
+        )
+    ).scalar_one()
+    fermer_session(
+        db,
+        UtilisateurCourant(
+            user_id=uid, roles=(), permissions=frozenset(),
+            primary_agency_id=agence.id, agency_id=agence.id, voit_tout=True,
+        ),
+        session_ouverte_id,
+        montant_reel=0,
+        motif="Clôture de test",
+    )
+
+    journee.cloturer_journee(db, par=None)
+
+    reponse = client.get(
+        f"/credit/demandes/{demande.id}/solde-anticipe/apercu", headers=caissier
+    )
+
+    assert reponse.status_code == 422
+    assert "Aucune journée comptable n'est ouverte" in reponse.json()["detail"]
 
 
 def test_api_post_solde_bascule_statut_et_pose_la_piece(

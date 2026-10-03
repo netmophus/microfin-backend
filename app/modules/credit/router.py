@@ -602,6 +602,7 @@ def apercu_echeancier_endpoint(
         DemandeNonApprouveeError,
         ProduitIntrouvableError,
         EcheancierImpossibleError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
@@ -870,6 +871,7 @@ def apercu_solde_anticipe_endpoint(
         AucuneEcheanceAReglerError,
         EcheanceEnCoursDejaVerseeError,
         RattachementManquantError,
+        AucuneJourneeOuverteError,
     ) as erreur:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)

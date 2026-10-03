@@ -222,6 +222,26 @@ def test_apercu_refuse_si_pas_encore_approuve(client: TestClient, db: Session) -
     assert "approuv" in reponse.json()["detail"].lower()
 
 
+def test_apercu_refuse_proprement_sans_journee_ouverte(client: TestClient, db: Session) -> None:
+    """Chantier P1quater : generer_apercu exige désormais date_comptable_obligatoire, comme le
+    décaissement réel — doit refuser en 422 avec le message métier, jamais un 500 brut. La
+    journée ouverte par l'autouse `_journee_ouverte` est explicitement clôturée ICI pour
+    reproduire l'état « aucune journée ouverte » sans désactiver l'autouse globalement — aucune
+    session de caisse n'est ouverte dans ce test, la clôture ne peut donc pas être refusée."""
+    agence = _agence(db, "APA9")
+    tier_id = _tier(db, agence)
+    produit = _produit(db)
+    demande_id = _demande_approuvee(db, agence, tier_id, produit)
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    journee.cloturer_journee(db, par=None)
+
+    reponse = client.get(f"/credit/demandes/{demande_id}/echeancier-apercu", headers=responsable)
+
+    assert reponse.status_code == 422
+    assert "Aucune journée comptable n'est ouverte" in reponse.json()["detail"]
+
+
 # --- Rien n'est écrit ------------------------------------------------------------------------
 
 
