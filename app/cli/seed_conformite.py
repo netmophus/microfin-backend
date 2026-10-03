@@ -1,0 +1,382 @@
+"""Seed des ratios prudentiels RCSFD (lot P2.1.c) — ENTIÈREMENT PARAMÉTRABLE : ce fichier ne
+contient AUCUNE formule câblée, seulement des DONNÉES Python converties en lignes
+`conformite.agregat_prudentiel`/`agregat_compte`/`ratio_prudentiel`/`ratio_seuil`/
+`parametre_institution`. Le moteur (`app/modules/conformite/moteur.py`) ne lit que la base.
+
+NON DESTRUCTIF ET IDEMPOTENT : chaque agrégat/ratio est créé UNE SEULE FOIS (vérifié par
+`code`, qui est UNIQUE) — un ré-import ne duplique rien, ne touche jamais une ligne déjà
+présente (y compris si elle a été corrigée à l'écran depuis).
+
+COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
+`docs/reference/plan_comptable_import.csv` (390 comptes) :
+
+  FONDS_PROPRES : capital libéré (571111), FRRG (54), primes (551), réserves (552, capture
+  5521/5522/5523), fonds de dotation (56), report à nouveau (58, un seul compte — positif
+  s'additionne, négatif se déduit, DÉJÀ résolu par le signe de `rapports.balance`), résultat en
+  instance d'approbation (591, même remarque), subventions d'investissement — SEULEMENT 5011
+  (5012 « virées au compte de résultat » EXCLU, déjà reconnu en résultat), fonds affectés (502),
+  fonds de crédit (503), provisions pour risques et charges (51), provisions réglementées (52),
+  emprunts et titres subordonnés (53, intégral, aucun plafonnement réglementaire modélisé).
+  DÉDUIT : parts non libérées (571121), capital non appelé (5712), capital souscrit non
+  appelé/versé des associés (573, capture 5731/5732). `applique_complement_provisions_tutelle`
+  = TRUE (ajustement administratif, voir parametre_institution).
+  EN ATTENTE, PAS SEEDÉES : déduction des immobilisations incorporelles nettes (441) et des
+  participations dans d'autres SFD (412) — le plan committé n'a AUCUN compte brut pour ces
+  deux familles (seulement leurs amortissements/provisions), voir la note de diagnostic P2.1.
+  À reprendre après correction du plan de comptes (hors périmètre P2.0).
+
+  RISQUES_PORTES : expositions sur les institutions financières (11, 12, 13), crédits aux
+  membres/clients (20), prêts en souffrance (191/192/193/194, PAS 19 — 19 recouvrirait son
+  propre compte de provision 199 et annulerait la déduction au lieu de la faire), provisions
+  correspondantes DÉDUITES (199), crédits en souffrance (291/292/293/294, même raison — PAS 29),
+  provisions DÉDUITES (299), titres de placement (305+307), provisions DÉDUITES (309),
+  participations — versements restants + créances rattachées SEULEMENT (4126+4127, pas de
+  compte brut, voir note ci-dessus), provisions DÉDUITES (4129). DÉPÔTS DE GARANTIE REÇUS
+  DÉDUITS (162 côté IF, 254 côté membres/clients — réduisent le risque net, collatéral détenu).
+  SOUS-COMPTES « RATTACHÉS » NEUTRALISÉS (contribution nette = 0, pas une vraie déduction) :
+  1136/1146/1166/1176 (Dettes rattachées, créditrices, nichées sous 11 qui est débiteur — une
+  dette n'est pas une exposition au risque).
+  HORS PÉRIMÈTRE, ABSENT DU PLAN : engagements par signature et titres d'investissement (aucune
+  classe hors-bilan 8/9 dans le plan committé).
+
+  RESSOURCES : dépôts/emprunts/ressources affectées des institutions financières (15, 16, 17,
+  18), dépôts/emprunts des membres et clients (25, 27), créditeurs divers (332), comptes
+  d'attente passif (3792), régularisation passif (382), PLUS la même composition que
+  FONDS_PROPRES (additions et déductions identiques — une ressource de financement inclut les
+  fonds propres). SOUS-COMPTES RATTACHÉS NEUTRALISÉS : 1547/1567/1577 (Créances rattachées,
+  débitrices, nichées sous 15 qui est créditeur) et 25117 (même raison, sous 25).
+
+RATIOS :
+  #1 et #5 ACTIFS (seuils validés). #2, #3, #4, #6, #7, #8, #9, #10 créés `actif=FALSE`,
+  « en attente » — chacun référence des agrégats-placeholders à composition VIDE (un agrégat
+  BALANCE sans aucune ligne `agregat_compte` rend 0, jamais une exception — voir
+  `moteur._valeur_balance`), SAUF #2 qui réutilise FONDS_PROPRES côté numérateur. AUCUN seuil
+  n'est seedé pour ces 8 : je n'ai pas de valeur validée, et CLAUDE.md interdit d'inventer une
+  valeur de configuration. #10 a un agrégat SPECIAL de part et d'autre
+  (`DOTATION_RESERVE_GENERALE_PERIODE`/`EXCEDENT_PERIODE`) dont la fonction n'est PAS encore
+  écrite dans le moteur — lèverait `CalculSpecialInconnuError` si jamais évalué directement,
+  sans risque tant que `actif=FALSE` (jamais atteint par `evaluer_tous`).
+"""
+
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.modules.conformite.models import (
+    AgregatCompte,
+    AgregatPrudentiel,
+    ParametreInstitution,
+    RatioPrudentiel,
+    RatioSeuil,
+)
+
+
+@dataclass(frozen=True)
+class _CompositionLigne:
+    prefixe: str
+    sens: int
+
+
+@dataclass(frozen=True)
+class _AgregatDef:
+    code: str
+    libelle: str
+    reference: str | None = None
+    type: str = "BALANCE"
+    calcul_special: str | None = None
+    nets_de_provisions: bool = False
+    applique_complement_provisions_tutelle: bool = False
+    composition: Sequence[_CompositionLigne] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _SeuilDef:
+    categorie_sfd: str | None
+    valeur: int
+
+
+@dataclass(frozen=True)
+class _RatioDef:
+    code: str
+    libelle: str
+    numerateur: str
+    denominateur: str
+    operateur: str
+    ordre: int
+    actif: bool = True
+    reference_reglementaire: str | None = None
+    seuils: Sequence[_SeuilDef] = field(default_factory=tuple)
+
+
+def _c(prefixe: str, sens: int) -> _CompositionLigne:
+    return _CompositionLigne(prefixe, sens)
+
+
+_FONDS_PROPRES_COMPOSITION = (
+    _c("571111", 1), _c("54", 1), _c("551", 1), _c("552", 1), _c("56", 1),
+    _c("58", 1), _c("591", 1), _c("5011", 1), _c("502", 1), _c("503", 1),
+    _c("51", 1), _c("52", 1), _c("53", 1),
+    _c("571121", -1), _c("5712", -1), _c("573", -1),
+)
+
+AGREGATS: tuple[_AgregatDef, ...] = (
+    _AgregatDef(
+        code="FONDS_PROPRES",
+        libelle="Fonds propres effectifs",
+        reference="Instruction BCEAO 010-08-2010 — définition large, hors immobilisations "
+        "incorporelles nettes et participations dans d'autres SFD (en attente, voir docstring)",
+        applique_complement_provisions_tutelle=True,
+        composition=_FONDS_PROPRES_COMPOSITION,
+    ),
+    _AgregatDef(
+        code="RISQUES_PORTES",
+        libelle="Risques portés (nets de provisions et dépôts de garantie)",
+        composition=(
+            _c("11", 1), _c("12", 1), _c("13", 1), _c("20", 1),
+            _c("191", 1), _c("192", 1), _c("193", 1), _c("194", 1), _c("199", -1),
+            _c("291", 1), _c("292", 1), _c("293", 1), _c("294", 1), _c("299", -1),
+            _c("305", 1), _c("307", 1), _c("309", -1),
+            _c("4126", 1), _c("4127", 1), _c("4129", -1),
+            _c("162", -1), _c("254", -1),
+            # Neutralisation des rattachés à sens opposé nichés sous 11 (débiteur) : des
+            # dettes (créditrices) qui ne sont pas une exposition au risque. Contribution
+            # nette = 0, PAS une vraie déduction (voir docstring de module).
+            _c("1136", -1), _c("1146", -1), _c("1166", -1), _c("1176", -1),
+        ),
+    ),
+    _AgregatDef(
+        code="RESSOURCES",
+        libelle="Ressources (comptes créditeurs, emprunts, dépôts, fonds propres)",
+        composition=(
+            _c("15", 1), _c("16", 1), _c("17", 1), _c("18", 1), _c("25", 1), _c("27", 1),
+            _c("332", 1), _c("3792", 1), _c("382", 1),
+            # Neutralisation des rattachés à sens opposé : des créances (débitrices) nichées
+            # sous 15/25 (créditeurs) qui ne sont pas une ressource de financement.
+            _c("1547", -1), _c("1567", -1), _c("1577", -1), _c("25117", -1),
+            *_FONDS_PROPRES_COMPOSITION,
+        ),
+    ),
+    _AgregatDef(
+        code="ENCOURS_PLUS_GROS_EMPRUNTEUR",
+        libelle="Encours du plus gros emprunteur",
+        type="SPECIAL",
+        calcul_special="PLUS_GROS_EMPRUNTEUR",
+    ),
+    # --- Placeholders « en attente » (lot P2.1.c) — composition VIDE à dessein : un agrégat
+    # BALANCE sans ligne rend 0, jamais une exception (voir moteur._valeur_balance). Les 8
+    # ratios qui les référencent sont actif=FALSE, jamais évalués par evaluer_tous().
+    _AgregatDef(code="TOTAL_ACTIF_NET", libelle="Total actif net (en attente de composition)"),
+    _AgregatDef(code="EMPLOIS_MLT", libelle="Emplois à moyen et long terme (en attente — "
+                "durée résiduelle des crédits non encore exploitée)"),
+    _AgregatDef(code="RESSOURCES_STABLES", libelle="Ressources stables (en attente — durée "
+                "contractuelle absente sur les produits d'épargne à terme)"),
+    _AgregatDef(code="PRETS_DIRIGEANTS_PERSONNEL", libelle="Prêts aux dirigeants et au "
+                "personnel (en attente — aucun marqueur dirigeant/personnel en base)"),
+    _AgregatDef(code="VALEURS_REALISABLES_DISPONIBLES", libelle="Valeurs réalisables et "
+                "disponibles (en attente — même gap que ressources stables)"),
+    _AgregatDef(code="PASSIF_EXIGIBLE", libelle="Passif exigible à court terme (en attente)"),
+    _AgregatDef(code="OPERATIONS_AUTRES", libelle="Opérations autres qu'épargne et crédit "
+                "(en attente — définition du numérateur à vérifier contre le texte réglementaire)"),
+    _AgregatDef(code="PARTICIPATIONS", libelle="Participations hors établissements de crédit "
+                "et SFD (en attente — compte brut absent du plan, voir docstring)"),
+    _AgregatDef(code="IMMOS_PLUS_PARTICIPATIONS", libelle="Immobilisations nettes + "
+                "participations (en attente — même gap)"),
+    _AgregatDef(
+        code="DOTATION_RESERVE_GENERALE_PERIODE",
+        libelle="Dotation à la réserve générale sur la période (en attente — calcul SPECIAL "
+        "non écrit, flux de la dernière affectation, pas un solde cumulé)",
+        type="SPECIAL",
+        calcul_special="DOTATION_RESERVE_GENERALE_PERIODE",
+    ),
+    _AgregatDef(
+        code="EXCEDENT_PERIODE",
+        libelle="Excédent de la période (en attente — calcul SPECIAL non écrit)",
+        type="SPECIAL",
+        calcul_special="EXCEDENT_PERIODE",
+    ),
+)
+
+RATIOS: tuple[_RatioDef, ...] = (
+    _RatioDef(
+        code="RATIO_1_COUVERTURE_RISQUES",
+        libelle="Couverture des risques portés par les ressources",
+        numerateur="RISQUES_PORTES",
+        denominateur="RESSOURCES",
+        operateur="LE",
+        ordre=1,
+        seuils=(_SeuilDef(categorie_sfd=None, valeur=200),),
+    ),
+    _RatioDef(
+        code="RATIO_2_CAPITALISATION",
+        libelle="Capitalisation générale (en attente)",
+        numerateur="FONDS_PROPRES",
+        denominateur="TOTAL_ACTIF_NET",
+        operateur="GE",
+        ordre=2,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_3_COUVERTURE_EMPLOIS_MLT",
+        libelle="Couverture des emplois à moyen et long terme par des ressources stables "
+        "(en attente)",
+        numerateur="EMPLOIS_MLT",
+        denominateur="RESSOURCES_STABLES",
+        operateur="LE",
+        ordre=3,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_4_LIMITATION_PRETS_DIRIGEANTS",
+        libelle="Limitation des prêts aux dirigeants et au personnel (en attente)",
+        numerateur="PRETS_DIRIGEANTS_PERSONNEL",
+        denominateur="FONDS_PROPRES",
+        operateur="LE",
+        ordre=4,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_5_DIVISION_RISQUES",
+        libelle="Division des risques (plus gros emprunteur)",
+        numerateur="ENCOURS_PLUS_GROS_EMPRUNTEUR",
+        denominateur="FONDS_PROPRES",
+        operateur="LE",
+        ordre=5,
+        seuils=(_SeuilDef(categorie_sfd=None, valeur=10),),
+    ),
+    _RatioDef(
+        code="RATIO_6_LIQUIDITE",
+        libelle="Liquidité (en attente)",
+        numerateur="VALEURS_REALISABLES_DISPONIBLES",
+        denominateur="PASSIF_EXIGIBLE",
+        operateur="GE",
+        ordre=6,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_7_OPERATIONS_AUTRES",
+        libelle="Limitation des opérations autres qu'épargne et crédit (en attente)",
+        numerateur="OPERATIONS_AUTRES",
+        denominateur="TOTAL_ACTIF_NET",
+        operateur="LE",
+        ordre=7,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_8_LIMITATION_PARTICIPATIONS",
+        libelle="Limitation des participations (en attente)",
+        numerateur="PARTICIPATIONS",
+        denominateur="FONDS_PROPRES",
+        operateur="LE",
+        ordre=8,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_9_IMMOS_PLUS_PARTICIPATIONS",
+        libelle="Limitation immobilisations + participations (en attente)",
+        numerateur="IMMOS_PLUS_PARTICIPATIONS",
+        denominateur="FONDS_PROPRES",
+        operateur="LE",
+        ordre=9,
+        actif=False,
+    ),
+    _RatioDef(
+        code="RATIO_10_RESERVE_GENERALE",
+        libelle="Dotation minimale à la réserve générale (en attente)",
+        numerateur="DOTATION_RESERVE_GENERALE_PERIODE",
+        denominateur="EXCEDENT_PERIODE",
+        operateur="GE",
+        ordre=10,
+        actif=False,
+    ),
+)
+
+
+@dataclass
+class RapportSeedConformite:
+    agregats_crees: int = 0
+    ratios_crees: int = 0
+    seuils_crees: int = 0
+    parametre_institution_cree: bool = False
+
+
+def executer_seed_conformite(db: Session) -> RapportSeedConformite:
+    """Non destructif, idempotent — ne touche jamais une ligne déjà présente (vérifié par
+    `code`, UNIQUE). Ne committe pas : l'appelant décide."""
+    rapport = RapportSeedConformite()
+    agregats_par_code: dict[str, AgregatPrudentiel] = {}
+
+    for definition in AGREGATS:
+        existant = db.execute(
+            select(AgregatPrudentiel).where(AgregatPrudentiel.code == definition.code)
+        ).scalar_one_or_none()
+        if existant is not None:
+            agregats_par_code[definition.code] = existant
+            continue
+
+        agregat = AgregatPrudentiel(
+            code=definition.code,
+            libelle=definition.libelle,
+            reference=definition.reference,
+            type=definition.type,
+            calcul_special=definition.calcul_special,
+            nets_de_provisions=definition.nets_de_provisions,
+            applique_complement_provisions_tutelle=(
+                definition.applique_complement_provisions_tutelle
+            ),
+            is_system=True,
+        )
+        db.add(agregat)
+        db.flush()
+        for ligne in definition.composition:
+            db.add(
+                AgregatCompte(
+                    agregat_id=agregat.id,
+                    prefixe_compte=ligne.prefixe,
+                    sens=ligne.sens,
+                    is_system=True,
+                )
+            )
+        agregats_par_code[definition.code] = agregat
+        rapport.agregats_crees += 1
+
+    db.flush()
+
+    for ratio_def in RATIOS:
+        ratio_existant = db.execute(
+            select(RatioPrudentiel).where(RatioPrudentiel.code == ratio_def.code)
+        ).scalar_one_or_none()
+        if ratio_existant is not None:
+            continue
+
+        ratio = RatioPrudentiel(
+            code=ratio_def.code,
+            libelle=ratio_def.libelle,
+            reference_reglementaire=ratio_def.reference_reglementaire,
+            agregat_numerateur_id=agregats_par_code[ratio_def.numerateur].id,
+            agregat_denominateur_id=agregats_par_code[ratio_def.denominateur].id,
+            operateur=ratio_def.operateur,
+            actif=ratio_def.actif,
+            ordre=ratio_def.ordre,
+            is_system=True,
+        )
+        db.add(ratio)
+        db.flush()
+        for seuil in ratio_def.seuils:
+            db.add(
+                RatioSeuil(
+                    ratio_id=ratio.id,
+                    categorie_sfd=seuil.categorie_sfd,
+                    valeur_seuil=seuil.valeur,
+                    is_system=True,
+                )
+            )
+            rapport.seuils_crees += 1
+        rapport.ratios_crees += 1
+
+    if db.execute(select(ParametreInstitution)).first() is None:
+        db.add(ParametreInstitution(categorie_sfd="NON_AFFILIE", complement_provisions_tutelle=0))
+        rapport.parametre_institution_cree = True
+
+    return rapport

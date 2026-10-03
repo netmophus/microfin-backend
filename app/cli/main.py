@@ -18,6 +18,7 @@ from app.cli.seed_comptabilite import (
     seed_parametres_caisse,
     seed_parametres_parts,
 )
+from app.cli.seed_conformite import executer_seed_conformite
 from app.cli.seed_credit import executer_seed_paliers_souffrance, executer_seed_produits_credit
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
@@ -49,6 +50,7 @@ from app.modules.comptabilite.plan import (
     ImportRefuseError,
     importer,
 )
+from app.modules.conformite import models as _conformite_models  # noqa: F401
 from app.modules.credit import models as _credit_models  # noqa: F401
 from app.modules.epargne import models as _epargne_models  # noqa: F401
 from app.modules.parameters import models as _parameters_models  # noqa: F401
@@ -280,6 +282,30 @@ def seed_credit() -> None:
     )
     typer.secho(
         "  PROVISOIRE — taux/seuils de démonstration, comptes non rattachés, à valider par l'IMF.",
+        fg=typer.colors.YELLOW,
+    )
+    typer.echo("")
+
+
+@app.command("seed-conformite")
+def seed_conformite() -> None:
+    """Installe le socle des ratios prudentiels RCSFD (agrégats, ratios, seuils,
+    paramètre d'institution). Non destructif, idempotent."""
+    with SessionLocal() as db:
+        rapport = executer_seed_conformite(db)
+        db.commit()
+    typer.echo("")
+    typer.secho(
+        f"  Conformité — ratios prudentiels : {rapport.agregats_crees} agrégat(s), "
+        f"{rapport.ratios_crees} ratio(s), {rapport.seuils_crees} seuil(s) créés.",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    if rapport.parametre_institution_cree:
+        typer.echo("  parametre_institution amorcé (catégorie NON_AFFILIE, à ajuster à l'écran).")
+    typer.secho(
+        "  2 ratios actifs (#1, #5) ; 8 en attente (actif=FALSE) — voir "
+        "app/cli/seed_conformite.py pour le détail des gaps.",
         fg=typer.colors.YELLOW,
     )
     typer.echo("")

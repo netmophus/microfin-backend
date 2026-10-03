@@ -42,6 +42,13 @@ from app.modules.comptabilite.models import (
 from app.modules.comptabilite.models import (
     NumberingSequence as ComptaNumberingSequence,
 )
+from app.modules.conformite.models import (
+    AgregatCompte,
+    AgregatPrudentiel,
+    ParametreInstitution,
+    RatioPrudentiel,
+    RatioSeuil,
+)
 from app.modules.credit.models import Application as CreditApplication
 from app.modules.credit.models import DelinquencyEvent as CreditDelinquencyEvent
 from app.modules.credit.models import DelinquencyTier as CreditDelinquencyTier
@@ -200,6 +207,13 @@ TABLES_ATTENDUES = frozenset(
         # Chantier coffre-fort/caisses, sous-chantier 3, Lot A — désignation du caissier
         # principal d'une agence (migration 0048).
         "caisse.caissiers_principaux",
+        # Conformité — socle des ratios prudentiels RCSFD, entièrement paramétrable
+        # (lot P2.1.a, migration 0057).
+        "conformite.agregat_prudentiel",
+        "conformite.agregat_compte",
+        "conformite.ratio_prudentiel",
+        "conformite.ratio_seuil",
+        "conformite.parametre_institution",
     }
 )
 
@@ -268,6 +282,11 @@ MODELES = [
     NiveauCaisse,
     Transfert,
     CaissierPrincipal,
+    AgregatPrudentiel,
+    AgregatCompte,
+    RatioPrudentiel,
+    RatioSeuil,
+    ParametreInstitution,
 ]
 
 
