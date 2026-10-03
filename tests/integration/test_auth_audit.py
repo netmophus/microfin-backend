@@ -143,7 +143,9 @@ def test_seule_la_pose_du_verrou_est_auditee(db: Session, utilisateur: User) -> 
     # Un seul événement, malgré 5 échecs : le verrouillage, pas chaque échec.
     assert actions == [ActionAudit.ACCOUNT_LOCKED]
     ligne = db.execute(
-        select(AuditLog).where(AuditLog.action == ActionAudit.ACCOUNT_LOCKED)
+        select(AuditLog).where(
+            AuditLog.user_id == utilisateur.id, AuditLog.action == ActionAudit.ACCOUNT_LOCKED
+        )
     ).scalar_one()
     assert ligne.new_values == {"lockout_count": 1}
 

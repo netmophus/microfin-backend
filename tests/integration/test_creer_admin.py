@@ -159,7 +159,14 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     On vide les agences DANS la transaction (annulée au rollback). Une installation neuve n'a
     ni utilisateur rattaché, ni tiers : on retire donc aussi ce que le module Tiers pourrait
     référencer (une base ayant servi au navigateur porte de vrais tiers committés), sinon le
-    DELETE des agences bute sur fk_tiers_primary_agency_id_agencies. Le rollback rend tout."""
+    DELETE des agences bute sur fk_tiers_primary_agency_id_agencies. Le rollback rend tout.
+
+    Purge exhaustive sur les FK ENTRANTES de `parameters.agencies` (vérifiées par introspection
+    de `pg_constraint`, pas seulement les tables où un échec s'est déjà vu) : caisse.sessions,
+    caisse.postes, caisse.niveaux_caisse, caisse.transferts, caisse.caissiers_principaux,
+    credit.applications, epargne.accounts, security.user_agencies/users, tiers.tiers,
+    tiers.share_subscriptions — chacune purgée dans l'ordre que SES PROPRES FK entrantes
+    imposent (ex. repayments avant applications)."""
     db.execute(text("UPDATE security.users SET primary_agency_id = NULL"))
     db.execute(text("DELETE FROM security.user_agencies"))
     # Crédit AVANT Épargne : depuis CR5d (migration 0039), applications.compte_prelevement_id
@@ -228,6 +235,14 @@ def test_le_siege_est_cree_avec_le_nom_demande_sur_base_vierge(
     db.execute(text("DELETE FROM caisse.sessions"))
     db.execute(text("DELETE FROM caisse.poste_assignations"))
     db.execute(text("DELETE FROM caisse.postes"))
+    # Les 3 tables restantes qui référencent directement agencies (vérifié par introspection
+    # de pg_constraint : aucune table ne les référence à son tour, donc pas de dépendance
+    # supplémentaire à purger avant elles) : niveaux_caisse (coffre-fort, sous-chantier 1),
+    # transferts et caissiers_principaux (coffre-fort, sous-chantiers 2/3). Mutables, aucun
+    # trigger d'immuabilité.
+    db.execute(text("DELETE FROM caisse.niveaux_caisse"))
+    db.execute(text("DELETE FROM caisse.transferts"))
+    db.execute(text("DELETE FROM caisse.caissiers_principaux"))
     db.execute(text("DELETE FROM parameters.agencies"))
     db.flush()
 
