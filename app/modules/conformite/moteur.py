@@ -182,6 +182,90 @@ def agregat_valeur(db: Session, code: str, a_la_date: date) -> int:
     return _valeur_balance(db, agregat, a_la_date)
 
 
+@dataclass(frozen=True)
+class ComposantAgregat:
+    """Une ligne de composition, décomposée : `solde` = somme des soldes de TOUS les comptes
+    dont le numéro commence par `prefixe_compte` (avant application du sens) ; `contribution`
+    = `sens * solde`, ce qui entre réellement dans le total de l'agrégat."""
+
+    prefixe_compte: str
+    sens: int
+    solde: int
+    contribution: int
+
+
+@dataclass(frozen=True)
+class DetailAgregat:
+    """Décomposition d'un agrégat — pour l'écran de détail d'un ratio (justifier un chiffre à
+    la tutelle). `composants` est vide pour un agrégat SPECIAL (le calcul n'est pas une somme
+    de comptes, rien à décomposer)."""
+
+    code: str
+    libelle: str
+    type: str
+    valeur: int
+    composants: tuple[ComposantAgregat, ...]
+    complement_provisions_tutelle_applique: int | None
+
+
+def detail_agregat(db: Session, code: str, a_la_date: date) -> DetailAgregat:
+    """Même valeur que `agregat_valeur` (recalculée via le même chemin, jamais dupliquée dans
+    sa logique), accompagnée du détail par ligne de composition pour un agrégat BALANCE."""
+    agregat = _compte_agregat(db, code)
+    valeur = agregat_valeur(db, code, a_la_date)
+
+    if agregat.type == "SPECIAL":
+        return DetailAgregat(
+            code=agregat.code,
+            libelle=agregat.libelle,
+            type=agregat.type,
+            valeur=valeur,
+            composants=(),
+            complement_provisions_tutelle_applique=None,
+        )
+
+    compositions = list(
+        db.execute(
+            select(AgregatCompte).where(AgregatCompte.agregat_id == agregat.id)
+        ).scalars()
+    )
+    composants: list[ComposantAgregat] = []
+    if compositions:
+        resultat = rapports.balance(db, date_debut=None, date_fin=a_la_date)
+        soldes_par_numero = {
+            ligne.compte.account_number: ligne.solde_cloture for ligne in resultat.lignes
+        }
+        for composition in compositions:
+            solde_matche = sum(
+                solde
+                for numero, solde in soldes_par_numero.items()
+                if numero.startswith(composition.prefixe_compte)
+            )
+            composants.append(
+                ComposantAgregat(
+                    prefixe_compte=composition.prefixe_compte,
+                    sens=composition.sens,
+                    solde=solde_matche,
+                    contribution=composition.sens * solde_matche,
+                )
+            )
+
+    complement = (
+        _complement_provisions_tutelle(db)
+        if agregat.applique_complement_provisions_tutelle
+        else None
+    )
+
+    return DetailAgregat(
+        code=agregat.code,
+        libelle=agregat.libelle,
+        type=agregat.type,
+        valeur=valeur,
+        composants=tuple(composants),
+        complement_provisions_tutelle_applique=complement,
+    )
+
+
 def _categorie_institution(db: Session) -> str | None:
     """La catégorie réglementaire de CETTE institution (singleton), ou None si le
     paramétrage n'a pas encore été renseigné — dégrade sur le seuil universel, jamais une

@@ -1,4 +1,4 @@
-"""Seed des rôles et de la matrice RBAC : 11 rôles système et 47 permissions.
+"""Seed des rôles et de la matrice RBAC : 11 rôles système et 74 permissions.
 
 Historiquement le seul socle Sécurité (18 permissions) ; le module Tiers y ajoute ses
 permissions métier (4 en T1c : read/read.basic/create/update ; 3 en T1e : suspend/deactivate/
@@ -382,6 +382,23 @@ PERMISSIONS: tuple[Permission, ...] = (
         "caisse",
         "Désigner le caissier principal de la caisse principale d'une agence",
     ),
+    # --- Conformité : ratios prudentiels RCSFD (lot P2.1.a) ---------------------------
+    # Lecture du tableau de bord (évaluation des ratios) : comptable (porteur du chiffre),
+    # direction (pilotage), admin fonctionnel (paramètre, donc doit pouvoir vérifier l'effet
+    # de ce qu'il paramètre).
+    Permission(
+        "conformite.ratio.read",
+        "conformite",
+        "Consulter le tableau de bord des ratios prudentiels RCSFD",
+    ),
+    # Paramétrage (agrégats, ratios, seuils, catégorie de l'institution) : acte de
+    # configuration d'institution, pas un acte comptable courant -> ADMIN_FONCTIONNEL seul,
+    # même séparation que compta.journee.manage ci-dessus.
+    Permission(
+        "conformite.ratio.manage",
+        "conformite",
+        "Paramétrer les agrégats, ratios, seuils et la catégorie de l'institution",
+    ),
 )
 
 # --- Matrice rôles -> permissions ----------------------------------------------------
@@ -478,6 +495,7 @@ MATRICE: dict[str, frozenset[str]] = {
             # reclassification qui en découle, sans pouvoir l'exécuter (credit.delinquency.
             # executer reste DIRECTION seule, acte d'institution).
             "credit.delinquency.read",
+            "conformite.ratio.read",
         }
     ),
     # Déverrouiller oui (ne donne aucun accès), réinitialiser un mot de passe non :
@@ -591,6 +609,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "credit.delinquency.executer",
             "credit.delinquency.read",
             "caisse.session.read.autres",
+            "conformite.ratio.read",
         }
     ),
     # Attribue les rôles (roles.assign) mais ne les définit pas : séparation des pouvoirs
@@ -620,6 +639,8 @@ MATRICE: dict[str, frozenset[str]] = {
             # lecture pour pouvoir consulter ce qu'il gère.
             "compta.journee.read",
             "compta.journee.manage",
+            "conformite.ratio.read",
+            "conformite.ratio.manage",
         }
     ),
     # Administration système, pas administration des personnes : aucun droit sur users.*.
