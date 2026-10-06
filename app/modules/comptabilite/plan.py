@@ -24,6 +24,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.comptabilite.models import Account
+from app.modules.comptabilite.service import compte_a_des_ecritures
 
 COLONNES_ATTENDUES = frozenset(
     {
@@ -233,6 +234,43 @@ def valider(lignes: list[LigneBrute]) -> list[Anomalie]:
     return anomalies
 
 
+_SENS_LISIBLE = {"D": "débiteur", "C": "créditeur"}
+
+
+def conflits_de_sens(db: Session, lignes: list[LigneBrute]) -> list[Anomalie]:
+    """Lignes qui changeraient le sens normal d'un compte DÉJÀ MOUVEMENTÉ.
+
+    Même règle que l'écran de changement de sens (`service.modifier_sens`) : changer le sens d'un
+    compte qui porte des écritures réinterpréterait ses soldes (un solde créditeur normal
+    deviendrait négatif, un contra-actif s'ajouterait à l'actif au lieu de s'en déduire). Sans
+    cette garde, l'upsert ci-dessous écraserait `normal_side` en silence. « Mouvementé » =
+    `compte_a_des_ecritures` : toute ligne d'écriture, brouillon compris — le brouillon, une fois
+    validé, subirait lui aussi le nouveau sens. Un compte SANS écriture, lui, change librement.
+    """
+    numeros = [li.account_number for li in lignes]
+    existants = {
+        c.account_number: c
+        for c in db.execute(select(Account).where(Account.account_number.in_(numeros))).scalars()
+    }
+    conflits: list[Anomalie] = []
+    for li in lignes:
+        existant = existants.get(li.account_number)
+        if existant is None or existant.normal_side == li.normal_side:
+            continue
+        if compte_a_des_ecritures(db, existant.id):
+            actuel = _SENS_LISIBLE.get(existant.normal_side, existant.normal_side)
+            futur = _SENS_LISIBLE.get(li.normal_side, li.normal_side)
+            conflits.append(
+                Anomalie(
+                    li.ligne,
+                    li.account_number,
+                    f"le sens passerait de {actuel} à {futur}, mais ce compte porte déjà des "
+                    "écritures : changer son sens réinterpréterait ses soldes",
+                )
+            )
+    return conflits
+
+
 _UPSERT = text(
     """
     INSERT INTO comptabilite.accounts
@@ -276,6 +314,11 @@ def importer_lignes(
     anomalies = valider(lignes)
     if anomalies:
         raise ImportRefuseError(anomalies)
+    # Tout ou rien : un seul conflit de sens sur un compte mouvementé refuse TOUT l'import, avant
+    # la moindre écriture (l'upsert ne contrôle pas les mouvements).
+    conflits = conflits_de_sens(db, lignes)
+    if conflits:
+        raise ImportRefuseError(conflits)
 
     rapport = RapportImport()
     ids: dict[str, uuid.UUID] = {}  # account_number -> id, alimenté au fur et à mesure

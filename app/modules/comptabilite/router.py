@@ -257,7 +257,7 @@ def apercu_import_endpoint(
     except plan.FichierInvalideError as erreur:
         raise _422(erreur) from None
 
-    anomalies = plan.valider(lignes)
+    anomalies = plan.valider(lignes) or plan.conflits_de_sens(db, lignes)
     if anomalies:
         return ApercuImportComptes(anomalies=[str(a) for a in anomalies])
 

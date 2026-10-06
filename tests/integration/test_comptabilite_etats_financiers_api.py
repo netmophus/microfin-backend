@@ -17,12 +17,14 @@
 import uuid
 from collections.abc import Generator
 from datetime import date
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.cli.seed_financial_statement_mapping import executer_seed_mapping_etats
 from app.core.database import engine, get_db
 from app.main import app
 from app.modules.comptabilite import ecritures
@@ -33,6 +35,7 @@ from app.modules.comptabilite.models import (
     FinancialStatementMapping,
     Journal,
 )
+from app.modules.comptabilite.plan import importer
 from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
@@ -435,3 +438,79 @@ def test_modifier_mapping_champ_inattendu_refuse_extra_forbid(
     )
 
     assert reponse.status_code == 422
+
+
+# --- Provision 4319/4329 : se retranche de l'actif (P2.0-a) ---------------------------------
+
+
+CSV_PLAN = (
+    Path(__file__).resolve().parents[2] / "docs" / "reference" / "plan_comptable_import.csv"
+)
+
+
+def _scenario_provision_immos_en_cours(
+    db: Session, annee: int, *, sens_provision: str | None = None
+) -> tuple[Account, Account]:
+    """Immobilisation en cours (4311, brute) de 50 000 financée par un capital de test, puis
+    provision de 8 000 sur 4319 : crédit 4319 / débit capital. Comptes RÉELS du plan."""
+    importer(db, str(CSV_PLAN))
+    executer_seed_mapping_etats(db)
+    brute = db.execute(select(Account).where(Account.account_number == "4311")).scalar_one()
+    provision = db.execute(select(Account).where(Account.account_number == "4319")).scalar_one()
+    if sens_provision is not None:  # simule une base seedée AVANT la correction
+        provision.normal_side = sens_provision
+        db.flush()
+    capital = _compte(db, f"5T{annee}1", normal_side="C")
+    _mapper(db, capital, etat="BILAN", masse="PASSIF", poste="Capital test")
+    _exercice(db, f"ETATS-{annee}", date(annee, 1, 1), date(annee, 12, 31))
+    _valider_od(
+        db,
+        [LigneSaisie(brute.id, "D", 50000), LigneSaisie(capital.id, "C", 50000)],
+        date(annee, 6, 1),
+    )
+    _valider_od(
+        db,
+        [LigneSaisie(capital.id, "D", 8000), LigneSaisie(provision.id, "C", 8000)],
+        date(annee, 6, 2),
+    )
+    db.commit()
+    return brute, provision
+
+
+def test_provision_4319_se_retranche_de_l_actif_au_bilan(
+    client: TestClient, db: Session
+) -> None:
+    """Actif brut 50 000, provision 8 000 -> actif net 42 000. Raisonnement de signe : le montant
+    retranché est le solde NORMALISÉ par `normal_side` (positif quand le solde est conforme au
+    sens du compte). 4319 en C + mouvement au crédit = solde +8 000 = contra de 8 000, déduit."""
+    _scenario_provision_immos_en_cours(db, 1803)
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.get(
+        "/comptabilite/etats/bilan", params={"date": "1803-12-31"}, headers=comptable
+    )
+
+    corps = reponse.json()
+    assert corps["total_actif_brut"] == 50000
+    assert corps["total_contra_actif"] == 8000
+    assert corps["total_actif_net"] == 42000
+    assert corps["total_passif"] == 42000
+    assert corps["equilibre"] is True
+    assert corps["comptes_non_mappes"] == []
+
+
+def test_ancien_sens_debiteur_faisait_augmenter_l_actif_net(
+    client: TestClient, db: Session
+) -> None:
+    """Preuve du défaut corrigé : avec 4319 en D (ancien CSV), la même provision de 8 000 ressort
+    à -8 000 et AUGMENTE l'actif net (58 000 au lieu de 42 000)."""
+    _scenario_provision_immos_en_cours(db, 1804, sens_provision="D")
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.get(
+        "/comptabilite/etats/bilan", params={"date": "1804-12-31"}, headers=comptable
+    )
+
+    corps = reponse.json()
+    assert corps["total_contra_actif"] == -8000
+    assert corps["total_actif_net"] == 58000

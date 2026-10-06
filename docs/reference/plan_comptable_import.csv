@@ -189,10 +189,10 @@
 43;IMMOBILISATIONS EN COURS;;4;;D;FALSE;TRUE;
 431;Immobilisations incorporelles en cours;;4;43;D;FALSE;TRUE;
 4311;Immobilisations incorporelles en cours;;4;431;D;TRUE;TRUE;
-4319;Provisions pour dépréciation;;4;431;D;TRUE;TRUE;
+4319;Provisions pour dépréciation;;4;431;C;TRUE;TRUE;
 432;Immobilisations corporelles en cours;;4;43;D;FALSE;TRUE;
 4321;Immobilisations corporelles en cours;;4;432;D;TRUE;TRUE;
-4329;Provisions pour dépréciation;;4;432;D;TRUE;TRUE;
+4329;Provisions pour dépréciation;;4;432;C;TRUE;TRUE;
 44;IMMOBILISATIONS D'EXPLOITATION;;4;;D;FALSE;TRUE;
 441;Immobilisations incorporelles;;4;44;D;FALSE;TRUE;
 4418;Amortissements;;4;441;C;TRUE;TRUE;

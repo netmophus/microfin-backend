@@ -11,6 +11,7 @@
 
 import uuid
 from collections.abc import Generator
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
 from app.main import app
+from app.modules.comptabilite import ecritures
+from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account
 from app.modules.comptabilite.plan import empreinte as calculer_empreinte
 from app.modules.security.jwt import creer_access_token
@@ -354,3 +357,69 @@ def test_export_sans_permission_403(client: TestClient, db: Session) -> None:
     caissier = _entete_auth(db, "CAISSIER")  # ne détient pas compta.plan.read
     reponse = client.get("/comptabilite/comptes/export", headers=caissier)
     assert reponse.status_code == 403
+
+
+# --- Garde-fou « sens d'un compte mouvementé » (aperçu et confirmation) ----------------------
+
+
+def _mouvementer(db: Session, compte: Account) -> None:
+    journal_id = db.execute(
+        text("SELECT id FROM comptabilite.journals WHERE code = 'OD'")
+    ).scalar_one()
+    contrepartie = _compte(db, f"6T{uuid.uuid4().hex[:6]}")
+    entry = ecritures.creer_brouillon(
+        db,
+        journal_id=journal_id,
+        entry_date=date(2026, 6, 1),
+        description="Mouvement de test (aperçu import)",
+        lignes=[
+            LigneSaisie(account_id=compte.id, side="D", amount=1000),
+            LigneSaisie(account_id=contrepartie.id, side="C", amount=1000),
+        ],
+        par=None,
+    )
+    ecritures.valider(db, entry, par=None)
+
+
+def test_apercu_bloque_un_changement_de_sens_sur_compte_mouvemente(
+    client: TestClient, db: Session
+) -> None:
+    compte = _compte(db, "6T970")
+    _mouvementer(db, compte)
+    comptable = _entete_auth(db, "COMPTABLE")
+    contenu = _csv("6T970;Compte 6T970;;6;;C;TRUE;FALSE;")
+
+    reponse = client.post(
+        "/comptabilite/comptes/import/apercu", files=_fichier(contenu), headers=comptable
+    )
+
+    assert reponse.status_code == 200
+    donnees = reponse.json()
+    assert donnees["empreinte"] is None  # pas de confirmation possible
+    assert len(donnees["anomalies"]) == 1
+    assert "6T970" in donnees["anomalies"][0]
+    assert "porte déjà des écritures" in donnees["anomalies"][0]
+
+
+def test_confirmation_refuse_un_changement_de_sens_sur_compte_mouvemente(
+    client: TestClient, db: Session
+) -> None:
+    compte = _compte(db, "6T971")
+    _mouvementer(db, compte)
+    comptable = _entete_auth(db, "COMPTABLE")
+    db.commit()  # le refus fait db.rollback() : la mise en situation doit y survivre
+    contenu = _csv("6T971;Compte 6T971;;6;;C;TRUE;FALSE;")
+
+    reponse = client.post(
+        "/comptabilite/comptes/import/confirmer",
+        files=_fichier(contenu),
+        data={"empreinte": calculer_empreinte(contenu), "motif": "Test du garde-fou"},
+        headers=comptable,
+    )
+
+    assert reponse.status_code == 422
+    assert "6T971" in reponse.json()["detail"]
+    sens = db.execute(
+        text("SELECT normal_side FROM comptabilite.accounts WHERE account_number = '6T971'")
+    ).scalar_one()
+    assert sens == "D"
