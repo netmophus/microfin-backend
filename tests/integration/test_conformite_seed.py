@@ -18,11 +18,17 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.cli.seed_conformite import RATIOS, executer_seed_conformite
+from app.cli.seed_conformite import (
+    AGREGATS,
+    RATIOS,
+    REFERENCE_REGLEMENTAIRE,
+    executer_seed_conformite,
+)
 from app.core.database import engine
 from app.modules.comptabilite import ecritures, journee
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account, Journal
+from app.modules.conformite.models import AgregatPrudentiel, RatioPrudentiel
 from app.modules.conformite.moteur import (
     AVERT_FONDS_PROPRES_NULS,
     AVERT_NUMERATEUR_NUL,
@@ -33,6 +39,8 @@ from app.modules.conformite.moteur import (
     evaluer_ratio,
     evaluer_tous,
 )
+from app.modules.security.models import User
+from app.modules.security.password import hasher_mot_de_passe
 
 pytestmark = pytest.mark.integration
 
@@ -271,6 +279,167 @@ def test_compteur_ecritures_validees_distingue_une_vraie_base_vide(db: Session) 
 
     assert compter_ecritures_validees(db, AUJOURDHUI) == avant + 1
     assert compter_ecritures_validees(db, date(1900, 1, 1)) == 0  # la date d'arrêté compte
+
+
+# --- Resynchronisation gardée : référence réglementaire + libellés « en attente » -------------
+
+CODE_RATIO_ANCIEN = "RATIO_2_CAPITALISATION"
+CODE_AGREGAT_ANCIEN = "TOTAL_ACTIF_NET"
+
+
+def _ratio_par_code(db: Session, code: str) -> RatioPrudentiel:
+    return db.execute(select(RatioPrudentiel).where(RatioPrudentiel.code == code)).scalar_one()
+
+
+def _agregat_par_code(db: Session, code: str) -> AgregatPrudentiel:
+    return db.execute(
+        select(AgregatPrudentiel).where(AgregatPrudentiel.code == code)
+    ).scalar_one()
+
+
+def _ancien_libelle_ratio(code: str) -> str:
+    ancien = next(r.ancien_libelle for r in RATIOS if r.code == code)
+    assert ancien is not None
+    return ancien
+
+
+def _ancien_libelle_agregat(code: str) -> str:
+    ancien = next(a.ancien_libelle for a in AGREGATS if a.code == code)
+    assert ancien is not None
+    return ancien
+
+
+def _utilisateur_id(db: Session) -> uuid.UUID:
+    agence = db.execute(text("SELECT id FROM parameters.agencies LIMIT 1")).scalar_one()
+    s = uuid.uuid4().hex[:8]
+    user = User(
+        matricule=f"MAT-{s}", email=f"{s}@ex.com", username=f"u{s}",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="A",
+        primary_agency_id=agence,
+    )
+    db.add(user)
+    db.flush()
+    return user.id
+
+
+def _revenir_a_l_etat_ancien(db: Session) -> None:
+    """Reproduit une base seedée AVANT la correction : référence NULL, ancien libellé."""
+    for definition in RATIOS:
+        ratio = _ratio_par_code(db, definition.code)
+        ratio.reference_reglementaire = None
+        if definition.ancien_libelle is not None:
+            ratio.libelle = definition.ancien_libelle
+    for agregat_def in AGREGATS:
+        if agregat_def.ancien_libelle is not None:
+            _agregat_par_code(db, agregat_def.code).libelle = agregat_def.ancien_libelle
+    db.flush()
+
+
+def test_les_10_ratios_ont_une_reference_et_aucun_libelle_en_attente(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    ratios = db.execute(select(RatioPrudentiel)).scalars().all()
+    agregats = db.execute(select(AgregatPrudentiel)).scalars().all()
+
+    assert len(ratios) == 10
+    assert all(r.reference_reglementaire == REFERENCE_REGLEMENTAIRE for r in ratios)
+    assert REFERENCE_REGLEMENTAIRE == "Instruction 010-08-2010"
+    assert not [r.libelle for r in ratios if "(en attente" in r.libelle]
+    assert not [a.libelle for a in agregats if "(en attente" in a.libelle]
+
+
+def test_rejeu_sur_base_a_jour_ne_resynchronise_rien(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.references_resynchronisees == 0
+    assert rejeu.libelles_resynchronises == 0
+    assert rejeu.ratios_crees == 0
+    assert rejeu.agregats_crees == 0
+
+
+def test_lignes_anciennes_sont_corrigees_au_rejeu_puis_idempotent(db: Session) -> None:
+    """Base seedée avant la correction (référence NULL, ancien libellé, jamais retouchée) :
+    10 références + 8 libellés de ratios + 11 libellés d'agrégats resynchronisés — une seule
+    fois."""
+    executer_seed_conformite(db)
+    _revenir_a_l_etat_ancien(db)
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.references_resynchronisees == 10
+    assert rejeu.libelles_resynchronises == 8 + 11
+    assert _ratio_par_code(db, CODE_RATIO_ANCIEN).libelle == "Capitalisation générale"
+    assert _ratio_par_code(db, CODE_RATIO_ANCIEN).reference_reglementaire == (
+        REFERENCE_REGLEMENTAIRE
+    )
+    assert _agregat_par_code(db, CODE_AGREGAT_ANCIEN).libelle == "Total actif net"
+
+    deuxieme = executer_seed_conformite(db)
+    assert deuxieme.references_resynchronisees == 0
+    assert deuxieme.libelles_resynchronises == 0
+
+
+def test_garde_libelle_modifie_a_la_main_est_preserve(db: Session) -> None:
+    executer_seed_conformite(db)
+    _revenir_a_l_etat_ancien(db)
+    _ratio_par_code(db, CODE_RATIO_ANCIEN).libelle = "Capitalisation (libellé maison)"
+    _agregat_par_code(db, CODE_AGREGAT_ANCIEN).libelle = "Actif net (libellé maison)"
+    db.flush()
+
+    executer_seed_conformite(db)
+
+    assert _ratio_par_code(db, CODE_RATIO_ANCIEN).libelle == "Capitalisation (libellé maison)"
+    assert _agregat_par_code(db, CODE_AGREGAT_ANCIEN).libelle == "Actif net (libellé maison)"
+
+
+def test_garde_reference_deja_renseignee_est_preservee(db: Session) -> None:
+    executer_seed_conformite(db)
+    _revenir_a_l_etat_ancien(db)
+    _ratio_par_code(db, CODE_RATIO_ANCIEN).reference_reglementaire = "Circulaire interne 12"
+    db.flush()
+
+    executer_seed_conformite(db)
+
+    assert _ratio_par_code(db, CODE_RATIO_ANCIEN).reference_reglementaire == (
+        "Circulaire interne 12"
+    )
+
+
+def test_garde_ligne_retouchee_par_un_utilisateur_n_est_pas_touchee(db: Session) -> None:
+    """`updated_by` renseigné = quelqu'un a modifié la ligne par l'écran/l'API : ni sa référence
+    vide, ni son libellé (même égal à l'ancien) ne sont resynchronisés."""
+    executer_seed_conformite(db)
+    _revenir_a_l_etat_ancien(db)
+    utilisateur = _utilisateur_id(db)
+    ratio = _ratio_par_code(db, CODE_RATIO_ANCIEN)
+    agregat = _agregat_par_code(db, CODE_AGREGAT_ANCIEN)
+    ratio.updated_by = utilisateur
+    agregat.updated_by = utilisateur
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert ratio.reference_reglementaire is None
+    assert ratio.libelle == _ancien_libelle_ratio(CODE_RATIO_ANCIEN)
+    assert agregat.libelle == _ancien_libelle_agregat(CODE_AGREGAT_ANCIEN)
+    # Les 9 autres ratios et 10 autres agrégats, eux, n'ont pas été retouchés.
+    assert rejeu.references_resynchronisees == 9
+    assert rejeu.libelles_resynchronises == 7 + 10
+
+
+def test_garde_ligne_non_systeme_n_est_pas_touchee(db: Session) -> None:
+    executer_seed_conformite(db)
+    _revenir_a_l_etat_ancien(db)
+    ratio = _ratio_par_code(db, CODE_RATIO_ANCIEN)
+    ratio.is_system = False
+    db.flush()
+
+    executer_seed_conformite(db)
+
+    assert ratio.reference_reglementaire is None
+    assert ratio.libelle == _ancien_libelle_ratio(CODE_RATIO_ANCIEN)
 
 
 def test_seed_est_idempotent(db: Session) -> None:

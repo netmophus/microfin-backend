@@ -4,8 +4,14 @@ contient AUCUNE formule câblée, seulement des DONNÉES Python converties en li
 `parametre_institution`. Le moteur (`app/modules/conformite/moteur.py`) ne lit que la base.
 
 NON DESTRUCTIF ET IDEMPOTENT : chaque agrégat/ratio est créé UNE SEULE FOIS (vérifié par
-`code`, qui est UNIQUE) — un ré-import ne duplique rien, ne touche jamais une ligne déjà
-présente (y compris si elle a été corrigée à l'écran depuis).
+`code`, qui est UNIQUE) — un ré-import ne duplique rien et ne touche jamais une ligne déjà
+présente (y compris si elle a été corrigée à l'écran depuis), À UNE EXCEPTION PRÈS :
+la RESYNCHRONISATION de deux champs de présentation (référence réglementaire des ratios,
+libellé des ratios et des agrégats placeholders), corrigés après coup dans ce fichier. Elle
+ne s'applique qu'à une ligne que personne n'a retouchée, par TRIPLE GARDE : `is_system` ET
+`updated_by IS NULL` (toute modification par l'écran/l'API renseigne `updated_by`) ET — pour un
+libellé — valeur actuelle == ANCIEN libellé du seed, à l'identique. Une référence n'est remplie
+que si elle est NULL. Aucune entrée d'audit : le seed est une opération de déploiement.
 
 COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
 `docs/reference/plan_comptable_import.csv` (390 comptes) :
@@ -72,6 +78,9 @@ from app.modules.conformite.models import (
     RatioSeuil,
 )
 
+# Valeur exacte, volontairement sans article (on affinera les articles plus tard).
+REFERENCE_REGLEMENTAIRE = "Instruction 010-08-2010"
+
 
 @dataclass(frozen=True)
 class _CompositionLigne:
@@ -89,6 +98,9 @@ class _AgregatDef:
     nets_de_provisions: bool = False
     applique_complement_provisions_tutelle: bool = False
     composition: Sequence[_CompositionLigne] = field(default_factory=tuple)
+    # Libellé que ce seed écrivait AVANT correction : seul un libellé strictement égal à celui-ci
+    # est resynchronisé (voir docstring de module).
+    ancien_libelle: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,7 +118,8 @@ class _RatioDef:
     operateur: str
     ordre: int
     actif: bool = True
-    reference_reglementaire: str | None = None
+    reference_reglementaire: str | None = REFERENCE_REGLEMENTAIRE
+    ancien_libelle: str | None = None
     seuils: Sequence[_SeuilDef] = field(default_factory=tuple)
 
 
@@ -167,32 +180,82 @@ AGREGATS: tuple[_AgregatDef, ...] = (
     # --- Placeholders « en attente » (lot P2.1.c) — composition VIDE à dessein : un agrégat
     # BALANCE sans ligne rend 0, jamais une exception (voir moteur._valeur_balance). Les 8
     # ratios qui les référencent sont actif=FALSE, jamais évalués par evaluer_tous().
-    _AgregatDef(code="TOTAL_ACTIF_NET", libelle="Total actif net (en attente de composition)"),
-    _AgregatDef(code="EMPLOIS_MLT", libelle="Emplois à moyen et long terme (en attente — "
-                "durée résiduelle des crédits non encore exploitée)"),
-    _AgregatDef(code="RESSOURCES_STABLES", libelle="Ressources stables (en attente — durée "
-                "contractuelle absente sur les produits d'épargne à terme)"),
-    _AgregatDef(code="PRETS_DIRIGEANTS_PERSONNEL", libelle="Prêts aux dirigeants et au "
-                "personnel (en attente — aucun marqueur dirigeant/personnel en base)"),
-    _AgregatDef(code="VALEURS_REALISABLES_DISPONIBLES", libelle="Valeurs réalisables et "
-                "disponibles (en attente — même gap que ressources stables)"),
-    _AgregatDef(code="PASSIF_EXIGIBLE", libelle="Passif exigible à court terme (en attente)"),
-    _AgregatDef(code="OPERATIONS_AUTRES", libelle="Opérations autres qu'épargne et crédit "
-                "(en attente — définition du numérateur à vérifier contre le texte réglementaire)"),
-    _AgregatDef(code="PARTICIPATIONS", libelle="Participations hors établissements de crédit "
-                "et SFD (en attente — compte brut absent du plan, voir docstring)"),
-    _AgregatDef(code="IMMOS_PLUS_PARTICIPATIONS", libelle="Immobilisations nettes + "
-                "participations (en attente — même gap)"),
+    # L'état « en attente » se lit au badge de l'écran, pas dans le libellé ; le MOTIF de
+    # chaque écart est conservé ici, en commentaire.
+    # Total actif net : composition à définir.
+    _AgregatDef(
+        code="TOTAL_ACTIF_NET",
+        libelle="Total actif net",
+        ancien_libelle="Total actif net (en attente de composition)",
+    ),
+    # Durée résiduelle des crédits non encore exploitée.
+    _AgregatDef(
+        code="EMPLOIS_MLT",
+        libelle="Emplois à moyen et long terme",
+        ancien_libelle="Emplois à moyen et long terme (en attente — "
+        "durée résiduelle des crédits non encore exploitée)",
+    ),
+    # Durée contractuelle absente sur les produits d'épargne à terme.
+    _AgregatDef(
+        code="RESSOURCES_STABLES",
+        libelle="Ressources stables",
+        ancien_libelle="Ressources stables (en attente — durée "
+        "contractuelle absente sur les produits d'épargne à terme)",
+    ),
+    # Aucun marqueur dirigeant/personnel en base.
+    _AgregatDef(
+        code="PRETS_DIRIGEANTS_PERSONNEL",
+        libelle="Prêts aux dirigeants et au personnel",
+        ancien_libelle="Prêts aux dirigeants et au "
+        "personnel (en attente — aucun marqueur dirigeant/personnel en base)",
+    ),
+    # Même gap que les ressources stables.
+    _AgregatDef(
+        code="VALEURS_REALISABLES_DISPONIBLES",
+        libelle="Valeurs réalisables et disponibles",
+        ancien_libelle="Valeurs réalisables et "
+        "disponibles (en attente — même gap que ressources stables)",
+    ),
+    _AgregatDef(
+        code="PASSIF_EXIGIBLE",
+        libelle="Passif exigible à court terme",
+        ancien_libelle="Passif exigible à court terme (en attente)",
+    ),
+    # Définition du numérateur à vérifier contre le texte réglementaire.
+    _AgregatDef(
+        code="OPERATIONS_AUTRES",
+        libelle="Opérations autres qu'épargne et crédit",
+        ancien_libelle="Opérations autres qu'épargne et crédit "
+        "(en attente — définition du numérateur à vérifier contre le texte réglementaire)",
+    ),
+    # Compte brut absent du plan (voir docstring de module).
+    _AgregatDef(
+        code="PARTICIPATIONS",
+        libelle="Participations hors établissements de crédit et SFD",
+        ancien_libelle="Participations hors établissements de crédit "
+        "et SFD (en attente — compte brut absent du plan, voir docstring)",
+    ),
+    # Même gap que les participations.
+    _AgregatDef(
+        code="IMMOS_PLUS_PARTICIPATIONS",
+        libelle="Immobilisations nettes + participations",
+        ancien_libelle="Immobilisations nettes + "
+        "participations (en attente — même gap)",
+    ),
+    # Calcul SPECIAL non écrit : flux de la dernière affectation, pas un solde cumulé.
     _AgregatDef(
         code="DOTATION_RESERVE_GENERALE_PERIODE",
-        libelle="Dotation à la réserve générale sur la période (en attente — calcul SPECIAL "
-        "non écrit, flux de la dernière affectation, pas un solde cumulé)",
+        libelle="Dotation à la réserve générale sur la période",
+        ancien_libelle="Dotation à la réserve générale sur la période (en attente — calcul "
+        "SPECIAL non écrit, flux de la dernière affectation, pas un solde cumulé)",
         type="SPECIAL",
         calcul_special="DOTATION_RESERVE_GENERALE_PERIODE",
     ),
+    # Calcul SPECIAL non écrit.
     _AgregatDef(
         code="EXCEDENT_PERIODE",
-        libelle="Excédent de la période (en attente — calcul SPECIAL non écrit)",
+        libelle="Excédent de la période",
+        ancien_libelle="Excédent de la période (en attente — calcul SPECIAL non écrit)",
         type="SPECIAL",
         calcul_special="EXCEDENT_PERIODE",
     ),
@@ -210,7 +273,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_2_CAPITALISATION",
-        libelle="Capitalisation générale (en attente)",
+        libelle="Capitalisation générale",
+        ancien_libelle="Capitalisation générale (en attente)",
         numerateur="FONDS_PROPRES",
         denominateur="TOTAL_ACTIF_NET",
         operateur="GE",
@@ -219,7 +283,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_3_COUVERTURE_EMPLOIS_MLT",
-        libelle="Couverture des emplois à moyen et long terme par des ressources stables "
+        libelle="Couverture des emplois à moyen et long terme par des ressources stables",
+        ancien_libelle="Couverture des emplois à moyen et long terme par des ressources stables "
         "(en attente)",
         numerateur="EMPLOIS_MLT",
         denominateur="RESSOURCES_STABLES",
@@ -229,7 +294,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_4_LIMITATION_PRETS_DIRIGEANTS",
-        libelle="Limitation des prêts aux dirigeants et au personnel (en attente)",
+        libelle="Limitation des prêts aux dirigeants et au personnel",
+        ancien_libelle="Limitation des prêts aux dirigeants et au personnel (en attente)",
         numerateur="PRETS_DIRIGEANTS_PERSONNEL",
         denominateur="FONDS_PROPRES",
         operateur="LE",
@@ -247,7 +313,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_6_LIQUIDITE",
-        libelle="Liquidité (en attente)",
+        libelle="Liquidité",
+        ancien_libelle="Liquidité (en attente)",
         numerateur="VALEURS_REALISABLES_DISPONIBLES",
         denominateur="PASSIF_EXIGIBLE",
         operateur="GE",
@@ -256,7 +323,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_7_OPERATIONS_AUTRES",
-        libelle="Limitation des opérations autres qu'épargne et crédit (en attente)",
+        libelle="Limitation des opérations autres qu'épargne et crédit",
+        ancien_libelle="Limitation des opérations autres qu'épargne et crédit (en attente)",
         numerateur="OPERATIONS_AUTRES",
         denominateur="TOTAL_ACTIF_NET",
         operateur="LE",
@@ -265,7 +333,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_8_LIMITATION_PARTICIPATIONS",
-        libelle="Limitation des participations (en attente)",
+        libelle="Limitation des participations",
+        ancien_libelle="Limitation des participations (en attente)",
         numerateur="PARTICIPATIONS",
         denominateur="FONDS_PROPRES",
         operateur="LE",
@@ -274,7 +343,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_9_IMMOS_PLUS_PARTICIPATIONS",
-        libelle="Limitation immobilisations + participations (en attente)",
+        libelle="Limitation immobilisations + participations",
+        ancien_libelle="Limitation immobilisations + participations (en attente)",
         numerateur="IMMOS_PLUS_PARTICIPATIONS",
         denominateur="FONDS_PROPRES",
         operateur="LE",
@@ -283,7 +353,8 @@ RATIOS: tuple[_RatioDef, ...] = (
     ),
     _RatioDef(
         code="RATIO_10_RESERVE_GENERALE",
-        libelle="Dotation minimale à la réserve générale (en attente)",
+        libelle="Dotation minimale à la réserve générale",
+        ancien_libelle="Dotation minimale à la réserve générale (en attente)",
         numerateur="DOTATION_RESERVE_GENERALE_PERIODE",
         denominateur="EXCEDENT_PERIODE",
         operateur="GE",
@@ -299,11 +370,35 @@ class RapportSeedConformite:
     ratios_crees: int = 0
     seuils_crees: int = 0
     parametre_institution_cree: bool = False
+    # Resynchronisation de présentation sur des lignes déjà en base (voir docstring de module).
+    references_resynchronisees: int = 0
+    libelles_resynchronises: int = 0
+
+
+def _non_retouche(ligne: AgregatPrudentiel | RatioPrudentiel) -> bool:
+    """Première garde : ligne système que PERSONNE n'a modifiée (toute modification par
+    l'écran ou l'API renseigne `updated_by`)."""
+    return ligne.is_system and ligne.updated_by is None
+
+
+def _resynchroniser_libelle(
+    ligne: AgregatPrudentiel | RatioPrudentiel,
+    *,
+    libelle: str,
+    ancien_libelle: str | None,
+    rapport: RapportSeedConformite,
+) -> None:
+    """Troisième garde : seul un libellé strictement égal à l'ANCIEN libellé du seed est
+    remplacé — un libellé modifié à la main ne lui est jamais égal."""
+    if ancien_libelle is not None and _non_retouche(ligne) and ligne.libelle == ancien_libelle:
+        ligne.libelle = libelle
+        rapport.libelles_resynchronises += 1
 
 
 def executer_seed_conformite(db: Session) -> RapportSeedConformite:
     """Non destructif, idempotent — ne touche jamais une ligne déjà présente (vérifié par
-    `code`, UNIQUE). Ne committe pas : l'appelant décide."""
+    `code`, UNIQUE), sauf la resynchronisation gardée des champs de présentation (voir
+    docstring de module). Ne committe pas : l'appelant décide."""
     rapport = RapportSeedConformite()
     agregats_par_code: dict[str, AgregatPrudentiel] = {}
 
@@ -312,6 +407,12 @@ def executer_seed_conformite(db: Session) -> RapportSeedConformite:
             select(AgregatPrudentiel).where(AgregatPrudentiel.code == definition.code)
         ).scalar_one_or_none()
         if existant is not None:
+            _resynchroniser_libelle(
+                existant,
+                libelle=definition.libelle,
+                ancien_libelle=definition.ancien_libelle,
+                rapport=rapport,
+            )
             agregats_par_code[definition.code] = existant
             continue
 
@@ -348,6 +449,19 @@ def executer_seed_conformite(db: Session) -> RapportSeedConformite:
             select(RatioPrudentiel).where(RatioPrudentiel.code == ratio_def.code)
         ).scalar_one_or_none()
         if ratio_existant is not None:
+            if (
+                _non_retouche(ratio_existant)
+                and ratio_existant.reference_reglementaire is None
+                and ratio_def.reference_reglementaire is not None
+            ):
+                ratio_existant.reference_reglementaire = ratio_def.reference_reglementaire
+                rapport.references_resynchronisees += 1
+            _resynchroniser_libelle(
+                ratio_existant,
+                libelle=ratio_def.libelle,
+                ancien_libelle=ratio_def.ancien_libelle,
+                rapport=rapport,
+            )
             continue
 
         ratio = RatioPrudentiel(
