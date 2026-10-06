@@ -44,9 +44,10 @@ filtre glissée ailleurs.
 
 **Le plan actif est le référentiel officiel**, depuis le départ : **396 comptes**
 (372 comptes officiels + 24 comptes d'extension : membre/client, crédit, caisse et parts,
-transit, et les comptes bruts dédiés de P2.0-b1), tous marqués
-`is_system = TRUE` (numérotation officielle, protégée) et **tous provisoires**
-(`accounts.is_provisional = TRUE`) — la numérotation est sûre, mais le **sens** (D/C) et les
+transit, et les comptes bruts dédiés de P2.0-b1), **tous provisoires**
+(`accounts.is_provisional = TRUE`) et protégés par `is_system = TRUE` — sauf 3 extensions de
+caisse et parts sociales (101111, 571111, 571121), à `is_system = FALSE` : voir « Caisse et
+parts sociales » plus bas. La numérotation est sûre, mais le **sens** (D/C) et les
 **rattachements** restent à faire valider par un expert-comptable SFD avant mise en production.
 
 - [`reference/plan_comptable_rcsfd_officiel.csv`](reference/plan_comptable_rcsfd_officiel.csv) —
@@ -142,9 +143,11 @@ un compte peut légitimement porter un solde des deux sens selon l'usage réel d
 | 3811 | Charges à répartir sur plusieurs exercices | D | 595 | Excédent ou déficit d'exploitation | C |
 | 3812 | Charges constatées d'avance | D | 596 | Excédent ou déficit exceptionnel | C |
 
-Tous les 396 comptes (372 officiels + 24 extensions) restent `is_system = TRUE` (numérotation
-officielle, protégée) et `is_provisional = TRUE` (sens à confirmer) — même discipline que le
-reste de ce document : aucune valeur n'est présentée comme définitive avant l'expert.
+Les 396 comptes (372 officiels + 24 extensions) sont tous `is_provisional = TRUE` (sens à
+confirmer) et `is_system = TRUE` (numérotation protégée), à l'exception des 3 extensions de
+caisse et parts sociales (101111, 571111, 571121), à `is_system = FALSE` — voir la section
+suivante. Même discipline que le reste de ce document : aucune valeur n'est présentée comme
+définitive avant l'expert.
 
 ## Caisse et parts sociales — extension à 6 chiffres (03/08/2026)
 
