@@ -23,6 +23,14 @@ StatutRatio = Literal["CONFORME", "NON_CONFORME", "NON_CALCULABLE"]
 # --- Volet 1 — Lecture (tableau de bord) ---------------------------------------------------
 
 
+class AvertissementSchema(BaseModel):
+    """Message NON BLOQUANT attaché à une évaluation (voir `moteur.calculer_avertissements`) :
+    il ne change ni la valeur ni le statut du ratio, il en rend lisible un cas anormal."""
+
+    code: str
+    libelle: str
+
+
 class RatioEvalue(BaseModel):
     """Un ratio évalué à `a_la_date` — ou, si `actif` est faux, un ratio « en attente » dont
     les champs numériques sont volontairement vides (jamais calculés, voir router : un ratio
@@ -42,6 +50,17 @@ class RatioEvalue(BaseModel):
     marge: Decimal | None
     statut: StatutRatio
     actif: bool
+    # Ajout seul : vide pour un ratio « en attente » (jamais évalué) comme pour un cas sain.
+    avertissements: list[AvertissementSchema] = Field(default_factory=list)
+
+
+class TableauRatios(BaseModel):
+    """Enveloppe de `GET /conformite/ratios`. `aucune_ecriture_validee` est levé quand AUCUNE
+    écriture validée n'existe jusqu'à la date d'arrêté : une vraie base vide, à distinguer d'une
+    base peu active (comptage exact, jamais déduit des montants des agrégats)."""
+
+    aucune_ecriture_validee: bool
+    ratios: list[RatioEvalue]
 
 
 class ComposantAgregatSchema(BaseModel):

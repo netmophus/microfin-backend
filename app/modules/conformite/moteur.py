@@ -47,10 +47,11 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.comptabilite import rapports
+from app.modules.comptabilite.models import JournalEntry
 from app.modules.conformite.models import (
     AgregatCompte,
     AgregatPrudentiel,
@@ -67,6 +68,11 @@ STATUT_NON_CALCULABLE = "NON_CALCULABLE"
 
 _DEUX_DECIMALES_POURCENT = Decimal("0.0001")
 
+# Codes d'avertissement — PRÉSENTATION, jamais du calcul : ils ne modifient ni la valeur ni le
+# statut d'un ratio, ils rendent lisible une situation anormale (voir `calculer_avertissements`).
+AVERT_NUMERATEUR_NUL = "NUMERATEUR_NUL"
+AVERT_FONDS_PROPRES_NULS = "FONDS_PROPRES_NULS"
+
 
 class AgregatIntrouvableError(Exception):
     """Le code d'agrégat demandé n'existe pas dans `conformite.agregat_prudentiel`."""
@@ -79,6 +85,44 @@ class RatioIntrouvableError(Exception):
 class CalculSpecialInconnuError(Exception):
     """Un agrégat SPECIAL référence un `calcul_special` sans fonction enregistrée pour lui —
     paramétrage incomplet, jamais un crash silencieux ailleurs."""
+
+
+@dataclass(frozen=True)
+class Avertissement:
+    """Message NON BLOQUANT attaché à une évaluation : `code` stable (testable, traduisible),
+    `libelle` en français pour l'écran."""
+
+    code: str
+    libelle: str
+
+
+@dataclass(frozen=True)
+class RegleAgregatNul:
+    """Règle de présentation nommée : « l'agrégat `agregat_nul` vaut 0 alors que
+    `agregat_reference` est strictement positif » -> avertissement `code`. S'applique aux ratios
+    qui référencent l'un ou l'autre des deux agrégats. Désactivée sans erreur si l'un des deux
+    agrégats n'existe pas dans la base de CETTE institution."""
+
+    code: str
+    libelle: str
+    agregat_nul: str
+    agregat_reference: str
+
+
+# Seul endroit où un code d'agrégat est nommé pour de la PRÉSENTATION : des dépôts (ressources)
+# sans aucun fonds propres sont une anomalie à signaler, mais ce n'est pas une règle
+# réglementaire — la formule des ratios, elle, reste entièrement paramétrée en base. Ajouter un
+# avertissement du même type = une ligne ici, sans toucher au moteur.
+REGLES_AGREGAT_NUL: tuple[RegleAgregatNul, ...] = (
+    RegleAgregatNul(
+        code=AVERT_FONDS_PROPRES_NULS,
+        libelle="Aucun fonds propres enregistré à cette date",
+        agregat_nul="FONDS_PROPRES",
+        agregat_reference="RESSOURCES",
+    ),
+)
+
+LIBELLE_NUMERATEUR_NUL = "Aucun risque porté à cette date"
 
 
 @dataclass(frozen=True)
@@ -96,6 +140,7 @@ class EvaluationRatio:
     conforme: bool | None
     marge: Decimal | None
     statut: str
+    avertissements: tuple[Avertissement, ...] = ()
 
 
 def _compte_agregat(db: Session, code: str) -> AgregatPrudentiel:
@@ -295,6 +340,58 @@ def _seuil_applicable(
     ).scalar_one_or_none()
 
 
+def compter_ecritures_validees(db: Session, a_la_date: date) -> int:
+    """Nombre d'écritures VALIDÉES jusqu'à `a_la_date` incluse (même filtre que
+    `rapports.balance`). Zéro = une vraie base vide, indépendamment des montants des agrégats."""
+    return int(
+        db.execute(
+            select(func.count(JournalEntry.id)).where(
+                JournalEntry.status == "validee", JournalEntry.entry_date <= a_la_date
+            )
+        ).scalar_one()
+    )
+
+
+def calculer_avertissements(
+    db: Session,
+    a_la_date: date,
+    *,
+    agregat_num: str,
+    valeur_num: int,
+    agregat_denom: str,
+    valeur_denom: int,
+) -> tuple[Avertissement, ...]:
+    """Avertissements d'une évaluation — AUCUN effet sur la valeur ni sur le statut.
+
+    - NUMERATEUR_NUL (générique, tout ratio) : numérateur nul pour un dénominateur réel. Le
+      0,00 % est exact (cas légitime), mais un lecteur pressé doit voir POURQUOI.
+    - Règles nommées `REGLES_AGREGAT_NUL` : un agrégat nul alors que son agrégat de référence
+      est positif, pour les ratios qui référencent l'un des deux.
+    """
+    avertissements: list[Avertissement] = []
+    if valeur_num == 0 and valeur_denom > 0:
+        avertissements.append(Avertissement(AVERT_NUMERATEUR_NUL, LIBELLE_NUMERATEUR_NUL))
+
+    connues = {agregat_num: valeur_num, agregat_denom: valeur_denom}
+
+    def valeur(code: str) -> int | None:
+        if code not in connues:
+            try:
+                connues[code] = agregat_valeur(db, code, a_la_date)
+            except (AgregatIntrouvableError, CalculSpecialInconnuError):
+                return None
+        return connues[code]
+
+    for regle in REGLES_AGREGAT_NUL:
+        if not {regle.agregat_nul, regle.agregat_reference} & {agregat_num, agregat_denom}:
+            continue
+        nul = valeur(regle.agregat_nul)
+        reference = valeur(regle.agregat_reference)
+        if nul == 0 and reference is not None and reference > 0:
+            avertissements.append(Avertissement(regle.code, regle.libelle))
+    return tuple(avertissements)
+
+
 def evaluer_ratio(db: Session, code: str, a_la_date: date) -> EvaluationRatio:
     """Numérateur, dénominateur, seuil selon la catégorie de l'institution, conformité.
     Dénominateur nul OU seuil absent -> `NON_CALCULABLE`, `conforme=None`, JAMAIS de division."""
@@ -313,6 +410,14 @@ def evaluer_ratio(db: Session, code: str, a_la_date: date) -> EvaluationRatio:
 
     categorie = _categorie_institution(db)
     seuil = _seuil_applicable(db, ratio.id, categorie)
+    avertissements = calculer_avertissements(
+        db,
+        a_la_date,
+        agregat_num=agregat_num.code,
+        valeur_num=valeur_num,
+        agregat_denom=agregat_denom.code,
+        valeur_denom=valeur_denom,
+    )
 
     if valeur_denom == 0 or seuil is None:
         return EvaluationRatio(
@@ -327,6 +432,7 @@ def evaluer_ratio(db: Session, code: str, a_la_date: date) -> EvaluationRatio:
             conforme=None,
             marge=None,
             statut=STATUT_NON_CALCULABLE,
+            avertissements=avertissements,
         )
 
     ratio_pct = (Decimal(valeur_num) / Decimal(valeur_denom) * 100).quantize(
@@ -351,6 +457,7 @@ def evaluer_ratio(db: Session, code: str, a_la_date: date) -> EvaluationRatio:
         conforme=conforme,
         marge=marge,
         statut=STATUT_CONFORME if conforme else STATUT_NON_CONFORME,
+        avertissements=avertissements,
     )
 
 

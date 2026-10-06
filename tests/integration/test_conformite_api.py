@@ -137,7 +137,7 @@ def test_lecture_renvoie_les_10_ratios_2_calcules_8_en_attente(
     reponse = client.get("/conformite/ratios", headers=comptable)
 
     assert reponse.status_code == 200
-    corps = reponse.json()
+    corps = reponse.json()["ratios"]
     assert len(corps) == 10
     actifs = [r for r in corps if r["actif"]]
     en_attente = [r for r in corps if not r["actif"]]
@@ -151,6 +151,58 @@ def test_lecture_renvoie_les_10_ratios_2_calcules_8_en_attente(
         assert ratio["statut"] == "NON_CALCULABLE"
         assert ratio["conforme"] is None
         assert ratio["valeur_numerateur"] is None
+        assert ratio["avertissements"] == []  # jamais évalué : rien à avertir
+
+
+def test_lecture_enveloppe_leve_aucune_ecriture_sur_une_vraie_base_vide(
+    client: TestClient, db: Session
+) -> None:
+    executer_seed_conformite(db)
+    comptable = _entete_auth(db, "COMPTABLE")
+
+    reponse = client.get("/conformite/ratios?a_la_date=1900-01-01", headers=comptable)
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["aucune_ecriture_validee"] is True
+    assert len(corps["ratios"]) == 10
+
+
+def test_lecture_enveloppe_baisse_l_indicateur_des_qu_une_ecriture_existe(
+    client: TestClient, db: Session
+) -> None:
+    executer_seed_conformite(db)
+    comptable = _entete_auth(db, "COMPTABLE")
+    caisse = db.execute(select(Account.id).where(Account.account_number == "101111")).scalar_one()
+    depots = db.execute(select(Account.id).where(Account.account_number == "251121")).scalar_one()
+    _valider_od(db, [LigneSaisie(caisse, "D", 100), LigneSaisie(depots, "C", 100)], AUJOURDHUI)
+
+    url = f"/conformite/ratios?a_la_date={AUJOURDHUI.isoformat()}"
+    reponse = client.get(url, headers=comptable)
+
+    assert reponse.json()["aucune_ecriture_validee"] is False
+
+
+def test_lecture_renvoie_les_avertissements_du_ratio_1_sur_depots_sans_capital(
+    client: TestClient, db: Session
+) -> None:
+    executer_seed_conformite(db)
+    comptable = _entete_auth(db, "COMPTABLE")
+    caisse = db.execute(select(Account.id).where(Account.account_number == "101111")).scalar_one()
+    depots = db.execute(select(Account.id).where(Account.account_number == "251121")).scalar_one()
+    _valider_od(db, [LigneSaisie(caisse, "D", 5000), LigneSaisie(depots, "C", 5000)], AUJOURDHUI)
+
+    url = f"/conformite/ratios?a_la_date={AUJOURDHUI.isoformat()}"
+    reponse = client.get(url, headers=comptable)
+
+    ratios = reponse.json()["ratios"]
+    ratio_1 = next(r for r in ratios if r["code"] == "RATIO_1_COUVERTURE_RISQUES")
+    assert ratio_1["statut"] == "CONFORME"  # le contrat de statut est inchangé
+    assert {a["code"] for a in ratio_1["avertissements"]} == {
+        "NUMERATEUR_NUL",
+        "FONDS_PROPRES_NULS",
+    }
+    assert all(a["libelle"] for a in ratio_1["avertissements"])
 
 
 def test_lecture_sans_permission_403(client: TestClient, db: Session) -> None:
@@ -166,7 +218,7 @@ def test_direction_lit_le_tableau_de_bord(client: TestClient, db: Session) -> No
     reponse = client.get("/conformite/ratios", headers=direction)
 
     assert reponse.status_code == 200
-    assert len(reponse.json()) == 10
+    assert len(reponse.json()["ratios"]) == 10
 
 
 def test_detail_ratio_introuvable_404(client: TestClient, db: Session) -> None:

@@ -23,7 +23,16 @@ from app.core.database import engine
 from app.modules.comptabilite import ecritures, journee
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account, Journal
-from app.modules.conformite.moteur import STATUT_NON_CALCULABLE, agregat_valeur, evaluer_tous
+from app.modules.conformite.moteur import (
+    AVERT_FONDS_PROPRES_NULS,
+    AVERT_NUMERATEUR_NUL,
+    STATUT_CONFORME,
+    STATUT_NON_CALCULABLE,
+    agregat_valeur,
+    compter_ecritures_validees,
+    evaluer_ratio,
+    evaluer_tous,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -144,6 +153,124 @@ def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
     for resultat in resultats:
         assert resultat.statut == STATUT_NON_CALCULABLE
         assert resultat.conforme is None
+
+
+# --- Avertissements non bloquants (présentation, jamais du calcul) ------------------------------
+
+RATIO_1 = "RATIO_1_COUVERTURE_RISQUES"
+
+
+def _codes(resultat: object) -> set[str]:
+    return {a.code for a in resultat.avertissements}  # type: ignore[attr-defined]
+
+
+def test_cas_c_vrai_zero_pourcent_reste_conforme_et_porte_ses_avertissements(
+    db: Session,
+) -> None:
+    """Dépôts (RESSOURCES 5 000) sans aucun risque porté ni aucun fonds propres : le 0,00 % est
+    EXACT et reste CONFORME (opérateur ≤ ; on ne le transforme jamais en non calculable), mais il
+    porte les deux avertissements qui le rendent lisible."""
+    executer_seed_conformite(db)
+    caisse = _id_compte(db, "101111")
+    depots = _id_compte(db, "251121")
+    _valider_od(db, [LigneSaisie(caisse, "D", 5_000), LigneSaisie(depots, "C", 5_000)], AUJOURDHUI)
+
+    resultat = evaluer_ratio(db, RATIO_1, AUJOURDHUI)
+
+    assert resultat.valeur_numerateur == 0
+    assert resultat.valeur_denominateur == 5_000
+    assert resultat.valeur_ratio_pct == 0
+    assert resultat.statut == STATUT_CONFORME
+    assert resultat.conforme is True
+    assert _codes(resultat) == {AVERT_NUMERATEUR_NUL, AVERT_FONDS_PROPRES_NULS}
+
+
+def test_fonds_propres_nuls_aussi_signale_sur_le_ratio_dont_il_est_le_denominateur(
+    db: Session,
+) -> None:
+    """Ratio 5 (encours / FONDS_PROPRES) : dénominateur nul -> NON_CALCULABLE, et l'avertissement
+    explique pourquoi (des ressources existent mais aucun fonds propres)."""
+    executer_seed_conformite(db)
+    caisse = _id_compte(db, "101111")
+    depots = _id_compte(db, "251121")
+    _valider_od(db, [LigneSaisie(caisse, "D", 5_000), LigneSaisie(depots, "C", 5_000)], AUJOURDHUI)
+
+    resultat = evaluer_ratio(db, "RATIO_5_DIVISION_RISQUES", AUJOURDHUI)
+
+    assert resultat.statut == STATUT_NON_CALCULABLE
+    assert AVERT_FONDS_PROPRES_NULS in _codes(resultat)
+    assert AVERT_NUMERATEUR_NUL not in _codes(resultat)  # dénominateur nul : pas « réel »
+
+
+def test_base_sans_aucune_ressource_ne_declenche_aucun_avertissement(db: Session) -> None:
+    """0/0 : NON_CALCULABLE sans bruit — ni « aucun fonds propres » (RESSOURCES n'est pas
+    positif), ni « aucun risque porté » (dénominateur nul)."""
+    executer_seed_conformite(db)
+
+    resultat = evaluer_ratio(db, RATIO_1, AUJOURDHUI)
+
+    assert resultat.statut == STATUT_NON_CALCULABLE
+    assert resultat.avertissements == ()
+
+
+def test_ratio_conforme_sain_ne_porte_aucun_avertissement(db: Session) -> None:
+    """Preuve qu'on ne pollue pas les cas sains : risques 150 000, dépôts 100 000, réserves
+    50 000 -> ressources 150 000, ratio 100 % ≤ 200 %, conforme, et AUCUN avertissement."""
+    executer_seed_conformite(db)
+    credits = _id_compte(db, "202221")
+    depots = _id_compte(db, "251121")
+    reserves = _id_compte(db, "5521")
+    _valider_od(
+        db,
+        [
+            LigneSaisie(credits, "D", 150_000),
+            LigneSaisie(depots, "C", 100_000),
+            LigneSaisie(reserves, "C", 50_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    resultat = evaluer_ratio(db, RATIO_1, AUJOURDHUI)
+
+    assert resultat.statut == STATUT_CONFORME
+    assert resultat.valeur_ratio_pct == 100
+    assert resultat.avertissements == ()
+
+
+def test_les_avertissements_ne_changent_ni_la_valeur_ni_le_statut(db: Session) -> None:
+    """Un ratio NON_CONFORME garde sa valeur et son statut : l'avertissement s'ajoute, il ne
+    corrige rien. Risques 600 000, dépôts 200 000 (produits 400 000 en contrepartie) -> 300 %."""
+    executer_seed_conformite(db)
+    credits = _id_compte(db, "202221")
+    depots = _id_compte(db, "251121")
+    produits = _id_compte(db, "7021")
+    _valider_od(
+        db,
+        [
+            LigneSaisie(credits, "D", 600_000),
+            LigneSaisie(depots, "C", 200_000),
+            LigneSaisie(produits, "C", 400_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    resultat = evaluer_ratio(db, RATIO_1, AUJOURDHUI)
+
+    assert resultat.valeur_ratio_pct == 300
+    assert resultat.statut == "NON_CONFORME"
+    assert _codes(resultat) == {AVERT_FONDS_PROPRES_NULS}
+
+
+def test_compteur_ecritures_validees_distingue_une_vraie_base_vide(db: Session) -> None:
+    avant = compter_ecritures_validees(db, AUJOURDHUI)
+    assert compter_ecritures_validees(db, date(1900, 1, 1)) == 0  # avant toute écriture
+
+    caisse = _id_compte(db, "101111")
+    depots = _id_compte(db, "251121")
+    _valider_od(db, [LigneSaisie(caisse, "D", 100), LigneSaisie(depots, "C", 100)], AUJOURDHUI)
+
+    assert compter_ecritures_validees(db, AUJOURDHUI) == avant + 1
+    assert compter_ecritures_validees(db, date(1900, 1, 1)) == 0  # la date d'arrêté compte
 
 
 def test_seed_est_idempotent(db: Session) -> None:

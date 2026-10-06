@@ -54,11 +54,13 @@ from app.modules.conformite.moteur import (
     CalculSpecialInconnuError,
     EvaluationRatio,
     RatioIntrouvableError,
+    compter_ecritures_validees,
     detail_agregat,
     evaluer_ratio,
 )
 from app.modules.conformite.schemas import (
     AgregatAdmin,
+    AvertissementSchema,
     ComposantAgregatSchema,
     CreationAgregat,
     CreationRatio,
@@ -77,6 +79,7 @@ from app.modules.conformite.schemas import (
     SuppressionAgregat,
     SuppressionRatio,
     SuppressionSeuil,
+    TableauRatios,
 )
 from app.modules.conformite.service import (
     AgregatReferenceError,
@@ -148,17 +151,21 @@ def _vers_ratio_evalue(ratio: RatioPrudentiel, evaluation: EvaluationRatio) -> R
         marge=evaluation.marge,
         statut=evaluation.statut,  # type: ignore[arg-type]
         actif=ratio.actif,
+        avertissements=[
+            AvertissementSchema(code=a.code, libelle=a.libelle) for a in evaluation.avertissements
+        ],
     )
 
 
-@router.get("/conformite/ratios", response_model=list[RatioEvalue])
+@router.get("/conformite/ratios", response_model=TableauRatios)
 def lister_ratios_evalues_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("conformite.ratio.read"))],
     db: Annotated[Session, Depends(get_db)],
     a_la_date: Annotated[date | None, Query(description="Par défaut : aujourd'hui.")] = None,
-) -> list[RatioEvalue]:
+) -> TableauRatios:
     """Les 10 ratios paramétrés — les ACTIFS évalués, les INACTIFS renvoyés « en attente »
-    sans jamais appeler le moteur sur eux (voir docstring de module)."""
+    sans jamais appeler le moteur sur eux (voir docstring de module) — dans une enveloppe qui
+    porte l'indicateur global « aucune écriture validée à cette date »."""
     date_arret = _date_arretee(db, a_la_date)
     resultats: list[RatioEvalue] = []
     for ratio in service.lister_ratios(db):
@@ -174,7 +181,10 @@ def lister_ratios_evalues_endpoint(
             resultats.append(_ratio_en_attente(ratio))
             continue
         resultats.append(_vers_ratio_evalue(ratio, evaluation))
-    return resultats
+    return TableauRatios(
+        aucune_ecriture_validee=compter_ecritures_validees(db, date_arret) == 0,
+        ratios=resultats,
+    )
 
 
 @router.get("/conformite/ratios/{code}", response_model=RatioDetail)
