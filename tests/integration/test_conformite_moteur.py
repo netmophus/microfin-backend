@@ -16,6 +16,7 @@ POSITIF. `agregat_compte.sens` n'est PAS une correction de polarité, c'est l'ap
 import uuid
 from collections.abc import Generator
 from datetime import date
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
@@ -27,6 +28,7 @@ from app.modules.caisse.service import ouvrir_session
 from app.modules.comptabilite import ecritures, journee
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account, Journal
+from app.modules.comptabilite.plan import importer
 from app.modules.conformite.models import (
     AgregatCompte,
     AgregatPrudentiel,
@@ -548,3 +550,48 @@ def test_encours_plus_gros_emprunteur_prend_le_max(db: Session) -> None:
     )
 
     assert agregat_valeur(db, agregat.code, AUJOURDHUI) == 700_000
+
+
+# --- P2.0-b1 : un agrégat sur le préfixe d'un brut ne ramasse pas ses contras ------------------
+
+CSV_PLAN_B1 = (
+    Path(__file__).resolve().parents[2] / "docs" / "reference" / "plan_comptable_import.csv"
+)
+
+
+@pytest.mark.parametrize(
+    ("brut", "contra", "prefixe_brut", "prefixe_piege"),
+    [
+        ("412100", "4129", "4121", "412"),
+        ("441100", "4418", "4411", "441"),
+        ("442100", "4429", "4421", "442"),
+    ],
+)
+def test_prefixe_du_brut_ne_ramasse_pas_la_provision_ou_l_amortissement(
+    db: Session, brut: str, contra: str, prefixe_brut: str, prefixe_piege: str
+) -> None:
+    importer(db, str(CSV_PLAN_B1))
+    compte_brut = db.execute(select(Account).where(Account.account_number == brut)).scalar_one()
+    compte_contra = db.execute(
+        select(Account).where(Account.account_number == contra)
+    ).scalar_one()
+    capital = _compte(db, f"5T{uuid.uuid4().hex[:5]}", normal_side="C")
+    # Brut 8 000 (D) financé par un capital ; contra 3 000 (C) en contrepartie du capital.
+    _valider_od(
+        db, [LigneSaisie(compte_brut.id, "D", 8000), LigneSaisie(capital.id, "C", 8000)], AUJOURDHUI
+    )
+    _valider_od(
+        db,
+        [LigneSaisie(capital.id, "D", 3000), LigneSaisie(compte_contra.id, "C", 3000)],
+        AUJOURDHUI,
+    )
+    sur_brut = _agregat(db, f"BRUT_{brut}")
+    _composition(db, sur_brut, prefixe_brut, 1)
+    sur_regroupement = _agregat(db, f"PIEGE_{brut}")
+    _composition(db, sur_regroupement, prefixe_piege, 1)
+
+    # Le préfixe dédié au brut ne voit QUE le brut...
+    assert agregat_valeur(db, f"BRUT_{brut}", AUJOURDHUI) == 8000
+    # ... alors que le préfixe du regroupement ramasse aussi le contra (solde créditeur normal,
+    # donc positif) : 8 000 + 3 000. C'est le piège que les bruts dédiés suppriment.
+    assert agregat_valeur(db, f"PIEGE_{brut}", AUJOURDHUI) == 11000

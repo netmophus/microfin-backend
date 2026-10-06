@@ -514,3 +514,79 @@ def test_ancien_sens_debiteur_faisait_augmenter_l_actif_net(
     corps = reponse.json()
     assert corps["total_contra_actif"] == -8000
     assert corps["total_actif_net"] == 58000
+
+
+# --- P2.0-b1 : nouveaux comptes bruts, mapping complet, bilan équilibré -----------------------
+
+
+def test_aucun_compte_de_saisie_du_plan_n_est_non_mappe(db: Session) -> None:
+    """Après import du plan puis seed du mapping, TOUT compte de saisie du CSV a un poste d'état
+    financier : le bilan ne peut afficher aucun « compte non mappé » par construction."""
+    import csv
+
+    importer(db, str(CSV_PLAN))
+    executer_seed_mapping_etats(db)
+    with open(CSV_PLAN, encoding="utf-8-sig", newline="") as f:
+        saisie = [
+            ligne["account_number"]
+            for ligne in csv.DictReader(f, delimiter=";")
+            if ligne["is_posting"] == "TRUE"
+        ]
+
+    non_mappes = db.execute(
+        text(
+            "SELECT a.account_number FROM comptabilite.accounts a "
+            "LEFT JOIN comptabilite.financial_statement_mapping m ON m.account_id = a.id "
+            "WHERE a.is_posting AND m.account_id IS NULL AND a.account_number = ANY(:n) "
+            "ORDER BY 1"
+        ),
+        {"n": saisie},
+    ).scalars().all()
+
+    assert non_mappes == []
+
+
+def test_bilan_equilibre_avec_les_nouveaux_comptes_bruts(client: TestClient, db: Session) -> None:
+    """Participation brute 40 000 + incorporel brut 25 000 + corporel brut 15 000 = 80 000,
+    financés par un écart de réévaluation (552400, capitaux propres) ; puis 6 000 d'amortissement
+    (4418) imputés sur lui. Actif brut 80 000 moins contra 6 000 = 74 000 = passif 74 000."""
+    importer(db, str(CSV_PLAN))
+    executer_seed_mapping_etats(db)
+    numeros = ("412100", "441100", "442100", "552400", "4418")
+    comptes = {
+        n: db.execute(select(Account).where(Account.account_number == n)).scalar_one()
+        for n in numeros
+    }
+    _exercice(db, "ETATS-1805", date(1805, 1, 1), date(1805, 12, 31))
+    _valider_od(
+        db,
+        [
+            LigneSaisie(comptes["412100"].id, "D", 40000),
+            LigneSaisie(comptes["441100"].id, "D", 25000),
+            LigneSaisie(comptes["442100"].id, "D", 15000),
+            LigneSaisie(comptes["552400"].id, "C", 80000),
+        ],
+        date(1805, 6, 1),
+    )
+    _valider_od(
+        db,
+        [LigneSaisie(comptes["552400"].id, "D", 6000), LigneSaisie(comptes["4418"].id, "C", 6000)],
+        date(1805, 6, 2),
+    )
+    db.commit()
+    comptable = _entete(db, "COMPTABLE")
+
+    reponse = client.get(
+        "/comptabilite/etats/bilan", params={"date": "1805-12-31"}, headers=comptable
+    )
+
+    corps = reponse.json()
+    assert corps["comptes_non_mappes"] == []
+    assert corps["total_actif_brut"] == 80000
+    assert corps["total_contra_actif"] == 6000
+    assert corps["total_actif_net"] == 74000
+    assert corps["total_passif"] == 74000
+    assert corps["equilibre"] is True
+    postes = {p["poste_libelle"]: p["montant"] for p in corps["actif"] if p["masse"] == "ACTIF"}
+    assert postes["Immobilisations financieres"] == 40000
+    assert postes["Immobilisations d'exploitation"] == 40000  # 25 000 + 15 000

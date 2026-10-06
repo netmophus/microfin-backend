@@ -179,6 +179,9 @@
 3825;Charges à payer;3;C;TRUE;BILAN;PASSIF;Comptes de regularisation - passif
 41;IMMOBILISATIONS FINANCIERES;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
 412;Titres de participation;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
+412100;Titres de participation dans d'autres SFD - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
+412200;Titres de participation dans des etablissements de credit - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
+412300;Titres de participation dans d'autres entites non financieres - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4126;Versements restant à effectuer;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4127;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4129;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
@@ -195,9 +198,11 @@
 4329;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
 44;IMMOBILISATIONS D'EXPLOITATION;4;D;FALSE;BILAN;ACTIF;Immobilisations d'exploitation
 441;Immobilisations incorporelles;4;D;FALSE;BILAN;ACTIF;Immobilisations d'exploitation
+441100;Immobilisations incorporelles d'exploitation - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations d'exploitation
 4418;Amortissements;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
 4419;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
 442;Immobilisations corporelles;4;D;FALSE;BILAN;ACTIF;Immobilisations d'exploitation
+442100;Immobilisations corporelles d'exploitation - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations d'exploitation
 4428;Amortissements des immobilisations corporelles;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
 4429;Provisions pour dépréciation des immobilisations corporelles;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
 50;SUBVENTIONS ET AUTRES FONDS RECUS;5;C;FALSE;BILAN;PASSIF;Subventions et fonds recus
@@ -221,6 +226,7 @@
 5521;Réserve générale;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
 5522;Réserves facultatives;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
 5523;Autres réserves;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
+552400;Ecart de reevaluation;5;C;TRUE;BILAN;PASSIF;Capital, primes et reserves
 56;FONDS DE DOTATION;5;C;TRUE;BILAN;PASSIF;Fonds de dotation
 57;CAPITAL SOCIAL;5;C;FALSE;BILAN;PASSIF;Capital social
 571;Capital;5;C;FALSE;BILAN;PASSIF;Capital social

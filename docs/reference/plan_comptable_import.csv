@@ -179,6 +179,9 @@
 3825;Charges à payer;;3;382;C;TRUE;TRUE;
 41;IMMOBILISATIONS FINANCIERES;;4;;D;FALSE;TRUE;
 412;Titres de participation;;4;41;D;FALSE;TRUE;
+412100;Titres de participation dans d'autres SFD - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
+412200;Titres de participation dans des etablissements de credit - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
+412300;Titres de participation dans d'autres entites non financieres - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
 4126;Versements restant à effectuer;;4;412;D;TRUE;TRUE;
 4127;Créances rattachées;;4;412;D;TRUE;TRUE;
 4129;Provisions pour dépréciation;;4;412;C;TRUE;TRUE;
@@ -195,9 +198,11 @@
 4329;Provisions pour dépréciation;;4;432;C;TRUE;TRUE;
 44;IMMOBILISATIONS D'EXPLOITATION;;4;;D;FALSE;TRUE;
 441;Immobilisations incorporelles;;4;44;D;FALSE;TRUE;
+441100;Immobilisations incorporelles d'exploitation - valeur brute;;4;441;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
 4418;Amortissements;;4;441;C;TRUE;TRUE;
 4419;Provisions pour dépréciation;;4;441;C;TRUE;TRUE;
 442;Immobilisations corporelles;;4;44;D;FALSE;TRUE;
+442100;Immobilisations corporelles d'exploitation - valeur brute;;4;442;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
 4428;Amortissements des immobilisations corporelles;;4;442;C;TRUE;TRUE;
 4429;Provisions pour dépréciation des immobilisations corporelles;;4;442;C;TRUE;TRUE;
 50;SUBVENTIONS ET AUTRES FONDS RECUS;;5;;C;FALSE;TRUE;
@@ -221,6 +226,7 @@
 5521;Réserve générale;;5;552;C;TRUE;TRUE;
 5522;Réserves facultatives;;5;552;C;TRUE;TRUE;
 5523;Autres réserves;;5;552;C;TRUE;TRUE;
+552400;Ecart de reevaluation;;5;552;C;TRUE;TRUE;Extension projet NON OFFICIELLE : aucun compte ecart de reevaluation dans le referentiel RCSFD - compte dormant, a valider par l'expert-comptable SFD
 56;FONDS DE DOTATION;;5;;C;TRUE;TRUE;
 57;CAPITAL SOCIAL;;5;;C;FALSE;TRUE;
 571;Capital;;5;57;C;FALSE;TRUE;

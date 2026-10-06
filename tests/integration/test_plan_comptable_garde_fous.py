@@ -421,3 +421,92 @@ def test_apres_import_du_plan_4319_et_4329_ressortent_crediteurs(db: Session) ->
 
     assert _sens_en_base(db, "4319") == "C"
     assert _sens_en_base(db, "4329") == "C"
+
+
+# --- P2.0-b1 : comptes bruts et écart de réévaluation (extensions projet) -----------------------
+
+CSV_OFFICIEL = DOCS_REFERENCE / "plan_comptable_rcsfd_officiel.csv"
+
+# numéro -> (parent, sens normal)
+EXTENSIONS_P20B1 = {
+    "412100": ("412", "D"),  # participations dans d'autres SFD (brut)
+    "412200": ("412", "D"),  # participations dans des établissements de crédit (brut)
+    "412300": ("412", "D"),  # participations dans d'autres entités non financières (brut)
+    "441100": ("441", "D"),  # immobilisations incorporelles d'exploitation (brut)
+    "442100": ("442", "D"),  # immobilisations corporelles d'exploitation (brut)
+    "552400": ("552", "C"),  # écart de réévaluation (capitaux propres)
+}
+BRUTS_P20B1 = [n for n in EXTENSIONS_P20B1 if n != "552400"]
+
+
+def _comptes_du_plan(chemin: Path) -> dict[str, dict[str, str]]:
+    with open(chemin, encoding="utf-8-sig", newline="") as f:
+        return {ligne["account_number"]: ligne for ligne in csv.DictReader(f, delimiter=";")}
+
+
+def test_le_csv_d_import_reste_valide_apres_ajout_des_extensions() -> None:
+    from app.modules.comptabilite.plan import lire_csv, valider
+
+    assert valider(lire_csv(str(CSV_IMPORT))) == []
+
+
+def test_extensions_p20b1_sont_bien_formees_et_hors_nomenclature_officielle() -> None:
+    plan_import = _comptes_du_plan(CSV_IMPORT)
+    with open(CSV_OFFICIEL, encoding="utf-8-sig", newline="") as f:
+        officiels = {ligne["compte"] for ligne in csv.DictReader(f, delimiter=";")}
+
+    for numero, (parent, sens) in EXTENSIONS_P20B1.items():
+        ligne = plan_import[numero]
+        assert len(numero) == 6  # convention des extensions du projet
+        assert numero not in officiels  # jamais présenté comme un compte officiel
+        assert ligne["parent_number"] == parent
+        assert ligne["normal_side"] == sens
+        assert ligne["is_posting"] == "TRUE"
+        assert ligne["is_system"] == "TRUE"
+        assert "Extension projet" in ligne["notes"]
+
+
+def test_bruts_sont_disjoints_de_leurs_provisions_et_amortissements() -> None:
+    """Aucun autre compte du plan n'est un préfixe d'un brut, ni n'a un brut pour préfixe, à
+    l'exception de ses propres ancêtres (regroupements) : un agrégat posé sur le préfixe d'un
+    brut ne peut donc jamais ramasser une provision (piège 19/199)."""
+    plan_import = _comptes_du_plan(CSV_IMPORT)
+
+    def ancetres(numero: str) -> set[str]:
+        resultat: set[str] = set()
+        parent = plan_import[numero]["parent_number"]
+        while parent:
+            resultat.add(parent)
+            parent = plan_import[parent]["parent_number"]
+        return resultat
+
+    for brut in BRUTS_P20B1:
+        autorises = ancetres(brut)
+        for autre in plan_import:
+            if autre == brut:
+                continue
+            if brut.startswith(autre):
+                assert autre in autorises, f"{autre} est un préfixe de {brut}"
+            assert not autre.startswith(brut), f"{brut} est un préfixe de {autre}"
+
+
+def test_creation_des_extensions_p20b1_passe_le_garde_fou_de_sens(db: Session) -> None:
+    """Ce sont des CRÉATIONS : le garde-fou de sens (b0a8008) ne doit rien refuser."""
+    from app.modules.comptabilite.plan import conflits_de_sens, lire_csv
+
+    lignes = lire_csv(str(CSV_IMPORT))
+    assert conflits_de_sens(db, lignes) == []
+
+    importer(db, str(CSV_IMPORT))
+
+    for numero, (parent, sens) in EXTENSIONS_P20B1.items():
+        assert _sens_en_base(db, numero) == sens
+        parent_en_base = db.execute(
+            text(
+                "SELECT p.account_number FROM comptabilite.accounts a "
+                "JOIN comptabilite.accounts p ON p.id = a.parent_id "
+                "WHERE a.account_number = :n"
+            ),
+            {"n": numero},
+        ).scalar_one()
+        assert parent_en_base == parent
