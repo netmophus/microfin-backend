@@ -498,7 +498,9 @@ def _seuils(db: Session, code_ratio: str) -> list[tuple[str | None, int]]:
 
 
 def _poser_participations(db: Session, *, brut: int, provision: int) -> None:
-    """Fonds propres 100 000 (5521) ; brut 412300 et provision 4129 prélevés sur la caisse."""
+    """Fonds propres 100 000 (5521) ; brut 412300 et provision prélevés sur la caisse. La provision
+    se saisit sur 412930 (4129 est un regroupement) : #8, qui pointe encore le préfixe 4129, la
+    capte par préfixe."""
     importer(db, str(CSV_PLAN_B2))  # 412300 / 412100 sont des comptes P2.0-b1
     caisse = _id_compte(db, "101111")
     _valider_od(
@@ -517,7 +519,7 @@ def _poser_participations(db: Session, *, brut: int, provision: int) -> None:
             db,
             [
                 LigneSaisie(caisse, "D", provision),
-                LigneSaisie(_id_compte(db, "4129"), "C", provision),
+                LigneSaisie(_id_compte(db, "412930"), "C", provision),
             ],
             AUJOURDHUI,
         )
@@ -553,7 +555,8 @@ def test_412300_et_4129_ont_des_prefixes_disjoints() -> None:
     with open(CSV_PLAN_B2, encoding="utf-8-sig", newline="") as f:
         numeros = [ligne["account_number"] for ligne in csv.DictReader(f, delimiter=";")]
     assert [n for n in numeros if n.startswith("412300")] == ["412300"]
-    assert [n for n in numeros if n.startswith("4129")] == ["4129"]
+    assert [n for n in numeros if n.startswith("4129")] == ["4129", "412910", "412930"]
+    assert not any(n.startswith("412300") for n in ("4129", "412910", "412930"))
 
 
 def test_ratio_8_chiffre_conforme_a_22_pour_cent_puis_non_conforme_a_30(db: Session) -> None:
@@ -714,3 +717,28 @@ def test_garde_ratio_8_avec_seuil_deja_pose_n_est_pas_recable(db: Session) -> No
     assert rejeu.ratios_recables == 0
     assert ratio.actif is False
     assert _seuils(db, RATIO_8) == [(None, 30)]  # son seuil n'est pas écrasé
+
+
+def test_ratio_1_deduit_les_deux_sous_provisions_par_le_prefixe_4129(db: Session) -> None:
+    """Ventilation de 4129 : la ligne (4129, -1) de RISQUES_PORTES capte 412910 ET 412930, la
+    provision totale reste déduite sans modifier l'agrégat. Crédits 150 000 ; provisions
+    412910 4 000 + 412930 6 000 -> risques portés nets 140 000."""
+    executer_seed_conformite(db)
+    importer(db, str(CSV_PLAN_B2))
+    credits = _id_compte(db, "202221")
+    caisse = _id_compte(db, "101111")
+    _valider_od(
+        db, [LigneSaisie(credits, "D", 150_000), LigneSaisie(caisse, "C", 150_000)], AUJOURDHUI
+    )
+    _valider_od(
+        db,
+        [
+            LigneSaisie(caisse, "D", 10_000),
+            LigneSaisie(_id_compte(db, "412910"), "C", 4_000),
+            LigneSaisie(_id_compte(db, "412930"), "C", 6_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    assert ("4129", -1) in _composition(db, "RISQUES_PORTES")
+    assert agregat_valeur(db, "RISQUES_PORTES", AUJOURDHUI) == 140_000

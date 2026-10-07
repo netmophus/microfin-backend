@@ -271,6 +271,39 @@ def conflits_de_sens(db: Session, lignes: list[LigneBrute]) -> list[Anomalie]:
     return conflits
 
 
+def conflits_de_nature(db: Session, lignes: list[LigneBrute]) -> list[Anomalie]:
+    """Lignes qui feraient passer un compte DÉJÀ MOUVEMENTÉ de saisie à regroupement.
+
+    Symétrique de `conflits_de_sens` (même « mouvementé » : toute ligne d'écriture, brouillon
+    compris) : un regroupement n'accepte plus d'écriture, donc les écritures déjà posées sur
+    lui deviendraient orphelines — et un brouillon ne pourrait plus être validé. L'upsert écrase
+    `is_posting` sans rien contrôler ; sans cette garde, la bascule serait silencieuse. Refus
+    tout-ou-rien. Un compte SANS écriture bascule librement, et l'inverse (regroupement vers
+    saisie) n'est pas concerné.
+    """
+    numeros = [li.account_number for li in lignes]
+    existants = {
+        c.account_number: c
+        for c in db.execute(select(Account).where(Account.account_number.in_(numeros))).scalars()
+    }
+    conflits: list[Anomalie] = []
+    for li in lignes:
+        existant = existants.get(li.account_number)
+        if existant is None or not existant.is_posting or _BOOLEENS[li.is_posting]:
+            continue
+        if compte_a_des_ecritures(db, existant.id):
+            conflits.append(
+                Anomalie(
+                    li.ligne,
+                    li.account_number,
+                    "ce compte de saisie deviendrait un compte de regroupement, mais il porte "
+                    "déjà des écritures : elles ne pourraient plus être saisies ni validées "
+                    "sur lui",
+                )
+            )
+    return conflits
+
+
 _UPSERT = text(
     """
     INSERT INTO comptabilite.accounts
@@ -314,9 +347,9 @@ def importer_lignes(
     anomalies = valider(lignes)
     if anomalies:
         raise ImportRefuseError(anomalies)
-    # Tout ou rien : un seul conflit de sens sur un compte mouvementé refuse TOUT l'import, avant
-    # la moindre écriture (l'upsert ne contrôle pas les mouvements).
-    conflits = conflits_de_sens(db, lignes)
+    # Tout ou rien : un seul conflit de sens ou de nature sur un compte mouvementé refuse TOUT
+    # l'import, avant la moindre écriture (l'upsert ne contrôle pas les mouvements).
+    conflits = conflits_de_sens(db, lignes) + conflits_de_nature(db, lignes)
     if conflits:
         raise ImportRefuseError(conflits)
 

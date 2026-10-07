@@ -183,7 +183,9 @@
 412300;Titres de participation hors SFD et etablissements de credit - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4126;Versements restant à effectuer;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4127;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
-4129;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+4129;Provisions pour dépréciation;4;C;FALSE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+412910;Provisions pour depreciation des titres de participation dans SFD et etablissements de credit;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
+412930;Provisions pour depreciation des titres de participation hors SFD et etablissements de credit;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
 42;DEPOTS ET CAUTIONNEMENTS;4;D;FALSE;BILAN;ACTIF;Depots et cautionnements
 421;Dépôts et cautionnements;4;D;TRUE;BILAN;ACTIF;Depots et cautionnements
 427;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Depots et cautionnements

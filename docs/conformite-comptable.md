@@ -42,8 +42,8 @@ filtre glissée ailleurs.
 
 ## Le plan de comptes — référentiel officiel RCSFD + extensions IMF
 
-**Le plan actif est le référentiel officiel**, depuis le départ : **395 comptes**
-(372 comptes officiels + 23 comptes d'extension : membre/client, crédit, caisse et parts,
+**Le plan actif est le référentiel officiel**, depuis le départ : **397 comptes**
+(372 comptes officiels + 25 comptes d'extension : membre/client, crédit, caisse et parts,
 transit, et les comptes bruts dédiés de P2.0-b1), **tous provisoires**
 (`accounts.is_provisional = TRUE`) et protégés par `is_system = TRUE` — sauf 3 extensions de
 caisse et parts sociales (101111, 571111, 571121), à `is_system = FALSE` : voir « Caisse et
@@ -59,12 +59,12 @@ parts sociales » plus bas. La numérotation est sûre, mais le **sens** (D/C) e
   documentation ; les données du plan de comptes n'ont jamais été extraites de ce fichier
   bancaire.
 - [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv) — le fichier
-  réellement importé (395 lignes : les 372 + les 23 extensions), avec hiérarchie/nature/sens
+  réellement importé (397 lignes : les 372 + les 25 extensions), avec hiérarchie/nature/sens
   dérivés (méthodologie ci-dessous).
 
 | # | Valeur | Statut |
 |---|--------|--------|
-| 1 | Numéros de comptes du plan (les 395) | ✅ officiels (BCEAO) + extensions proposées |
+| 1 | Numéros de comptes du plan (les 397) | ✅ officiels (BCEAO) + extensions proposées |
 | 2 | Sens normal D/C de chaque compte | ⚠️ À VALIDER — voir priorité de relecture ci-dessous |
 | 3 | Comptes de saisie (`is_posting`) vs regroupement | ⚠️ À VALIDER (déduit mécaniquement de la hiérarchie, fiable) |
 | 4 | Hiérarchie parent/enfant | ✅ dérivée de la numérotation officielle |
@@ -143,7 +143,7 @@ un compte peut légitimement porter un solde des deux sens selon l'usage réel d
 | 3811 | Charges à répartir sur plusieurs exercices | D | 595 | Excédent ou déficit d'exploitation | C |
 | 3812 | Charges constatées d'avance | D | 596 | Excédent ou déficit exceptionnel | C |
 
-Les 395 comptes (372 officiels + 23 extensions) sont tous `is_provisional = TRUE` (sens à
+Les 397 comptes (372 officiels + 25 extensions) sont tous `is_provisional = TRUE` (sens à
 confirmer) et `is_system = TRUE` (numérotation protégée), à l'exception des 3 extensions de
 caisse et parts sociales (101111, 571111, 571121), à `is_system = FALSE` — voir la section
 suivante. Même discipline que le reste de ce document : aucune valeur n'est présentée comme
@@ -213,12 +213,12 @@ regroupement ordinaires : aucun verrouillage de `is_posting` n'est nécessaire p
 puisqu'aucun autre enfant ne s'y ajoute.
 
 Ajoutés à demeure dans [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv)
-(395 comptes désormais, après P2.0-b1) — pas seulement importés une fois, une réinstallation fraîche les
+(397 comptes désormais, après P2.0-b1-ter) — pas seulement importés une fois, une réinstallation fraîche les
 recrée. **Lacune corrigée au passage** : ces 3 comptes avaient été ajoutés à
 [`reference/plan_comptable_enrichi.csv`](reference/plan_comptable_enrichi.csv) (mapping bilan/
 compte de résultat) sans jamais être reportés dans le CSV d'import réel — une base migrée puis
 amorcée depuis zéro ne les créait donc jamais, bien que `seed-mapping-etats` les attende. Les
-deux fichiers portent maintenant exactement la même population de comptes (395 des deux côtés),
+deux fichiers portent maintenant exactement la même population de comptes (397 des deux côtés),
 chacun dans son propre rôle (import = création ; enrichi = mapping aux postes du bilan).
 
 À l'inverse, les comptes `101112`/`101114`/`101115` (« Caisse GAB », « Caisse principale (démo
@@ -232,7 +232,7 @@ promesse est de couvrir le plan d'une installation réelle.
 Pour les rapports « à date » (grand livre, balance, et plus tard bilan/résultat provisoires —
 voir R1/R2/R3), la nomenclature officielle (Annexe 1 du RCSFD) fait correspondre chaque poste des
 états financiers à une liste de comptes. La quasi-totalité de cette concordance résout sans
-ambiguïté sur nos 395 comptes (un compte-parent chez nous se substitue par la somme de ses
+ambiguïté sur nos 397 comptes (un compte-parent chez nous se substitue par la somme de ses
 enfants de saisie). **6 postes de la classe 2 (comptes membres/clients) restent une hypothèse, pas
 une certitude**, et devront porter un badge « à confirmer » dans l'écran du bilan le jour où il
 existera (R3) — pas ailleurs sur le rapport.
@@ -522,3 +522,28 @@ référence) seulement s'il est encore dans l'état exact d'avant (système, jam
 placeholder `PARTICIPATIONS`, inactif, sans seuil). Le placeholder vide `PARTICIPATIONS` n'est
 plus semé ; sur une base existante il reste en place, inutilisé, et peut être retiré par l'API de
 paramétrage.
+
+## Ventilation de la provision des participations (P2.0-b1-ter)
+
+`4129` (« Provisions pour dépréciation », compte officiel) est un compte de provision GLOBAL : il
+ne distingue pas les participations dans les SFD et établissements de crédit des autres. Pour que
+les fonds propres (#2) et la limitation des participations (#8) déduisent chacun SA provision, il
+est ventilé en deux sous-comptes de saisie, symétriques des deux bruts :
+
+| Compte | Nature | Rôle |
+|---|---|---|
+| `4129` | **regroupement** (`is_posting = FALSE`), sens C, parent officiel conservé, `is_system` | parent des deux provisions |
+| `412910` | saisie, sens C, extension projet non officielle | provision des titres dans SFD et établissements de crédit (brut `412100`) |
+| `412930` | saisie, sens C, extension projet non officielle | provision des titres hors SFD et établissements de crédit (brut `412300`) |
+
+- Les trois comptes sont mappés `CONTRA_ACTIF` (`plan_comptable_enrichi.csv`) : aucun compte non
+  mappé. La bascule de `4129` se fait par réimport du CSV (le CSV fait foi) ; il était vierge
+  d'écritures sur `mifin`.
+- **Préfixes** : `412910`, `412930`, `412100` et `412300` sont deux à deux disjoints. En
+  revanche le préfixe `4129` capte `412910` ET `412930` : la ligne `4129` (−1) de `RISQUES_PORTES`
+  (#1) déduit donc toujours la provision totale, sans modification. Ce lot ne touche à AUCUN
+  agrégat ; #8 pointe encore `4129` (correct tant qu'aucune provision n'est saisie sur les
+  sous-comptes — sa correction vers `412930` est un lot séparé).
+- **Garde-fou de nature** (`plan.conflits_de_nature`) : un import qui ferait passer un compte déjà
+  mouvementé (toute ligne d'écriture, brouillon compris) de saisie à regroupement est refusé en
+  bloc, comme `conflits_de_sens` — import CLI, confirmation et aperçu du back-office.

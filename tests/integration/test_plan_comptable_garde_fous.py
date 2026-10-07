@@ -23,7 +23,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -537,3 +537,146 @@ def test_les_participations_ont_deux_buckets_bruts_sfd_ec_et_autres() -> None:
         "Titres de participation hors SFD et etablissements de credit - valeur brute"
     )
     assert plan_enrichi["412300"]["name"] == plan_import["412300"]["name"]
+
+
+# --- P2.0-b1-ter : ventilation de la provision des participations (4129) ------------------------
+
+SOUS_PROVISIONS = {
+    "412910": "Provisions pour depreciation des titres de participation dans SFD et etablissements"
+    " de credit",
+    "412930": "Provisions pour depreciation des titres de participation hors SFD et "
+    "etablissements de credit",
+}
+
+
+def test_les_sous_provisions_de_4129_sont_bien_formees_et_hors_plan_officiel() -> None:
+    plan_import = _comptes_du_plan(CSV_IMPORT)
+    plan_enrichi = _comptes_du_plan(CSV_ENRICHI)
+    with open(CSV_OFFICIEL, encoding="utf-8-sig", newline="") as f:
+        officiels = {ligne["compte"] for ligne in csv.DictReader(f, delimiter=";")}
+
+    for numero, libelle in SOUS_PROVISIONS.items():
+        ligne = plan_import[numero]
+        assert len(numero) == 6
+        assert numero not in officiels  # jamais présenté comme officiel
+        assert ligne["name"] == libelle and libelle.isascii()
+        assert ligne["parent_number"] == "4129"
+        assert ligne["normal_side"] == "C"
+        assert (ligne["is_posting"], ligne["is_system"]) == ("TRUE", "TRUE")
+        assert "Extension projet" in ligne["notes"]
+        assert plan_enrichi[numero]["name"] == libelle
+        assert plan_enrichi[numero]["masse"] == "CONTRA_ACTIF"  # comme 4129
+        assert plan_enrichi[numero]["etat"] == "BILAN"
+
+
+def test_4129_est_devenu_regroupement_et_garde_sens_mapping_et_parent() -> None:
+    for chemin in (CSV_IMPORT, CSV_ENRICHI):
+        ligne = _comptes_du_plan(chemin)["4129"]
+        assert ligne["is_posting"] == "FALSE", chemin.name
+        assert ligne["normal_side"] == "C", chemin.name
+    assert _comptes_du_plan(CSV_IMPORT)["4129"]["parent_number"] == "412"
+    assert _comptes_du_plan(CSV_IMPORT)["4129"]["is_system"] == "TRUE"
+    assert _comptes_du_plan(CSV_ENRICHI)["4129"]["masse"] == "CONTRA_ACTIF"
+
+
+def test_provisions_et_bruts_des_participations_sont_disjoints_deux_a_deux() -> None:
+    """Chiffré : parmi 412100, 412300, 412910, 412930, aucun n'est préfixe d'un autre. Et le
+    préfixe 4129 (regroupement) capte exactement les deux provisions, aucun brut."""
+    comptes = ["412100", "412300", "412910", "412930"]
+    for a in comptes:
+        for b in comptes:
+            if a != b:
+                assert not b.startswith(a), f"{a} est un préfixe de {b}"
+    plan = _comptes_du_plan(CSV_IMPORT)
+    assert sorted(n for n in plan if n.startswith("4129")) == ["4129", "412910", "412930"]
+    assert [n for n in plan if n.startswith("4121")] == ["412100"]
+    assert [n for n in plan if n.startswith("4123")] == ["412300"]
+
+
+def _rouvrir_4129(db: Session) -> None:
+    """Simule une base seedée AVANT la ventilation : 4129 compte de saisie."""
+    db.execute(
+        text("UPDATE comptabilite.accounts SET is_posting = TRUE WHERE account_number = '4129'")
+    )
+
+
+def _is_posting_4129(db: Session) -> bool:
+    return db.execute(
+        text("SELECT is_posting FROM comptabilite.accounts WHERE account_number = '4129'")
+    ).scalar_one()
+
+
+def test_import_bascule_4129_en_regroupement_quand_il_est_vierge(db: Session) -> None:
+    importer(db, str(CSV_IMPORT))
+    _rouvrir_4129(db)
+
+    importer(db, str(CSV_IMPORT))
+
+    assert _is_posting_4129(db) is False
+
+
+def _poser_ecriture_sur_4129(db: Session, *, valider: bool) -> None:
+    importer(db, str(CSV_IMPORT))
+    _rouvrir_4129(db)
+    compte = db.execute(select(Account).where(Account.account_number == "4129")).scalar_one()
+    _mouvementer(db, compte, valider=valider)
+
+
+def test_import_refuse_de_passer_en_regroupement_un_compte_mouvemente(db: Session) -> None:
+    """Le garde-fou de nature MORD : 4129 avec une écriture validée -> refus, compte nommé."""
+    _poser_ecriture_sur_4129(db, valider=True)
+
+    with pytest.raises(ImportRefuseError) as exc:
+        importer(db, str(CSV_IMPORT))
+
+    message = " ; ".join(str(a) for a in exc.value.anomalies)
+    assert "4129" in message and "regroupement" in message and "écritures" in message
+    assert _is_posting_4129(db) is True  # rien n'a été écrasé
+
+
+def test_import_un_brouillon_suffit_a_proteger_la_nature(db: Session) -> None:
+    _poser_ecriture_sur_4129(db, valider=False)
+
+    with pytest.raises(ImportRefuseError):
+        importer(db, str(CSV_IMPORT))
+
+    assert _is_posting_4129(db) is True
+
+
+def test_refus_de_nature_est_global_et_visible_a_l_apercu(
+    db: Session, tmp_path: object
+) -> None:
+    """Tout ou rien : le compte neuf du même fichier n'est pas créé ; et `conflits_de_nature`
+    (utilisé par l'aperçu du back-office) renvoie le conflit sans rien écrire."""
+    from app.modules.comptabilite.plan import conflits_de_nature, lire_csv
+
+    _poser_ecriture_sur_4129(db, valider=True)
+    chemin = _ecrire_csv(
+        tmp_path,
+        [
+            "4;CLASSE 4;;4;;D;FALSE;TRUE;",
+            "4129;Provisions;;4;4;C;FALSE;TRUE;",  # conflit : saisie -> regroupement
+            "6T962;Compte neuf;;6;;C;TRUE;FALSE;",  # création
+        ],
+    )
+    avant = _nombre_de_comptes(db)
+
+    assert [a.account_number for a in conflits_de_nature(db, lire_csv(chemin))] == ["4129"]
+    with pytest.raises(ImportRefuseError):
+        importer(db, chemin)
+    assert _nombre_de_comptes(db) == avant  # 6T962 n'a pas été créé
+
+
+def test_nature_inchangee_ou_regroupement_vers_saisie_reste_autorise(
+    db: Session, tmp_path: object
+) -> None:
+    """Le garde-fou ne vise que saisie -> regroupement sur un compte mouvementé : réimporter
+    à l'identique passe (idempotence), et l'inverse n'est pas concerné."""
+    compte = _compte(db, "6T960", sens="D")
+    _mouvementer(db, compte)
+    chemin = _ecrire_csv(tmp_path, ["6T960;Libellé corrigé;;6;;D;TRUE;FALSE;"])
+    assert importer(db, chemin).mis_a_jour == 1
+
+    _compte(db, "6T961", sens="D", is_posting=False)
+    chemin = _ecrire_csv(tmp_path, ["6T961;Compte 6T961;;6;;D;TRUE;FALSE;"])
+    assert importer(db, chemin).mis_a_jour == 1

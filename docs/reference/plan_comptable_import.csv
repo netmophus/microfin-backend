@@ -183,7 +183,9 @@
 412300;Titres de participation hors SFD et etablissements de credit - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
 4126;Versements restant à effectuer;;4;412;D;TRUE;TRUE;
 4127;Créances rattachées;;4;412;D;TRUE;TRUE;
-4129;Provisions pour dépréciation;;4;412;C;TRUE;TRUE;
+4129;Provisions pour dépréciation;;4;412;C;FALSE;TRUE;
+412910;Provisions pour depreciation des titres de participation dans SFD et etablissements de credit;;4;4129;C;TRUE;TRUE;Extension projet non officielle (provision du perimetre SFD et etablissements de credit, prefixe disjoint des valeurs brutes) - a valider par l'expert-comptable SFD
+412930;Provisions pour depreciation des titres de participation hors SFD et etablissements de credit;;4;4129;C;TRUE;TRUE;Extension projet non officielle (provision du perimetre hors SFD et etablissements de credit, prefixe disjoint des valeurs brutes) - a valider par l'expert-comptable SFD
 42;DEPOTS ET CAUTIONNEMENTS;;4;;D;FALSE;TRUE;
 421;Dépôts et cautionnements;;4;42;D;TRUE;TRUE;
 427;Créances rattachées;;4;42;D;TRUE;TRUE;
