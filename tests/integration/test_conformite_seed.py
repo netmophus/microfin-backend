@@ -158,7 +158,7 @@ def test_rattache_ressources_est_neutralise(db: Session) -> None:
 
 
 def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
-    """Base sans aucune activité réelle (juste le seed) : les 4 ratios actifs (#1, #2, #5, #8)
+    """Base sans aucune activité réelle (juste le seed) : les 5 ratios actifs (#1, #2, #5, #8, #9)
     doivent renvoyer un résultat — NON_CALCULABLE est attendu (dénominateurs nuls), jamais une
     exception, jamais un ratio inactif dans la liste."""
     executer_seed_conformite(db)
@@ -170,6 +170,7 @@ def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
         "RATIO_2_CAPITALISATION",
         "RATIO_5_DIVISION_RISQUES",
         "RATIO_8_LIMITATION_PARTICIPATIONS",
+        "RATIO_9_IMMOS_PLUS_PARTICIPATIONS",
     ]
     for resultat in resultats:
         assert resultat.statut == STATUT_NON_CALCULABLE
@@ -355,9 +356,9 @@ def test_les_10_ratios_ont_une_reference_et_aucun_libelle_en_attente(db: Session
     agregats = db.execute(select(AgregatPrudentiel)).scalars().all()
 
     assert len(ratios) == 10
-    # Chaque ratio cite l'Instruction 010-08-2010 ; le #8 y ajoute la 016-12-2010 (câblage P2.0-b2).
+    # Chaque ratio cite l'Instruction 010-08-2010 ; #8 et #9 y ajoutent la 016-12-2010.
     assert all("010-08-2010" in (r.reference_reglementaire or "") for r in ratios)
-    assert sum(r.reference_reglementaire == REFERENCE_REGLEMENTAIRE for r in ratios) == 9
+    assert sum(r.reference_reglementaire == REFERENCE_REGLEMENTAIRE for r in ratios) == 8
     assert REFERENCE_REGLEMENTAIRE == "Instruction 010-08-2010"
     assert not [r.libelle for r in ratios if "(en attente" in r.libelle]
     assert not [a.libelle for a in agregats if "(en attente" in a.libelle]
@@ -384,7 +385,7 @@ def test_lignes_anciennes_sont_corrigees_au_rejeu_puis_idempotent(db: Session) -
     rejeu = executer_seed_conformite(db)
 
     assert rejeu.references_resynchronisees == 10
-    assert rejeu.libelles_resynchronises == 8 + 10
+    assert rejeu.libelles_resynchronises == 8 + 9
     assert _ratio_par_code(db, CODE_RATIO_ANCIEN).libelle == "Capitalisation générale"
     assert _ratio_par_code(db, CODE_RATIO_ANCIEN).reference_reglementaire == (
         REFERENCE_REGLEMENTAIRE
@@ -439,9 +440,9 @@ def test_garde_ligne_retouchee_par_un_utilisateur_n_est_pas_touchee(db: Session)
     assert ratio.reference_reglementaire is None
     assert ratio.libelle == _ancien_libelle_ratio(CODE_RATIO_ANCIEN)
     assert agregat.libelle == _ancien_libelle_agregat(CODE_AGREGAT_ANCIEN)
-    # Les 9 autres ratios et 9 autres agrégats, eux, n'ont pas été retouchés.
+    # Les 9 autres ratios et 8 autres agrégats, eux, n'ont pas été retouchés.
     assert rejeu.references_resynchronisees == 9
-    assert rejeu.libelles_resynchronises == 7 + 9
+    assert rejeu.libelles_resynchronises == 7 + 8
 
 
 def test_garde_ligne_non_systeme_n_est_pas_touchee(db: Session) -> None:
@@ -723,7 +724,7 @@ def test_garde_composition_differente_de_l_ancienne_n_est_pas_recablee(db: Sessi
 
 def test_ratios_1_et_5_ne_bougent_pas_quand_le_ratio_8_est_actif(db: Session) -> None:
     """Risques 150 000, dépôts 100 000, réserves 50 000 : #1 = 100 % conforme sans avertissement ;
-    #5 = 0 % (aucun encours), et l'ordre des ratios actifs est #1, #2, #5, #8."""
+    #5 = 0 % (aucun encours), et l'ordre des ratios actifs est #1, #2, #5, #8, #9."""
     executer_seed_conformite(db)
     credits = _id_compte(db, "202221")
     depots = _id_compte(db, "251121")
@@ -745,6 +746,7 @@ def test_ratios_1_et_5_ne_bougent_pas_quand_le_ratio_8_est_actif(db: Session) ->
         "RATIO_2_CAPITALISATION",
         "RATIO_5_DIVISION_RISQUES",
         RATIO_8,
+        "RATIO_9_IMMOS_PLUS_PARTICIPATIONS",
     ]
     un = resultats["RATIO_1_COUVERTURE_RISQUES"]
     assert (un.valeur_numerateur, un.valeur_denominateur) == (150_000, 150_000)
@@ -1086,3 +1088,202 @@ def test_garde_fonds_propres_retouche_n_est_pas_recable(db: Session) -> None:
 
     assert rejeu.agregats_recables == 1  # TOTAL_ACTIF_NET seulement
     assert len(_composition(db, "FONDS_PROPRES")) == 16
+
+
+# --- Ratio #9 : financement des immobilisations et participations (P2.0-d) ----------------------
+
+RATIO_9 = "RATIO_9_IMMOS_PLUS_PARTICIPATIONS"
+AGREGAT_IMMOS = "IMMOS_ET_PARTICIPATIONS"
+
+COMPOSITION_IMMOS = {
+    ("4311", 1), ("4319", -1),
+    ("441100", 1), ("4418", -1), ("4419", -1),
+    ("4321", 1), ("4329", -1),
+    ("442100", 1), ("4428", -1), ("4429", -1),
+    ("412300", 1), ("412930", -1),
+}
+
+# (brut, montant brut, {contra: montant}) — le net attendu est brut - somme des contras.
+GROUPES_IMMOS = [
+    ("4311", 20_000, {"4319": 2_000}),  # net 18 000
+    ("441100", 30_000, {"4418": 6_000, "4419": 2_000}),  # net 22 000
+    ("4321", 15_000, {"4329": 1_000}),  # net 14 000
+    ("442100", 40_000, {"4428": 9_000, "4429": 3_000}),  # net 28 000
+    ("412300", 12_000, {"412930": 2_000}),  # net 10 000
+]
+GROUPE_SFD_EXCLU = ("412100", 50_000, {"412910": 5_000})  # net 45 000, hors #9
+
+
+def _poser_groupe_net(db: Session, brut: str, montant: int, contras: dict[str, int]) -> None:
+    """Brut D, contras C, le net prélevé sur la caisse."""
+    net = montant - sum(contras.values())
+    lignes = [LigneSaisie(_id_compte(db, brut), "D", montant)]
+    lignes += [LigneSaisie(_id_compte(db, n), "C", m) for n, m in contras.items()]
+    lignes.append(LigneSaisie(_id_compte(db, "101111"), "C", net))
+    _valider_od(db, lignes, AUJOURDHUI)
+
+
+def test_ratio_9_est_cable_et_actif_apres_seed(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    ratio = _ratio_par_code(db, RATIO_9)
+    numerateur = db.get(AgregatPrudentiel, ratio.agregat_numerateur_id)
+    denominateur = db.get(AgregatPrudentiel, ratio.agregat_denominateur_id)
+
+    assert ratio.actif is True
+    assert ratio.operateur == "LE"
+    assert _seuils(db, RATIO_9) == [(None, 100)]
+    assert "016-12-2010" in (ratio.reference_reglementaire or "")
+    assert numerateur is not None and numerateur.code == AGREGAT_IMMOS
+    assert denominateur is not None and denominateur.code == "FONDS_PROPRES"
+    assert _composition(db, AGREGAT_IMMOS) == COMPOSITION_IMMOS
+    assert not db.execute(
+        select(AgregatPrudentiel).where(AgregatPrudentiel.code == "IMMOS_PLUS_PARTICIPATIONS")
+    ).first()
+
+
+def test_prefixes_de_l_agregat_immos_sont_disjoints_et_excluent_sfd_et_frais() -> None:
+    with open(CSV_PLAN_B2, encoding="utf-8-sig", newline="") as f:
+        lignes = csv.DictReader(f, delimiter=";")
+        plan = {ligne["account_number"]: ligne["name"] for ligne in lignes}
+    prefixes = [p for p, _ in COMPOSITION_IMMOS]
+
+    for prefixe in prefixes:  # chaque préfixe ne ramasse que son propre compte
+        assert [n for n in plan if n.startswith(prefixe)] == [prefixe]
+    for a in prefixes:
+        for b in prefixes:
+            if a != b:
+                assert not b.startswith(a), f"{a} ramasse {b}"
+    # Participations SFD/établissements de crédit : exclues par le texte.
+    assert not {"412100", "412910"} & set(prefixes)
+    # Frais immobilisés : aucun compte du plan ne porte ce nom, et rien de ce qui est capté ne
+    # ressemble à des frais ou charges à répartir.
+    captes = [plan[n] for n in plan if n.startswith(tuple(prefixes))]
+    assert not [nom for nom in captes if "frais" in nom.lower() or "répartir" in nom.lower()]
+    assert not [n for n, nom in plan.items() if "frais immobilis" in nom.lower()]
+
+
+def test_chaque_net_de_l_agregat_immos_est_brut_moins_amortissement_moins_provision(
+    db: Session,
+) -> None:
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=400_000, depots=600_000)
+    cumul = 0
+
+    for brut, montant, contras in GROUPES_IMMOS:
+        _poser_groupe_net(db, brut, montant, contras)
+        cumul += montant - sum(contras.values())
+        assert agregat_valeur(db, AGREGAT_IMMOS, AUJOURDHUI) == cumul, brut
+
+    assert cumul == 92_000  # 18 000 + 22 000 + 14 000 + 28 000 + 10 000
+
+
+def test_participations_sfd_et_etablissements_de_credit_n_entrent_pas_dans_9(db: Session) -> None:
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=400_000, depots=600_000)
+    _poser_groupe_net(db, "442100", 40_000, {"4428": 9_000, "4429": 3_000})
+    avant = agregat_valeur(db, AGREGAT_IMMOS, AUJOURDHUI)
+    assert avant == 28_000
+
+    _poser_groupe_net(db, *GROUPE_SFD_EXCLU)
+
+    assert agregat_valeur(db, AGREGAT_IMMOS, AUJOURDHUI) == avant  # 412100/412910 : hors #9
+
+
+def test_ratio_9_conforme_a_80_pour_cent(db: Session) -> None:
+    """Corporelles d'exploitation nettes 80 000 / fonds propres 100 000 = 80 %."""
+    _preparer_plan_et_mapping(db)
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "442100"), "D", 80_000),
+            LigneSaisie(_id_compte(db, "101111"), "D", 20_000),
+            LigneSaisie(_id_compte(db, "5521"), "C", 100_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    resultat = evaluer_ratio(db, RATIO_9, AUJOURDHUI)
+
+    assert resultat.valeur_numerateur == 80_000
+    assert resultat.valeur_denominateur == 100_000
+    assert resultat.valeur_ratio_pct == 80
+    assert resultat.statut == STATUT_CONFORME
+
+
+def test_ratio_9_non_conforme_a_120_pour_cent(db: Session) -> None:
+    _preparer_plan_et_mapping(db)
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "442100"), "D", 120_000),
+            LigneSaisie(_id_compte(db, "5521"), "C", 100_000),
+            LigneSaisie(_id_compte(db, "251121"), "C", 20_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    resultat = evaluer_ratio(db, RATIO_9, AUJOURDHUI)
+
+    assert resultat.valeur_ratio_pct == 120
+    assert resultat.statut == STATUT_NON_CONFORME
+
+
+def test_ratio_9_ne_fait_bouger_ni_1_ni_2_ni_5_ni_8(db: Session) -> None:
+    """Scénario complet (FP 400 000, immobilisations nettes 92 000, participations SFD nettes
+    45 000) : les valeurs de #1, #2, #5 et #8 sont celles que leur câblage donne, sans effet de
+    #9 — qui ne modifie aucun agrégat existant."""
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=400_000, depots=600_000)
+    for brut, montant, contras in [*GROUPES_IMMOS, GROUPE_SFD_EXCLU]:
+        _poser_groupe_net(db, brut, montant, contras)
+
+    resultats = {r.code: r for r in evaluer_tous(db, AUJOURDHUI)}
+
+    # FP = 400 000 - incorporelles nettes (18 000 + 22 000) - participations SFD nettes 45 000.
+    assert resultats[RATIO_2].valeur_numerateur == 315_000
+    assert resultats[RATIO_8].valeur_numerateur == 10_000  # 412300 12 000 - 412930 2 000
+    assert resultats[RATIO_8].valeur_denominateur == 315_000
+    assert resultats["RATIO_5_DIVISION_RISQUES"].valeur_denominateur == 315_000
+    assert resultats[RATIO_1].valeur_denominateur == 1_000_000  # RESSOURCES : inchangé
+    # #9 : 92 000 / 315 000 (les incorporelles nettes pèsent des deux côtés, voir la doc).
+    assert resultats[RATIO_9].valeur_numerateur == 92_000
+    assert resultats[RATIO_9].valeur_denominateur == 315_000
+    assert resultats[RATIO_9].statut == STATUT_CONFORME
+
+
+def test_base_existante_recable_le_ratio_9_puis_idempotent(db: Session) -> None:
+    executer_seed_conformite(db)
+    ratio = _ratio_par_code(db, RATIO_9)
+    placeholder = AgregatPrudentiel(
+        code="IMMOS_PLUS_PARTICIPATIONS",
+        libelle="Immobilisations nettes + participations",
+        type="BALANCE",
+        is_system=True,
+    )
+    db.add(placeholder)
+    db.flush()
+    ratio.agregat_numerateur_id = placeholder.id
+    ratio.actif = False
+    ratio.reference_reglementaire = REFERENCE_REGLEMENTAIRE
+    db.execute(text("DELETE FROM conformite.ratio_seuil WHERE ratio_id = :r"), {"r": ratio.id})
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.ratios_recables == 1
+    assert rejeu.seuils_crees == 1
+    numerateur = db.get(AgregatPrudentiel, ratio.agregat_numerateur_id)
+    assert numerateur is not None and numerateur.code == AGREGAT_IMMOS
+    assert ratio.actif is True
+    assert "016-12-2010" in (ratio.reference_reglementaire or "")
+    assert _seuils(db, RATIO_9) == [(None, 100)]
+    assert executer_seed_conformite(db).ratios_recables == 0
+
+    ratio.agregat_numerateur_id = placeholder.id  # retouché par un utilisateur : on n'y touche pas
+    ratio.actif = False
+    ratio.updated_by = _utilisateur_id(db)
+    db.execute(text("DELETE FROM conformite.ratio_seuil WHERE ratio_id = :r"), {"r": ratio.id})
+    db.flush()
+    assert executer_seed_conformite(db).ratios_recables == 0
+    assert ratio.actif is False

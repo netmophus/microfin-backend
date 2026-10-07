@@ -591,3 +591,36 @@ Fonds propres / total actif net, **>= 15 %** (seuil universel, comme #1, #5 et #
 - **Bases existantes** : le seed recâble `FONDS_PROPRES` (déductions et référence) et `TOTAL_ACTIF_NET`
   (BALANCE vide → SPECIAL) sous la même garde que #8 (agrégat système jamais retouché, état
   strictement égal à l'ancien), puis le ratio #2 (activation + seuil 15).
+
+## Ratio #9 — financement des immobilisations et participations (P2.0-d)
+
+Immobilisations et titres de participation nets / fonds propres, **<= 100 %** (Instruction
+016-12-2010 art. 4 ; fonds propres selon l'Instruction 010-08-2010 ; seuil universel). Câblé et
+actif.
+
+- **Numérateur `IMMOS_ET_PARTICIPATIONS`**, net par comptes disjoints (brut +1, amortissement ou
+  provision −1) :
+
+| Famille | Brut (+1) | Contra (−1) |
+|---|---|---|
+| Incorporelles en cours | `4311` | `4319` |
+| Incorporelles d'exploitation | `441100` | `4418`, `4419` |
+| Corporelles en cours | `4321` | `4329` |
+| Corporelles d'exploitation | `442100` | `4428`, `4429` |
+| Participations hors SFD et établissements de crédit | `412300` | `412930` |
+
+- **Dénominateur** : `FONDS_PROPRES` complet, avec ses déductions, comme #2, #5 et #8. Conséquence à
+  connaître : les incorporelles nettes pèsent des deux côtés (elles augmentent le numérateur ET
+  réduisent le dénominateur), ce qui rend le ratio plus sévère — sens prudent pour un plafond. Si
+  l'expert juge que le texte vise les fonds propres AVANT déductions, il faudra un agrégat dédié.
+- **Exclusions du texte** : les participations dans SFD et établissements de crédit (`412100` /
+  `412910`, déduites des fonds propres) ne sont PAS dans l'agrégat ; les **frais immobilisés** non
+  plus : le plan n'a aucun compte dédié (le compte 3811 « charges à répartir sur plusieurs
+  exercices » est en classe 3, hors de tout préfixe de l'agrégat).
+- **Absents du plan officiel** : immobilisations hors exploitation et acquises en garantie.
+- **Écart connu** : la condition temporelle « garantie de plus de 2 ans » n'est pas modélisable —
+  le moteur agrège par préfixe de compte, pas par ancienneté.
+- **Bases existantes** : le seed recâble le ratio #9 (numérateur, activation, seuil, référence)
+  seulement s'il est dans l'état exact d'avant (système, jamais retouché, ancien placeholder
+  `IMMOS_PLUS_PARTICIPATIONS`, inactif, sans seuil). Le placeholder n'est plus semé ; sur une base
+  existante il reste en place, inutilisé (comme `PARTICIPATIONS`).

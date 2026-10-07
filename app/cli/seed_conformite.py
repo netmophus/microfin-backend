@@ -57,10 +57,10 @@ COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
   débitrices, nichées sous 15 qui est créditeur) et 25117 (même raison, sous 25).
 
 RATIOS :
-  #1, #2, #5 et #8 ACTIFS (seuils validés). #3, #4, #6, #7, #9, #10 créés `actif=FALSE`,
+  #1, #2, #5, #8 et #9 ACTIFS (seuils validés). #3, #4, #6, #7, #10 créés `actif=FALSE`,
   « en attente » — chacun référence des agrégats-placeholders à composition VIDE (un agrégat
   BALANCE sans aucune ligne `agregat_compte` rend 0, jamais une exception — voir
-  `moteur._valeur_balance`). AUCUN seuil n'est seedé pour ces 6 : je n'ai pas de valeur
+  `moteur._valeur_balance`). AUCUN seuil n'est seedé pour ces 5 : je n'ai pas de valeur
   validée, et CLAUDE.md interdit d'inventer une
   valeur de configuration.
 
@@ -69,6 +69,18 @@ RATIOS :
   (`etats_financiers.bilan`), sur le modèle du SPECIAL de #5 ; un SPECIAL n'a pas de
   décomposition à l'écran de détail (attendu). Les déductions ajoutées à FONDS_PROPRES font aussi
   bouger #5 et #8 (qui l'utilisent au dénominateur), jamais #1/#4/#6/#7 (via RESSOURCES).
+
+  #9 (financement des immobilisations et participations, <= 100 % des fonds propres) — CÂBLÉ
+  en P2.0-d (Instruction 016-12-2010 art. 4) : numérateur IMMOS_ET_PARTICIPATIONS = immobilisations
+  incorporelles et corporelles (en cours + exploitation) et titres de participation HORS SFD et
+  établissements de crédit, chacun NET par comptes disjoints (brut +1, amortissement/provision
+  -1) ; dénominateur FONDS_PROPRES complet (avec déductions, comme #2/#5/#8). EXCLUS, par le
+  texte : participations dans SFD/établissements de crédit (412100/412910, déduites des fonds
+  propres) et frais immobilisés (aucun compte dédié dans le plan ; 3811 « charges à répartir »
+  est en classe 3, hors de tout préfixe de l'agrégat). Absents du plan officiel : immobilisations
+  hors exploitation et acquises en garantie. ÉCART CONNU : la condition temporelle « garantie de
+  plus de 2 ans » n'est pas modélisable (le moteur agrège par préfixe de compte, pas par
+  ancienneté).
 
   #8 (limitation des titres de participation, <= 25 % des fonds propres) — CÂBLÉ en P2.0-b2 :
   numérateur PARTICIPATIONS_HORS_SFD_EC = 412300 (+1) - 412930 (-1), dénominateur FONDS_PROPRES
@@ -268,6 +280,20 @@ AGREGATS: tuple[_AgregatDef, ...] = (
             ),
         ),
     ),
+    _AgregatDef(
+        code="IMMOS_ET_PARTICIPATIONS",
+        libelle="Immobilisations et participations nettes (hors participations SFD)",
+        reference="Instruction 016-12-2010 art. 4 — immobilisations et titres de participation "
+        "nets, hors participations SFD/établissements de crédit et frais immobilisés",
+        nets_de_provisions=True,
+        composition=(
+            _c("4311", 1), _c("4319", -1),  # incorporelles en cours
+            _c("441100", 1), _c("4418", -1), _c("4419", -1),  # incorporelles d'exploitation
+            _c("4321", 1), _c("4329", -1),  # corporelles en cours
+            _c("442100", 1), _c("4428", -1), _c("4429", -1),  # corporelles d'exploitation
+            _c("412300", 1), _c("412930", -1),  # participations hors SFD/EC
+        ),
+    ),
     # --- Placeholders « en attente » (lot P2.1.c) — composition VIDE à dessein : un agrégat
     # BALANCE sans ligne rend 0, jamais une exception (voir moteur._valeur_balance). Les 8
     # ratios qui les référencent sont actif=FALSE, jamais évalués par evaluer_tous().
@@ -313,13 +339,6 @@ AGREGATS: tuple[_AgregatDef, ...] = (
         libelle="Opérations autres qu'épargne et crédit",
         ancien_libelle="Opérations autres qu'épargne et crédit "
         "(en attente — définition du numérateur à vérifier contre le texte réglementaire)",
-    ),
-    # Même gap que les participations.
-    _AgregatDef(
-        code="IMMOS_PLUS_PARTICIPATIONS",
-        libelle="Immobilisations nettes + participations",
-        ancien_libelle="Immobilisations nettes + "
-        "participations (en attente — même gap)",
     ),
     # Calcul SPECIAL non écrit : flux de la dernière affectation, pas un solde cumulé.
     _AgregatDef(
@@ -434,11 +453,18 @@ RATIOS: tuple[_RatioDef, ...] = (
         code="RATIO_9_IMMOS_PLUS_PARTICIPATIONS",
         libelle="Limitation immobilisations + participations",
         ancien_libelle="Limitation immobilisations + participations (en attente)",
-        numerateur="IMMOS_PLUS_PARTICIPATIONS",
+        numerateur="IMMOS_ET_PARTICIPATIONS",
         denominateur="FONDS_PROPRES",
         operateur="LE",
         ordre=9,
-        actif=False,
+        reference_reglementaire="Instruction 016-12-2010 art. 4 ; fonds propres : Instruction "
+        "010-08-2010",
+        cablage_precedent=_CablagePrecedent(
+            numerateur="IMMOS_PLUS_PARTICIPATIONS",
+            actif=False,
+            reference=REFERENCE_REGLEMENTAIRE,
+        ),
+        seuils=(_SeuilDef(categorie_sfd=None, valeur=100),),
     ),
     _RatioDef(
         code="RATIO_10_RESERVE_GENERALE",
