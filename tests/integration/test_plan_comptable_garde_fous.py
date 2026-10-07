@@ -531,3 +531,9 @@ def test_les_participations_ont_deux_buckets_bruts_sfd_ec_et_autres() -> None:
         "Titres de participation dans SFD et etablissements de credit - valeur brute"
     )
     assert plan_enrichi["412100"]["name"] == plan_import["412100"]["name"]
+    # 412300 : paire symétrique de 412100 (« hors SFD et établissements de crédit »), formulation
+    # du texte du ratio #8 — il couvre aussi une entité financière qui n'est ni l'un ni l'autre.
+    assert plan_import["412300"]["name"] == (
+        "Titres de participation hors SFD et etablissements de credit - valeur brute"
+    )
+    assert plan_enrichi["412300"]["name"] == plan_import["412300"]["name"]

@@ -180,7 +180,7 @@
 41;IMMOBILISATIONS FINANCIERES;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
 412;Titres de participation;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
 412100;Titres de participation dans SFD et etablissements de credit - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
-412300;Titres de participation dans d'autres entites non financieres - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
+412300;Titres de participation hors SFD et etablissements de credit - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4126;Versements restant à effectuer;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4127;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4129;Provisions pour dépréciation;4;C;TRUE;BILAN;CONTRA_ACTIF;Provisions/amortissements (en deduction de l'actif)
