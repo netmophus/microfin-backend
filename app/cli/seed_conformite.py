@@ -61,12 +61,14 @@ RATIOS :
   valeur de configuration.
 
   #8 (limitation des titres de participation, <= 25 % des fonds propres) — CÂBLÉ en P2.0-b2 :
-  numérateur PARTICIPATIONS_HORS_SFD_EC = 412300 (+1) - 4129 (-1), dénominateur FONDS_PROPRES
-  réutilisé tel quel. APPROXIMATION PRUDENTE, VALIDÉE : 4129 est un compte de provision GLOBAL
-  UNIQUE (il ne distingue pas les participations SFD/établissements de crédit de celles hors
-  SFD/EC) ; comme seul le brut 412300 entre dans #8, on lui soustrait TOUTE la provision 4129 —
-  ce qui RÉDUIT le numérateur, donc ne peut que sous-estimer le ratio (jamais le gonfler).
-  Préfixes disjoints : 412300 ne recouvre pas 4129, ni l'inverse. Le brut 412100
+  numérateur PARTICIPATIONS_HORS_SFD_EC = 412300 (+1) - 412930 (-1), dénominateur FONDS_PROPRES
+  réutilisé tel quel. 412930 est la provision DÉDIE au bucket « hors SFD et établissements de
+  crédit » (ventilation de 4129, P2.0-b1-ter) : #8 déduit exactement SA provision. Entre P2.0-b2
+  et cette correction, #8 déduisait TOUTE la provision globale 4129 : pour un plafond (<=), un
+  numérateur plus petit REND LE RATIO PLUS FAVORABLE, donc cette approximation SOUS-ESTIMAIT le
+  risque (elle n'était pas prudente) ; elle est supprimée. Une provision saisie sur 412910
+  (bucket SFD/établissements de crédit) n'affecte donc plus #8.
+  Préfixes disjoints : 412300 ne recouvre pas 412930, ni l'inverse. Le brut 412100
   (SFD + établissements de crédit) est volontairement ABSENT : il est déduit des fonds propres
   et exclu de #8. 4126/4127 (versements restant à effectuer, créances rattachées) ne sont pas
   inclus : leur rôle reste à confirmer par l'expert. #10 a un agrégat SPECIAL de part et d'autre
@@ -100,6 +102,15 @@ class _CompositionLigne:
 
 
 @dataclass(frozen=True)
+class _CablageAgregatPrecedent:
+    """État que ce seed écrivait AVANT la correction d'un agrégat : seul un agrégat encore dans
+    cet état exact est recâblé sur une base existante (voir `_recabler_agregat`)."""
+
+    composition: Sequence[_CompositionLigne]
+    reference: str | None
+
+
+@dataclass(frozen=True)
 class _AgregatDef:
     code: str
     libelle: str
@@ -112,6 +123,7 @@ class _AgregatDef:
     # Libellé que ce seed écrivait AVANT correction : seul un libellé strictement égal à celui-ci
     # est resynchronisé (voir docstring de module).
     ancien_libelle: str | None = None
+    cablage_precedent: _CablageAgregatPrecedent | None = None
 
 
 @dataclass(frozen=True)
@@ -202,10 +214,17 @@ AGREGATS: tuple[_AgregatDef, ...] = (
     _AgregatDef(
         code="PARTICIPATIONS_HORS_SFD_EC",
         libelle="Participations hors SFD et établissements de crédit (nettes de provisions)",
-        reference="Instruction 010-08-2010 et 016-12-2010 — brut 412300 moins TOUTE la "
-        "provision 4129 (compte global unique) : approximation prudente",
+        reference="Instruction 010-08-2010 et 016-12-2010 — brut 412300 moins sa provision "
+        "dédiée 412930 (provision des titres hors SFD et établissements de crédit)",
         nets_de_provisions=True,
-        composition=(_c("412300", 1), _c("4129", -1)),
+        composition=(_c("412300", 1), _c("412930", -1)),
+        cablage_precedent=_CablageAgregatPrecedent(
+            composition=(_c("412300", 1), _c("4129", -1)),
+            reference=(
+                "Instruction 010-08-2010 et 016-12-2010 — brut 412300 moins TOUTE la "
+                "provision 4129 (compte global unique) : approximation prudente"
+            ),
+        ),
     ),
     # --- Placeholders « en attente » (lot P2.1.c) — composition VIDE à dessein : un agrégat
     # BALANCE sans ligne rend 0, jamais une exception (voir moteur._valeur_balance). Les 8
@@ -405,6 +424,8 @@ class RapportSeedConformite:
     libelles_resynchronises: int = 0
     # Ratios recâblés sur une base existante (agrégat numérateur, activation, seuil, référence).
     ratios_recables: int = 0
+    # Agrégats dont la composition a été recâblée sur une base existante.
+    agregats_recables: int = 0
 
 
 def _non_retouche(ligne: AgregatPrudentiel | RatioPrudentiel) -> bool:
@@ -466,6 +487,46 @@ def _recabler_ratio(
     rapport.ratios_recables += 1
 
 
+def _recabler_agregat(
+    db: Session,
+    agregat: AgregatPrudentiel,
+    definition: _AgregatDef,
+    rapport: RapportSeedConformite,
+) -> None:
+    """Recâble la COMPOSITION d'un agrégat EXISTANT sur le câblage courant du seed — seulement
+    s'il est encore dans l'état exact que ce seed écrivait avant (`cablage_precedent`) : agrégat
+    système jamais retouché (`updated_by IS NULL` — l'API de paramétrage le renseigne dès qu'elle
+    remplace la composition) ET composition strictement égale à l'ancienne, lignes toutes
+    système. Dès qu'une condition est fausse, quelqu'un a commencé à paramétrer cet agrégat :
+    on n'y touche pas. La référence n'est remplacée que si elle est vide ou égale à l'ancienne."""
+    precedent = definition.cablage_precedent
+    if precedent is None or not _non_retouche(agregat):
+        return
+    lignes = list(
+        db.execute(select(AgregatCompte).where(AgregatCompte.agregat_id == agregat.id)).scalars()
+    )
+    actuelle = {(ligne.prefixe_compte, ligne.sens) for ligne in lignes}
+    if not all(ligne.is_system for ligne in lignes) or actuelle != {
+        (ligne.prefixe, ligne.sens) for ligne in precedent.composition
+    }:
+        return
+
+    cible = {(ligne.prefixe, ligne.sens) for ligne in definition.composition}
+    for ligne in lignes:
+        if (ligne.prefixe_compte, ligne.sens) not in cible:
+            db.delete(ligne)
+    for prefixe, sens in sorted(cible - actuelle):
+        db.add(
+            AgregatCompte(
+                agregat_id=agregat.id, prefixe_compte=prefixe, sens=sens, is_system=True
+            )
+        )
+    if agregat.reference in (None, precedent.reference):
+        agregat.reference = definition.reference
+    db.flush()
+    rapport.agregats_recables += 1
+
+
 def executer_seed_conformite(db: Session) -> RapportSeedConformite:
     """Non destructif, idempotent — ne touche jamais une ligne déjà présente (vérifié par
     `code`, UNIQUE), sauf la resynchronisation gardée des champs de présentation (voir
@@ -478,6 +539,7 @@ def executer_seed_conformite(db: Session) -> RapportSeedConformite:
             select(AgregatPrudentiel).where(AgregatPrudentiel.code == definition.code)
         ).scalar_one_or_none()
         if existant is not None:
+            _recabler_agregat(db, existant, definition, rapport)
             _resynchroniser_libelle(
                 existant,
                 libelle=definition.libelle,

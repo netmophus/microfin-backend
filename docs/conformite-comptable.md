@@ -504,24 +504,35 @@ Limite : participations hors SFD et établissements de crédit, nettes de provis
 fonds propres** (Instruction 010-08-2010 + Instruction 016-12-2010 ; seuil universel, comme #1 et
 #5). Câblé et actif.
 
-- **Numérateur** `PARTICIPATIONS_HORS_SFD_EC` = `412300` (+1) − `4129` (−1).
+- **Numérateur** `PARTICIPATIONS_HORS_SFD_EC` = `412300` (+1) − `412930` (−1) (provision
+  dédiée, voir « Ventilation de la provision des participations » plus bas ; avant P2.0-b1-ter
+  puis la correction de #8, la ligne était `4129` (−1)).
 - **Dénominateur** `FONDS_PROPRES`, réutilisé tel quel.
-- **Préfixes disjoints** : `412300` ne recouvre pas `4129`, ni l'inverse (pas de piège 19/199).
+- **Préfixes disjoints** : `412300` ne recouvre pas `412930`, ni l'inverse (pas de piège 19/199).
 - **Le brut `412100`** (SFD + établissements de crédit) est volontairement **absent** : il est
   déduit des fonds propres et exclu de #8.
 
-**Approximation prudente, validée.** `4129` est un compte de provision global unique : il ne
-distingue pas les participations SFD / établissements de crédit des autres. Comme seul `412300`
-entre dans #8, on lui soustrait **toute** la provision `4129`. Cela réduit le numérateur : le
-ratio ne peut être que sous-estimé, jamais gonflé. Conséquence visible : une provision `4129`
-sans brut `412300` donne un numérateur négatif. `4126` / `4127` (versements restant à effectuer,
-créances rattachées) ne sont pas inclus : leur rôle reste à confirmer par l'expert.
+**Ancienne approximation, supprimée.** Tant que `4129` était un compte de provision global
+unique, #8 lui soustrayait **toute** la provision, y compris celle des participations dans les
+SFD et établissements de crédit. Pour un plafond (<=), un numérateur plus petit **rend le ratio
+plus favorable** : cette approximation **sous-estimait le risque** (elle n'était pas prudente).
+Avec la ventilation, #8 déduit exactement sa provision `412930` ; une provision saisie sur
+`412910` (bucket SFD/établissements de crédit) n'affecte plus #8. Conséquence visible : une
+provision `412930` sans brut `412300` donne un numérateur négatif. `4126` / `4127` (versements
+restant à effectuer, créances rattachées) ne sont pas inclus : leur rôle reste à confirmer par
+l'expert.
 
 **Bases existantes.** Le seed recâble le ratio #8 (agrégat numérateur, activation, seuil,
 référence) seulement s'il est encore dans l'état exact d'avant (système, jamais retouché, ancien
 placeholder `PARTICIPATIONS`, inactif, sans seuil). Le placeholder vide `PARTICIPATIONS` n'est
 plus semé ; sur une base existante il reste en place, inutilisé, et peut être retiré par l'API de
 paramétrage.
+
+**Recâblage de la composition de #8 (base existante).** Le seed recâble la composition de
+l'agrégat `PARTICIPATIONS_HORS_SFD_EC` (`4129` −1 devient `412930` −1, et sa référence) seulement
+s'il est dans l'état exact d'avant : agrégat système jamais retouché (`updated_by` vide — l'API
+de paramétrage le renseigne dès qu'elle remplace la composition) et composition strictement
+égale à `412300` (+1) / `4129` (−1), lignes toutes système. Sinon on n'y touche pas.
 
 ## Ventilation de la provision des participations (P2.0-b1-ter)
 
@@ -541,9 +552,8 @@ est ventilé en deux sous-comptes de saisie, symétriques des deux bruts :
   d'écritures sur `mifin`.
 - **Préfixes** : `412910`, `412930`, `412100` et `412300` sont deux à deux disjoints. En
   revanche le préfixe `4129` capte `412910` ET `412930` : la ligne `4129` (−1) de `RISQUES_PORTES`
-  (#1) déduit donc toujours la provision totale, sans modification. Ce lot ne touche à AUCUN
-  agrégat ; #8 pointe encore `4129` (correct tant qu'aucune provision n'est saisie sur les
-  sous-comptes — sa correction vers `412930` est un lot séparé).
+  (#1) déduit donc toujours la provision totale, sans modification. Ce lot ne touchait à AUCUN
+  agrégat ; #8, lui, a été repointé sur `412930` dans un lot séparé (voir « Ratio #8 »).
 - **Garde-fou de nature** (`plan.conflits_de_nature`) : un import qui ferait passer un compte déjà
   mouvementé (toute ligne d'écriture, brouillon compris) de saisie à regroupement est refusé en
   bloc, comme `conflits_de_sens` — import CLI, confirmation et aperçu du back-office.

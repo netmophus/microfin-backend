@@ -306,7 +306,7 @@ def seed_conformite() -> None:
     typer.echo(
         f"  Resynchronisation : {rapport.references_resynchronisees} référence(s) + "
         f"{rapport.libelles_resynchronises} libellé(s) resynchronisé(s) ; "
-        f"{rapport.ratios_recables} ratio(s) recâblé(s)."
+        f"{rapport.ratios_recables} ratio(s) et {rapport.agregats_recables} agrégat(s) recâblé(s)."
     )
     typer.secho(
         "  3 ratios actifs (#1, #5, #8) ; 7 en attente (actif=FALSE) — voir "

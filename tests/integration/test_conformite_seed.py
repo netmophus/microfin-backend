@@ -499,8 +499,7 @@ def _seuils(db: Session, code_ratio: str) -> list[tuple[str | None, int]]:
 
 def _poser_participations(db: Session, *, brut: int, provision: int) -> None:
     """Fonds propres 100 000 (5521) ; brut 412300 et provision prélevés sur la caisse. La provision
-    se saisit sur 412930 (4129 est un regroupement) : #8, qui pointe encore le préfixe 4129, la
-    capte par préfixe."""
+    se saisit sur 412930 (4129 est un regroupement), la provision dédiée du bucket de #8."""
     importer(db, str(CSV_PLAN_B2))  # 412300 / 412100 sont des comptes P2.0-b1
     caisse = _id_compte(db, "101111")
     _valider_od(
@@ -539,19 +538,20 @@ def test_ratio_8_est_cable_et_actif_apres_seed(db: Session) -> None:
     assert "010-08-2010" in (ratio.reference_reglementaire or "")
     assert "016-12-2010" in (ratio.reference_reglementaire or "")
     assert _seuils(db, RATIO_8) == [(None, 25)]  # seuil universel, comme #1 et #5
-    assert _composition(db, AGREGAT_PARTICIPATIONS) == {("412300", 1), ("4129", -1)}
+    assert _composition(db, AGREGAT_PARTICIPATIONS) == {("412300", 1), ("412930", -1)}
     assert numerateur.nets_de_provisions is True
-    assert "4129" in (numerateur.reference or "")  # approximation documentée dans l'agrégat
+    assert "412930" in (numerateur.reference or "")  # provision dédiée documentée
+    assert "prudente" not in (numerateur.reference or "")
     # L'ancien placeholder vide n'est plus semé.
     assert not db.execute(
         select(AgregatPrudentiel).where(AgregatPrudentiel.code == "PARTICIPATIONS")
     ).first()
 
 
-def test_412300_et_4129_ont_des_prefixes_disjoints() -> None:
+def test_412300_et_412930_ont_des_prefixes_disjoints() -> None:
     """Pas de piège 19/199 : le préfixe du brut ne ramasse pas la provision, ni l'inverse."""
-    assert not "4129".startswith("412300")
-    assert not "412300".startswith("4129")
+    assert not "412930".startswith("412300")
+    assert not "412300".startswith("412930")
     with open(CSV_PLAN_B2, encoding="utf-8-sig", newline="") as f:
         numeros = [ligne["account_number"] for ligne in csv.DictReader(f, delimiter=";")]
     assert [n for n in numeros if n.startswith("412300")] == ["412300"]
@@ -560,7 +560,7 @@ def test_412300_et_4129_ont_des_prefixes_disjoints() -> None:
 
 
 def test_ratio_8_chiffre_conforme_a_22_pour_cent_puis_non_conforme_a_30(db: Session) -> None:
-    """Brut 30 000, provision 4129 de 8 000 -> net 22 000 ; fonds propres 100 000 -> 22 %."""
+    """Brut 30 000, provision 412930 de 8 000 -> net 22 000 ; fonds propres 100 000 -> 22 %."""
     executer_seed_conformite(db)
     _poser_participations(db, brut=30_000, provision=8_000)
 
@@ -610,13 +610,112 @@ def test_ratio_8_exclut_le_bucket_sfd_et_etablissements_de_credit(db: Session) -
     assert apres.valeur_numerateur == avant.valeur_numerateur == 22_000
 
 
-def test_ratio_8_deduit_toute_la_provision_4129_meme_sans_brut(db: Session) -> None:
-    """Approximation prudente documentée : 4129 est un compte global unique, TOUTE sa provision
-    est soustraite du seul brut 412300 — le numérateur ne peut que diminuer."""
+def test_ratio_8_deduit_sa_provision_412930_meme_sans_brut(db: Session) -> None:
+    """#8 déduit la provision DÉDIÉE 412930 du seul brut 412300 : sans brut, le numérateur est
+    négatif."""
     executer_seed_conformite(db)
     _poser_participations(db, brut=0, provision=8_000)
 
     assert agregat_valeur(db, AGREGAT_PARTICIPATIONS, AUJOURDHUI) == -8_000
+
+
+def test_ratio_8_n_est_pas_affecte_par_une_provision_du_bucket_sfd_et_etablissements(
+    db: Session,
+) -> None:
+    """Tout l'intérêt de la ventilation : une provision saisie sur 412910 (titres dans SFD et
+    établissements de crédit) ne change PAS le numérateur de #8, alors que 412930 le change."""
+    executer_seed_conformite(db)
+    _poser_participations(db, brut=30_000, provision=8_000)
+    avant = evaluer_ratio(db, RATIO_8, AUJOURDHUI)
+    assert avant.valeur_numerateur == 22_000
+    caisse = _id_compte(db, "101111")
+
+    _valider_od(
+        db,
+        [LigneSaisie(caisse, "D", 5_000), LigneSaisie(_id_compte(db, "412910"), "C", 5_000)],
+        AUJOURDHUI,
+    )
+    apres_412910 = evaluer_ratio(db, RATIO_8, AUJOURDHUI)
+    assert apres_412910.valeur_numerateur == 22_000
+
+    _valider_od(
+        db,
+        [LigneSaisie(caisse, "D", 2_000), LigneSaisie(_id_compte(db, "412930"), "C", 2_000)],
+        AUJOURDHUI,
+    )
+    assert evaluer_ratio(db, RATIO_8, AUJOURDHUI).valeur_numerateur == 20_000
+
+
+def test_ratio_8_ne_deduit_plus_par_le_prefixe_4129(db: Session) -> None:
+    """La composition ne contient plus aucune ligne 4129 : seul le préfixe 412930 déduit."""
+    executer_seed_conformite(db)
+
+    prefixes = {p for p, _ in _composition(db, AGREGAT_PARTICIPATIONS)}
+    assert prefixes == {"412300", "412930"}
+
+
+def test_ratio_1_continue_de_pointer_4129_et_capte_les_deux_sous_provisions(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    assert ("4129", -1) in _composition(db, "RISQUES_PORTES")
+
+
+def _remettre_agregat_participations_a_l_etat_p20b2(db: Session) -> AgregatPrudentiel:
+    """Base seedée AVANT la correction : 412300 (+1) / 4129 (-1), référence d'origine."""
+    agregat = db.execute(
+        select(AgregatPrudentiel).where(AgregatPrudentiel.code == AGREGAT_PARTICIPATIONS)
+    ).scalar_one()
+    db.execute(
+        text(
+            "UPDATE conformite.agregat_compte SET prefixe_compte = '4129' "
+            "WHERE agregat_id = :a AND prefixe_compte = '412930'"
+        ),
+        {"a": agregat.id},
+    )
+    agregat.reference = (
+        "Instruction 010-08-2010 et 016-12-2010 — brut 412300 moins TOUTE la "
+        "provision 4129 (compte global unique) : approximation prudente"
+    )
+    db.flush()
+    db.refresh(agregat)
+    return agregat
+
+
+def test_composition_de_8_est_recablee_au_rejeu_puis_idempotente(db: Session) -> None:
+    executer_seed_conformite(db)
+    agregat = _remettre_agregat_participations_a_l_etat_p20b2(db)
+    assert _composition(db, AGREGAT_PARTICIPATIONS) == {("412300", 1), ("4129", -1)}
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.agregats_recables == 1
+    assert _composition(db, AGREGAT_PARTICIPATIONS) == {("412300", 1), ("412930", -1)}
+    assert "412930" in (agregat.reference or "") and "prudente" not in (agregat.reference or "")
+    assert executer_seed_conformite(db).agregats_recables == 0
+
+
+def test_garde_composition_retouchee_ou_agregat_modifie_n_est_pas_recablee(db: Session) -> None:
+    executer_seed_conformite(db)
+    agregat = _remettre_agregat_participations_a_l_etat_p20b2(db)
+    agregat.updated_by = _utilisateur_id(db)  # quelqu'un l'a paramétré via l'API
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.agregats_recables == 0
+    assert _composition(db, AGREGAT_PARTICIPATIONS) == {("412300", 1), ("4129", -1)}
+
+
+def test_garde_composition_differente_de_l_ancienne_n_est_pas_recablee(db: Session) -> None:
+    executer_seed_conformite(db)
+    agregat = _remettre_agregat_participations_a_l_etat_p20b2(db)
+    db.add(AgregatCompte(agregat_id=agregat.id, prefixe_compte="4126", sens=1, is_system=True))
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.agregats_recables == 0
+    assert ("4129", -1) in _composition(db, AGREGAT_PARTICIPATIONS)
 
 
 def test_ratios_1_et_5_ne_bougent_pas_quand_le_ratio_8_est_actif(db: Session) -> None:
