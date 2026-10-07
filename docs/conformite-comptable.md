@@ -557,3 +557,37 @@ est ventilé en deux sous-comptes de saisie, symétriques des deux bruts :
 - **Garde-fou de nature** (`plan.conflits_de_nature`) : un import qui ferait passer un compte déjà
   mouvementé (toute ligne d'écriture, brouillon compris) de saisie à regroupement est refusé en
   bloc, comme `conflits_de_sens` — import CLI, confirmation et aperçu du back-office.
+
+## Ratio #2 — capitalisation générale (P2.0-c)
+
+Fonds propres / total actif net, **>= 15 %** (seuil universel, comme #1, #5 et #8). Câblé et actif.
+
+- **Dénominateur `TOTAL_ACTIF_NET`** : agrégat `SPECIAL` (`calcul_special = TOTAL_ACTIF_NET`) qui
+  réutilise `etats_financiers.bilan(db, date).total_actif_net` (actif brut moins provisions et
+  amortissements), sur le modèle du SPECIAL du plus gros emprunteur (#5). Pas d'import circulaire
+  (`moteur` importe `etats_financiers` en tête de module). Honore la date d'arrêté. Limite héritée du
+  bilan : un compte mouvementé sans mapping d'état financier n'y figure pas (il est signalé par le
+  bilan dans `comptes_non_mappes`). **Écran :** un agrégat SPECIAL n'a pas de décomposition, le
+  détail du #2 n'en montre donc pas pour le dénominateur (attendu).
+- **Numérateur `FONDS_PROPRES`**, complété de déductions **nettes**, par comptes disjoints : le
+  brut se déduit (−1), sa provision/son amortissement (contra, créditeur) réduit la déduction (+1).
+
+| Déduction | Brut (−1) | Contra (+1) |
+|---|---|---|
+| Participations dans SFD et établissements de crédit | `412100` | `412910` |
+| Immobilisations incorporelles en cours | `4311` | `4319` |
+| Immobilisations incorporelles d'exploitation | `441100` | `4418`, `4419` |
+
+  **Périmètre incorporel : « en cours + exploitation »** seulement. Les incorporelles hors
+  exploitation et acquises en garantie n'existent pas dans le plan officiel (classe 4 : 41 à 44).
+  Tous ces préfixes ne ramassent que leur propre compte (vérifié par test sur le plan réel), et
+  sont disjoints du reste de `FONDS_PROPRES` ; le bucket hors SFD (`412300` / `412930`) n'y touche pas.
+- **`RESSOURCES` ne reçoit PAS ces déductions** : il garde le bloc fonds propres brut (passif
+  comptable réel), via deux tuples séparés dans le seed. #1, #4, #6 et #7 (qui l'utilisent) ne
+  bougent donc pas.
+- **Propagation** : `FONDS_PROPRES` change, donc le dénominateur de #5 et de #8 aussi (cas chiffré
+  en test : 400 000 devient 259 000 avec 80 000 de participations nettes, 35 000 d'incorporelles
+  d'exploitation nettes et 26 000 d'incorporelles en cours nettes).
+- **Bases existantes** : le seed recâble `FONDS_PROPRES` (déductions et référence) et `TOTAL_ACTIF_NET`
+  (BALANCE vide → SPECIAL) sous la même garde que #8 (agrégat système jamais retouché, état
+  strictement égal à l'ancien), puis le ratio #2 (activation + seuil 15).

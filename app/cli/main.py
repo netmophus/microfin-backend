@@ -309,7 +309,7 @@ def seed_conformite() -> None:
         f"{rapport.ratios_recables} ratio(s) et {rapport.agregats_recables} agrégat(s) recâblé(s)."
     )
     typer.secho(
-        "  3 ratios actifs (#1, #5, #8) ; 7 en attente (actif=FALSE) — voir "
+        "  4 ratios actifs (#1, #2, #5, #8) ; 6 en attente (actif=FALSE) — voir "
         "app/cli/seed_conformite.py pour le détail des gaps.",
         fg=typer.colors.YELLOW,
     )

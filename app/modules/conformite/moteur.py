@@ -50,7 +50,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.comptabilite import rapports
+from app.modules.comptabilite import etats_financiers, rapports
 from app.modules.comptabilite.models import JournalEntry
 from app.modules.conformite.models import (
     AgregatCompte,
@@ -208,8 +208,18 @@ def _encours_plus_gros_emprunteur(db: Session, a_la_date: date) -> int:
     return max(encours_par_tier.values(), default=0)
 
 
+def _total_actif_net(db: Session, a_la_date: date) -> int:
+    """SPECIAL 'TOTAL_ACTIF_NET' : le total actif net DU BILAN (`etats_financiers.bilan`), à la
+    date d'arrêté — actif brut moins contra-actif (provisions/amortissements), jamais recalculé
+    ici par préfixes de comptes. Honore `a_la_date`. Limite héritée du bilan : un compte
+    mouvementé sans mapping d'état financier n'y figure pas (le bilan le signale dans
+    `comptes_non_mappes`)."""
+    return etats_financiers.bilan(db, a_la_date).total_actif_net
+
+
 _CALCULS_SPECIAUX: dict[str, Callable[[Session, date], int]] = {
     "PLUS_GROS_EMPRUNTEUR": _encours_plus_gros_emprunteur,
+    "TOTAL_ACTIF_NET": _total_actif_net,
 }
 
 

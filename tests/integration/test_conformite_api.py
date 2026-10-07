@@ -128,7 +128,7 @@ def _valider_od(db: Session, lignes: list[LigneSaisie], entry_date: date) -> Non
 # --- Volet 1 — Lecture (tableau de bord) ----------------------------------------------------
 
 
-def test_lecture_renvoie_les_10_ratios_3_calcules_7_en_attente(
+def test_lecture_renvoie_les_10_ratios_4_calcules_6_en_attente(
     client: TestClient, db: Session
 ) -> None:
     executer_seed_conformite(db)
@@ -141,10 +141,11 @@ def test_lecture_renvoie_les_10_ratios_3_calcules_7_en_attente(
     assert len(corps) == 10
     actifs = [r for r in corps if r["actif"]]
     en_attente = [r for r in corps if not r["actif"]]
-    assert len(actifs) == 3
-    assert len(en_attente) == 7
+    assert len(actifs) == 4
+    assert len(en_attente) == 6
     assert {r["code"] for r in actifs} == {
         "RATIO_1_COUVERTURE_RISQUES",
+        "RATIO_2_CAPITALISATION",
         "RATIO_5_DIVISION_RISQUES",
         "RATIO_8_LIMITATION_PARTICIPATIONS",
     }

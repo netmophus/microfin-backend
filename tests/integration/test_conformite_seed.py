@@ -14,6 +14,7 @@ import csv
 import uuid
 from collections.abc import Generator
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -26,8 +27,9 @@ from app.cli.seed_conformite import (
     REFERENCE_REGLEMENTAIRE,
     executer_seed_conformite,
 )
+from app.cli.seed_financial_statement_mapping import executer_seed_mapping_etats
 from app.core.database import engine
-from app.modules.comptabilite import ecritures, journee
+from app.modules.comptabilite import ecritures, etats_financiers, journee
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account, Journal
 from app.modules.comptabilite.plan import importer
@@ -156,7 +158,7 @@ def test_rattache_ressources_est_neutralise(db: Session) -> None:
 
 
 def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
-    """Base sans aucune activité réelle (juste le seed) : les 3 ratios actifs (#1, #5, #8)
+    """Base sans aucune activité réelle (juste le seed) : les 4 ratios actifs (#1, #2, #5, #8)
     doivent renvoyer un résultat — NON_CALCULABLE est attendu (dénominateurs nuls), jamais une
     exception, jamais un ratio inactif dans la liste."""
     executer_seed_conformite(db)
@@ -165,6 +167,7 @@ def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
 
     assert [r.code for r in resultats] == [
         "RATIO_1_COUVERTURE_RISQUES",
+        "RATIO_2_CAPITALISATION",
         "RATIO_5_DIVISION_RISQUES",
         "RATIO_8_LIMITATION_PARTICIPATIONS",
     ]
@@ -720,7 +723,7 @@ def test_garde_composition_differente_de_l_ancienne_n_est_pas_recablee(db: Sessi
 
 def test_ratios_1_et_5_ne_bougent_pas_quand_le_ratio_8_est_actif(db: Session) -> None:
     """Risques 150 000, dépôts 100 000, réserves 50 000 : #1 = 100 % conforme sans avertissement ;
-    #5 = 0 % (aucun encours), et l'ordre des ratios actifs est #1, #5, #8."""
+    #5 = 0 % (aucun encours), et l'ordre des ratios actifs est #1, #2, #5, #8."""
     executer_seed_conformite(db)
     credits = _id_compte(db, "202221")
     depots = _id_compte(db, "251121")
@@ -739,6 +742,7 @@ def test_ratios_1_et_5_ne_bougent_pas_quand_le_ratio_8_est_actif(db: Session) ->
 
     assert list(resultats) == [
         "RATIO_1_COUVERTURE_RISQUES",
+        "RATIO_2_CAPITALISATION",
         "RATIO_5_DIVISION_RISQUES",
         RATIO_8,
     ]
@@ -841,3 +845,244 @@ def test_ratio_1_deduit_les_deux_sous_provisions_par_le_prefixe_4129(db: Session
 
     assert ("4129", -1) in _composition(db, "RISQUES_PORTES")
     assert agregat_valeur(db, "RISQUES_PORTES", AUJOURDHUI) == 140_000
+
+
+# --- Ratio #2 : capitalisation générale (P2.0-c) -------------------------------------------------
+
+RATIO_2 = "RATIO_2_CAPITALISATION"
+PREFIXES_DEDUCTIONS_FP = ("412100", "412910", "4311", "4319", "441100", "4418", "4419")
+
+
+def _preparer_plan_et_mapping(db: Session) -> None:
+    """Seed conformité + plan réel + mapping des états financiers (le total actif net du bilan en
+    dépend)."""
+    executer_seed_conformite(db)
+    importer(db, str(CSV_PLAN_B2))
+    executer_seed_mapping_etats(db)
+
+
+def _poser_bilan_simple(db: Session, *, fonds_propres: int, depots: int) -> None:
+    """Caisse = fonds propres + dépôts : actif net = fonds_propres + depots."""
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "101111"), "D", fonds_propres + depots),
+            LigneSaisie(_id_compte(db, "5521"), "C", fonds_propres),
+            LigneSaisie(_id_compte(db, "251121"), "C", depots),
+        ],
+        AUJOURDHUI,
+    )
+
+
+def test_ratio_2_est_cable_et_actif_apres_seed(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    ratio = _ratio_par_code(db, RATIO_2)
+    numerateur = db.get(AgregatPrudentiel, ratio.agregat_numerateur_id)
+    denominateur = db.get(AgregatPrudentiel, ratio.agregat_denominateur_id)
+
+    assert ratio.actif is True
+    assert ratio.operateur == "GE"
+    assert _seuils(db, RATIO_2) == [(None, 15)]  # seuil universel, minimum
+    assert numerateur is not None and numerateur.code == "FONDS_PROPRES"
+    assert denominateur is not None and denominateur.code == "TOTAL_ACTIF_NET"
+    assert denominateur.type == "SPECIAL" and denominateur.calcul_special == "TOTAL_ACTIF_NET"
+    assert _composition(db, "TOTAL_ACTIF_NET") == set()  # un SPECIAL n'a pas de composition
+
+
+def test_total_actif_net_special_est_positif_et_egal_au_bilan(db: Session) -> None:
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=200_000, depots=800_000)
+
+    valeur = agregat_valeur(db, "TOTAL_ACTIF_NET", AUJOURDHUI)
+
+    assert valeur == 1_000_000
+    assert valeur == etats_financiers.bilan(db, AUJOURDHUI).total_actif_net
+
+
+def test_ratio_2_conforme_a_20_pour_cent(db: Session) -> None:
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=200_000, depots=800_000)
+
+    resultat = evaluer_ratio(db, RATIO_2, AUJOURDHUI)
+
+    assert resultat.valeur_numerateur == 200_000
+    assert resultat.valeur_denominateur == 1_000_000
+    assert resultat.valeur_ratio_pct == 20
+    assert resultat.statut == STATUT_CONFORME
+
+
+def test_ratio_2_non_conforme_a_12_pour_cent(db: Session) -> None:
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=120_000, depots=880_000)
+
+    resultat = evaluer_ratio(db, RATIO_2, AUJOURDHUI)
+
+    assert resultat.valeur_ratio_pct == 12
+    assert resultat.statut == STATUT_NON_CONFORME
+
+
+def _poser_immobilisations_et_provisions(db: Session) -> None:
+    """Après `_poser_bilan_simple(400 000, 600 000)` : participations SFD/EC 100 000 (provision
+    20 000), incorporelles d'exploitation 50 000 (amortissement 10 000, provision 5 000),
+    incorporelles en cours 30 000 (provision 4 000), participations hors SFD/EC 10 000
+    (provision 3 000). Tout est prélevé sur la caisse : l'actif net ne change pas."""
+    caisse = _id_compte(db, "101111")
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "412100"), "D", 100_000),
+            LigneSaisie(_id_compte(db, "441100"), "D", 50_000),
+            LigneSaisie(_id_compte(db, "4311"), "D", 30_000),
+            LigneSaisie(_id_compte(db, "412300"), "D", 10_000),
+            LigneSaisie(caisse, "C", 190_000),
+        ],
+        AUJOURDHUI,
+    )
+    _valider_od(
+        db,
+        [
+            LigneSaisie(caisse, "D", 42_000),
+            LigneSaisie(_id_compte(db, "412910"), "C", 20_000),
+            LigneSaisie(_id_compte(db, "4418"), "C", 10_000),
+            LigneSaisie(_id_compte(db, "4419"), "C", 5_000),
+            LigneSaisie(_id_compte(db, "4319"), "C", 4_000),
+            LigneSaisie(_id_compte(db, "412930"), "C", 3_000),
+        ],
+        AUJOURDHUI,
+    )
+
+
+def test_fonds_propres_deduisent_participations_et_incorporelles_nettes(db: Session) -> None:
+    """FP 400 000 - (100 000 - 20 000) participations SFD/EC - (50 000 - 10 000 - 5 000)
+    incorporelles d'exploitation - (30 000 - 4 000) incorporelles en cours = 259 000. Le brut
+    412300 et sa provision 412930 (autre bucket) n'y touchent pas."""
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=400_000, depots=600_000)
+    assert agregat_valeur(db, "FONDS_PROPRES", AUJOURDHUI) == 400_000
+
+    _poser_immobilisations_et_provisions(db)
+
+    assert agregat_valeur(db, "FONDS_PROPRES", AUJOURDHUI) == 259_000
+    resultat = evaluer_ratio(db, RATIO_2, AUJOURDHUI)
+    assert resultat.valeur_numerateur == 259_000  # la déduction s'applique bien au #2
+    assert resultat.valeur_denominateur == 1_000_000  # actif net : prélèvements sur la caisse
+    assert resultat.valeur_ratio_pct == Decimal("25.9")
+    assert resultat.statut == STATUT_CONFORME
+
+
+def test_propagation_aux_ratios_5_et_8_et_ressources_inchange(db: Session) -> None:
+    """FONDS_PROPRES passe de 400 000 à 259 000 : le dénominateur de #5 et de #8 suit.
+    RESSOURCES (dénominateur de #1) reste à 1 000 000, ainsi que #1 : il ne reçoit pas les
+    déductions prudentielles."""
+    _preparer_plan_et_mapping(db)
+    _poser_bilan_simple(db, fonds_propres=400_000, depots=600_000)
+    avant = {r.code: r for r in evaluer_tous(db, AUJOURDHUI)}
+    ressources_avant = agregat_valeur(db, "RESSOURCES", AUJOURDHUI)
+    assert avant[RATIO_8].valeur_denominateur == 400_000
+    assert avant["RATIO_5_DIVISION_RISQUES"].valeur_denominateur == 400_000
+    assert avant[RATIO_1].valeur_denominateur == ressources_avant == 1_000_000
+
+    _poser_immobilisations_et_provisions(db)
+    apres = {r.code: r for r in evaluer_tous(db, AUJOURDHUI)}
+
+    assert apres[RATIO_8].valeur_denominateur == 259_000
+    assert apres[RATIO_8].valeur_numerateur == 7_000  # 412300 10 000 - 412930 3 000
+    assert apres["RATIO_5_DIVISION_RISQUES"].valeur_denominateur == 259_000
+    assert agregat_valeur(db, "RESSOURCES", AUJOURDHUI) == 1_000_000
+    assert apres[RATIO_1].valeur_denominateur == 1_000_000
+
+
+def test_ressources_ne_recoit_aucune_deduction_prudentielle(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    prefixes_ressources = {p for p, _ in _composition(db, "RESSOURCES")}
+    prefixes_fonds_propres = {p for p, _ in _composition(db, "FONDS_PROPRES")}
+
+    assert prefixes_ressources.isdisjoint(PREFIXES_DEDUCTIONS_FP)
+    assert set(PREFIXES_DEDUCTIONS_FP) <= prefixes_fonds_propres
+    assert ("412100", -1) in _composition(db, "FONDS_PROPRES")
+    assert ("412910", 1) in _composition(db, "FONDS_PROPRES")
+    for brut in ("4311", "441100"):
+        assert (brut, -1) in _composition(db, "FONDS_PROPRES")
+    for contra in ("4319", "4418", "4419"):
+        assert (contra, 1) in _composition(db, "FONDS_PROPRES")
+
+
+def test_prefixes_des_deductions_sont_disjoints_entre_eux_et_du_reste_de_fonds_propres() -> None:
+    from app.cli.seed_conformite import AGREGATS
+
+    with open(CSV_PLAN_B2, encoding="utf-8-sig", newline="") as f:
+        numeros = [ligne["account_number"] for ligne in csv.DictReader(f, delimiter=";")]
+    # Chaque préfixe de déduction ne ramasse QUE son propre compte (ni 412300/412930, ni un
+    # autre compte de la famille).
+    for prefixe in PREFIXES_DEDUCTIONS_FP:
+        assert [n for n in numeros if n.startswith(prefixe)] == [prefixe]
+    composition = next(a for a in AGREGATS if a.code == "FONDS_PROPRES").composition
+    prefixes = [ligne.prefixe for ligne in composition]
+    assert len(prefixes) == len(set(prefixes))
+    for a in prefixes:
+        for b in prefixes:
+            if a != b:
+                assert not b.startswith(a), f"{a} ramasse {b}"
+
+
+def _remettre_fp_tan_et_ratio_2_a_l_etat_ancien(db: Session) -> None:
+    """Base seedée AVANT P2.0-c : FP sans déductions (référence d'origine), TOTAL_ACTIF_NET
+    BALANCE vide, ratio #2 inactif sans seuil."""
+    from app.cli.seed_conformite import AGREGATS
+
+    fonds_propres = _agregat_par_code(db, "FONDS_PROPRES")
+    precedent = next(a for a in AGREGATS if a.code == "FONDS_PROPRES").cablage_precedent
+    assert precedent is not None
+    db.execute(
+        text(
+            "DELETE FROM conformite.agregat_compte "
+            "WHERE agregat_id = :a AND prefixe_compte = ANY(:p)"
+        ),
+        {"a": fonds_propres.id, "p": list(PREFIXES_DEDUCTIONS_FP)},
+    )
+    fonds_propres.reference = precedent.reference
+    total = _agregat_par_code(db, "TOTAL_ACTIF_NET")
+    total.type = "BALANCE"
+    total.calcul_special = None
+    total.reference = None
+    ratio = _ratio_par_code(db, RATIO_2)
+    ratio.actif = False
+    db.execute(text("DELETE FROM conformite.ratio_seuil WHERE ratio_id = :r"), {"r": ratio.id})
+    db.flush()
+
+
+def test_base_existante_est_recablee_pour_le_ratio_2_puis_idempotent(db: Session) -> None:
+    executer_seed_conformite(db)
+    _remettre_fp_tan_et_ratio_2_a_l_etat_ancien(db)
+    assert len(_composition(db, "FONDS_PROPRES")) == 16
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.agregats_recables == 2  # FONDS_PROPRES + TOTAL_ACTIF_NET
+    assert rejeu.ratios_recables == 1
+    assert rejeu.seuils_crees == 1
+    assert len(_composition(db, "FONDS_PROPRES")) == 16 + len(PREFIXES_DEDUCTIONS_FP)
+    total = _agregat_par_code(db, "TOTAL_ACTIF_NET")
+    assert (total.type, total.calcul_special) == ("SPECIAL", "TOTAL_ACTIF_NET")
+    assert _ratio_par_code(db, RATIO_2).actif is True
+    assert _seuils(db, RATIO_2) == [(None, 15)]
+    assert "nette" in (_agregat_par_code(db, "FONDS_PROPRES").reference or "")
+
+    deuxieme = executer_seed_conformite(db)
+    assert (deuxieme.agregats_recables, deuxieme.ratios_recables, deuxieme.seuils_crees) == (
+        0, 0, 0,
+    )
+
+
+def test_garde_fonds_propres_retouche_n_est_pas_recable(db: Session) -> None:
+    executer_seed_conformite(db)
+    _remettre_fp_tan_et_ratio_2_a_l_etat_ancien(db)
+    _agregat_par_code(db, "FONDS_PROPRES").updated_by = _utilisateur_id(db)
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.agregats_recables == 1  # TOTAL_ACTIF_NET seulement
+    assert len(_composition(db, "FONDS_PROPRES")) == 16

@@ -26,10 +26,14 @@ COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
   DÉDUIT : parts non libérées (571121), capital non appelé (5712), capital souscrit non
   appelé/versé des associés (573, capture 5731/5732). `applique_complement_provisions_tutelle`
   = TRUE (ajustement administratif, voir parametre_institution).
-  EN ATTENTE, PAS SEEDÉES : déduction des immobilisations incorporelles nettes (441) et des
-  participations dans d'autres SFD (412) — le plan committé n'a AUCUN compte brut pour ces
-  deux familles (seulement leurs amortissements/provisions), voir la note de diagnostic P2.1.
-  À reprendre après correction du plan de comptes (hors périmètre P2.0).
+  DÉDUCTIONS NETTES, par comptes disjoints (P2.0-c, ratio #2) : participations dans SFD et
+  établissements de crédit nettes de leur provision = 412100 (-1) et 412910 (+1) ; immobilisations
+  incorporelles nettes = 4311 (-1) / 4319 (+1) (en cours) et 441100 (-1) / 4418 (+1) / 4419 (+1)
+  (exploitation). Le brut se déduit, sa provision/son amortissement RÉDUIT la déduction : on
+  déduit la valeur NETTE. Périmètre incorporel limité à « en cours + exploitation » : les
+  incorporelles hors exploitation et acquises en garantie n'existent pas dans le plan officiel.
+  Ces déductions ne sont QUE dans FONDS_PROPRES : RESSOURCES (passif comptable réel) garde le bloc
+  brut (`_FONDS_PROPRES_BRUT`), jamais les déductions prudentielles.
 
   RISQUES_PORTES : expositions sur les institutions financières (11, 12, 13), crédits aux
   membres/clients (20), prêts en souffrance (191/192/193/194, PAS 19 — 19 recouvrirait son
@@ -53,12 +57,18 @@ COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
   débitrices, nichées sous 15 qui est créditeur) et 25117 (même raison, sous 25).
 
 RATIOS :
-  #1, #5 et #8 ACTIFS (seuils validés). #2, #3, #4, #6, #7, #9, #10 créés `actif=FALSE`,
+  #1, #2, #5 et #8 ACTIFS (seuils validés). #3, #4, #6, #7, #9, #10 créés `actif=FALSE`,
   « en attente » — chacun référence des agrégats-placeholders à composition VIDE (un agrégat
   BALANCE sans aucune ligne `agregat_compte` rend 0, jamais une exception — voir
-  `moteur._valeur_balance`), SAUF #2 qui réutilise FONDS_PROPRES côté numérateur. AUCUN seuil
-  n'est seedé pour ces 7 : je n'ai pas de valeur validée, et CLAUDE.md interdit d'inventer une
+  `moteur._valeur_balance`). AUCUN seuil n'est seedé pour ces 6 : je n'ai pas de valeur
+  validée, et CLAUDE.md interdit d'inventer une
   valeur de configuration.
+
+  #2 (capitalisation générale, FONDS_PROPRES / TOTAL_ACTIF_NET >= 15 %) — CÂBLÉ en P2.0-c :
+  dénominateur TOTAL_ACTIF_NET = calcul SPECIAL qui réutilise le total actif net du bilan
+  (`etats_financiers.bilan`), sur le modèle du SPECIAL de #5 ; un SPECIAL n'a pas de
+  décomposition à l'écran de détail (attendu). Les déductions ajoutées à FONDS_PROPRES font aussi
+  bouger #5 et #8 (qui l'utilisent au dénominateur), jamais #1/#4/#6/#7 (via RESSOURCES).
 
   #8 (limitation des titres de participation, <= 25 % des fonds propres) — CÂBLÉ en P2.0-b2 :
   numérateur PARTICIPATIONS_HORS_SFD_EC = 412300 (+1) - 412930 (-1), dénominateur FONDS_PROPRES
@@ -108,6 +118,8 @@ class _CablageAgregatPrecedent:
 
     composition: Sequence[_CompositionLigne]
     reference: str | None
+    type: str = "BALANCE"
+    calcul_special: str | None = None
 
 
 @dataclass(frozen=True)
@@ -161,21 +173,41 @@ def _c(prefixe: str, sens: int) -> _CompositionLigne:
     return _CompositionLigne(prefixe, sens)
 
 
-_FONDS_PROPRES_COMPOSITION = (
+# Bloc fonds propres BRUT : le passif comptable réel, repris tel quel par RESSOURCES.
+_FONDS_PROPRES_BRUT = (
     _c("571111", 1), _c("54", 1), _c("551", 1), _c("552", 1), _c("56", 1),
     _c("58", 1), _c("591", 1), _c("5011", 1), _c("502", 1), _c("503", 1),
     _c("51", 1), _c("52", 1), _c("53", 1),
     _c("571121", -1), _c("5712", -1), _c("573", -1),
 )
 
+# Déductions prudentielles (P2.0-c), NETTES par comptes disjoints : le brut se déduit (-1), sa
+# provision/son amortissement (contra, créditeur) réduit la déduction (+1). Propres à
+# FONDS_PROPRES — RESSOURCES ne les reçoit pas.
+_DEDUCTIONS_FONDS_PROPRES = (
+    _c("412100", -1), _c("412910", 1),  # participations SFD / établissements de crédit, nettes
+    _c("4311", -1), _c("4319", 1),  # incorporelles en cours, nettes
+    _c("441100", -1), _c("4418", 1), _c("4419", 1),  # incorporelles d'exploitation, nettes
+)
+
+_FONDS_PROPRES_COMPOSITION = _FONDS_PROPRES_BRUT + _DEDUCTIONS_FONDS_PROPRES
+
 AGREGATS: tuple[_AgregatDef, ...] = (
     _AgregatDef(
         code="FONDS_PROPRES",
         libelle="Fonds propres effectifs",
-        reference="Instruction BCEAO 010-08-2010 — définition large, hors immobilisations "
-        "incorporelles nettes et participations dans d'autres SFD (en attente, voir docstring)",
+        reference="Instruction BCEAO 010-08-2010 — nette des participations SFD/établissements "
+        "de crédit et des immobilisations incorporelles (en cours + exploitation)",
         applique_complement_provisions_tutelle=True,
         composition=_FONDS_PROPRES_COMPOSITION,
+        cablage_precedent=_CablageAgregatPrecedent(
+            composition=_FONDS_PROPRES_BRUT,
+            reference=(
+                "Instruction BCEAO 010-08-2010 — définition large, hors immobilisations "
+                "incorporelles nettes et participations dans d'autres SFD (en attente, voir "
+                "docstring)"
+            ),
+        ),
     ),
     _AgregatDef(
         code="RISQUES_PORTES",
@@ -202,7 +234,7 @@ AGREGATS: tuple[_AgregatDef, ...] = (
             # Neutralisation des rattachés à sens opposé : des créances (débitrices) nichées
             # sous 15/25 (créditeurs) qui ne sont pas une ressource de financement.
             _c("1547", -1), _c("1567", -1), _c("1577", -1), _c("25117", -1),
-            *_FONDS_PROPRES_COMPOSITION,
+            *_FONDS_PROPRES_BRUT,
         ),
     ),
     _AgregatDef(
@@ -210,6 +242,16 @@ AGREGATS: tuple[_AgregatDef, ...] = (
         libelle="Encours du plus gros emprunteur",
         type="SPECIAL",
         calcul_special="PLUS_GROS_EMPRUNTEUR",
+    ),
+    _AgregatDef(
+        code="TOTAL_ACTIF_NET",
+        libelle="Total actif net",
+        reference="Total actif net du bilan (actif brut moins provisions et amortissements), "
+        "calcul SPECIAL réutilisant etats_financiers.bilan",
+        type="SPECIAL",
+        calcul_special="TOTAL_ACTIF_NET",
+        ancien_libelle="Total actif net (en attente de composition)",
+        cablage_precedent=_CablageAgregatPrecedent(composition=(), reference=None),
     ),
     _AgregatDef(
         code="PARTICIPATIONS_HORS_SFD_EC",
@@ -231,12 +273,7 @@ AGREGATS: tuple[_AgregatDef, ...] = (
     # ratios qui les référencent sont actif=FALSE, jamais évalués par evaluer_tous().
     # L'état « en attente » se lit au badge de l'écran, pas dans le libellé ; le MOTIF de
     # chaque écart est conservé ici, en commentaire.
-    # Total actif net : composition à définir.
-    _AgregatDef(
-        code="TOTAL_ACTIF_NET",
-        libelle="Total actif net",
-        ancien_libelle="Total actif net (en attente de composition)",
-    ),
+    # Total actif net (P2.0-c) : SPECIAL, câblé plus haut — voir AGREGATS ci-dessus.
     # Durée résiduelle des crédits non encore exploitée.
     _AgregatDef(
         code="EMPLOIS_MLT",
@@ -321,7 +358,10 @@ RATIOS: tuple[_RatioDef, ...] = (
         denominateur="TOTAL_ACTIF_NET",
         operateur="GE",
         ordre=2,
-        actif=False,
+        cablage_precedent=_CablagePrecedent(
+            numerateur="FONDS_PROPRES", actif=False, reference=REFERENCE_REGLEMENTAIRE
+        ),
+        seuils=(_SeuilDef(categorie_sfd=None, valeur=15),),
     ),
     _RatioDef(
         code="RATIO_3_COUVERTURE_EMPLOIS_MLT",
@@ -496,11 +536,14 @@ def _recabler_agregat(
     """Recâble la COMPOSITION d'un agrégat EXISTANT sur le câblage courant du seed — seulement
     s'il est encore dans l'état exact que ce seed écrivait avant (`cablage_precedent`) : agrégat
     système jamais retouché (`updated_by IS NULL` — l'API de paramétrage le renseigne dès qu'elle
-    remplace la composition) ET composition strictement égale à l'ancienne, lignes toutes
-    système. Dès qu'une condition est fausse, quelqu'un a commencé à paramétrer cet agrégat :
+    remplace la composition) ET type/calcul spécial et composition strictement égaux à
+    l'ancien état, lignes toutes système. Dès qu'une condition est fausse, quelqu'un a commencé
+    à paramétrer cet agrégat :
     on n'y touche pas. La référence n'est remplacée que si elle est vide ou égale à l'ancienne."""
     precedent = definition.cablage_precedent
     if precedent is None or not _non_retouche(agregat):
+        return
+    if (agregat.type, agregat.calcul_special) != (precedent.type, precedent.calcul_special):
         return
     lignes = list(
         db.execute(select(AgregatCompte).where(AgregatCompte.agregat_id == agregat.id)).scalars()
@@ -521,6 +564,8 @@ def _recabler_agregat(
                 agregat_id=agregat.id, prefixe_compte=prefixe, sens=sens, is_system=True
             )
         )
+    agregat.type = definition.type
+    agregat.calcul_special = definition.calcul_special
     if agregat.reference in (None, precedent.reference):
         agregat.reference = definition.reference
     db.flush()
