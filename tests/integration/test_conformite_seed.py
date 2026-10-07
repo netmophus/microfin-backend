@@ -1287,3 +1287,195 @@ def test_base_existante_recable_le_ratio_9_puis_idempotent(db: Session) -> None:
     db.flush()
     assert executer_seed_conformite(db).ratios_recables == 0
     assert ratio.actif is False
+
+
+# --- Ratio #1 : les titres de participation entrent dans les risques portés (P2.0-e) -----------
+
+AGREGAT_RISQUES = "RISQUES_PORTES"
+PARTICIPATIONS_AJOUTEES = {("412100", 1), ("412300", 1)}
+
+
+def _poser_participations_pour_risques(db: Session) -> None:
+    """Fonds propres 100 000 (5521) ; brut 412100 20 000 (SFD/EC) + 412300 30 000 (hors SFD/EC) ;
+    provision 8 000 répartie 412910 3 000 + 412930 5 000 ; le tout prélevé sur la caisse."""
+    caisse = _id_compte(db, "101111")
+    _valider_od(
+        db,
+        [LigneSaisie(caisse, "D", 100_000), LigneSaisie(_id_compte(db, "5521"), "C", 100_000)],
+        AUJOURDHUI,
+    )
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "412100"), "D", 20_000),
+            LigneSaisie(_id_compte(db, "412300"), "D", 30_000),
+            LigneSaisie(caisse, "C", 50_000),
+        ],
+        AUJOURDHUI,
+    )
+    _valider_od(
+        db,
+        [
+            LigneSaisie(caisse, "D", 8_000),
+            LigneSaisie(_id_compte(db, "412910"), "C", 3_000),
+            LigneSaisie(_id_compte(db, "412930"), "C", 5_000),
+        ],
+        AUJOURDHUI,
+    )
+
+
+def test_risques_portes_contient_le_brut_des_deux_buckets_et_la_provision_une_seule_fois(
+    db: Session,
+) -> None:
+    executer_seed_conformite(db)
+
+    composition = _composition(db, AGREGAT_RISQUES)
+
+    assert composition >= PARTICIPATIONS_AJOUTEES
+    assert {("4126", 1), ("4127", 1), ("4129", -1)} <= composition  # conservés
+    prefixes = [p for p, _ in composition]
+    assert "412910" not in prefixes and "412930" not in prefixes  # pas de doublon de provision
+    assert len(composition) == 26 + 2  # les 26 lignes d'avant + les 2 bruts
+
+
+def test_prefixes_des_bruts_participations_sont_disjoints_des_provisions_et_de_4126_4127() -> None:
+    with open(CSV_PLAN_B2, encoding="utf-8-sig", newline="") as f:
+        numeros = [ligne["account_number"] for ligne in csv.DictReader(f, delimiter=";")]
+    for brut in ("412100", "412300"):
+        assert [n for n in numeros if n.startswith(brut)] == [brut]
+        for autre in ("4126", "4127", "4129", "412910", "412930"):
+            assert not brut.startswith(autre) and not autre.startswith(brut), (brut, autre)
+    # Le préfixe 4129 (-1) capte exactement les deux sous-provisions, et aucun brut.
+    assert [n for n in numeros if n.startswith("4129")] == ["4129", "412910", "412930"]
+
+
+def test_les_participations_nettes_entrent_dans_les_risques_portes_une_seule_fois_la_provision(
+    db: Session,
+) -> None:
+    """Brut 50 000 (30 000 hors SFD + 20 000 SFD), provision 8 000 -> contribution nette 42 000
+    (et NON 34 000 : la provision n'est pas déduite deux fois). Avec 4126 (1 000) et 4127 (500)
+    qui restent dans l'exposition : 43 500."""
+    executer_seed_conformite(db)
+    importer(db, str(CSV_PLAN_B2))
+    assert agregat_valeur(db, AGREGAT_RISQUES, AUJOURDHUI) == 0
+
+    _poser_participations_pour_risques(db)
+    assert agregat_valeur(db, AGREGAT_RISQUES, AUJOURDHUI) == 42_000
+
+    caisse = _id_compte(db, "101111")
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "4126"), "D", 1_000),
+            LigneSaisie(_id_compte(db, "4127"), "D", 500),
+            LigneSaisie(caisse, "C", 1_500),
+        ],
+        AUJOURDHUI,
+    )
+    assert agregat_valeur(db, AGREGAT_RISQUES, AUJOURDHUI) == 43_500
+
+
+def test_ratio_1_integre_les_participations_et_ressources_ne_bouge_pas(db: Session) -> None:
+    executer_seed_conformite(db)
+    importer(db, str(CSV_PLAN_B2))
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "101111"), "D", 100_000),
+            LigneSaisie(_id_compte(db, "5521"), "C", 100_000),
+        ],
+        AUJOURDHUI,
+    )
+    avant = evaluer_ratio(db, RATIO_1, AUJOURDHUI)
+    assert (avant.valeur_numerateur, avant.valeur_denominateur) == (0, 100_000)
+
+    # Participations : brut 50 000, provision 8 000 (le fonds propres 100 000 déjà posé).
+    caisse = _id_compte(db, "101111")
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "412100"), "D", 20_000),
+            LigneSaisie(_id_compte(db, "412300"), "D", 30_000),
+            LigneSaisie(caisse, "C", 50_000),
+        ],
+        AUJOURDHUI,
+    )
+    _valider_od(
+        db,
+        [
+            LigneSaisie(caisse, "D", 8_000),
+            LigneSaisie(_id_compte(db, "412910"), "C", 3_000),
+            LigneSaisie(_id_compte(db, "412930"), "C", 5_000),
+        ],
+        AUJOURDHUI,
+    )
+    apres = evaluer_ratio(db, RATIO_1, AUJOURDHUI)
+
+    assert apres.valeur_numerateur == 42_000  # brut des 2 buckets net de la provision totale
+    assert apres.valeur_denominateur == 100_000  # RESSOURCES inchangé
+
+
+def test_ratios_2_5_8_et_9_n_utilisent_pas_risques_portes_et_restent_inchanges(
+    db: Session,
+) -> None:
+    """Mêmes participations : #2 = FP 100 000 - (20 000 - 3 000) ; #8 et #9 voient seulement le
+    bucket hors SFD net (30 000 - 5 000) ; #5 a pour dénominateur les fonds propres nets."""
+    executer_seed_conformite(db)
+    importer(db, str(CSV_PLAN_B2))
+    executer_seed_mapping_etats(db)
+    _poser_participations_pour_risques(db)
+
+    resultats = {r.code: r for r in evaluer_tous(db, AUJOURDHUI)}
+
+    assert resultats[RATIO_2].valeur_numerateur == 83_000
+    assert resultats[RATIO_8].valeur_numerateur == 25_000
+    assert resultats[RATIO_8].valeur_denominateur == 83_000
+    assert resultats["RATIO_5_DIVISION_RISQUES"].valeur_denominateur == 83_000
+    assert resultats[RATIO_9].valeur_numerateur == 25_000
+    assert _composition(db, "PARTICIPATIONS_HORS_SFD_EC") == {("412300", 1), ("412930", -1)}
+    assert _composition(db, AGREGAT_IMMOS) == COMPOSITION_IMMOS
+
+
+def _remettre_risques_portes_a_l_etat_ancien(db: Session) -> AgregatPrudentiel:
+    agregat = _agregat_par_code(db, AGREGAT_RISQUES)
+    db.execute(
+        text(
+            "DELETE FROM conformite.agregat_compte "
+            "WHERE agregat_id = :a AND prefixe_compte IN ('412100', '412300')"
+        ),
+        {"a": agregat.id},
+    )
+    agregat.reference = None
+    db.flush()
+    return agregat
+
+
+def test_composition_de_risques_portes_est_recablee_au_rejeu_puis_idempotente(
+    db: Session,
+) -> None:
+    executer_seed_conformite(db)
+    agregat = _remettre_risques_portes_a_l_etat_ancien(db)
+    assert len(_composition(db, AGREGAT_RISQUES)) == 26
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.agregats_recables == 1
+    assert _composition(db, AGREGAT_RISQUES) >= PARTICIPATIONS_AJOUTEES
+    assert len(_composition(db, AGREGAT_RISQUES)) == 28
+    assert "DRS-SFD" in (agregat.reference or "")
+    assert executer_seed_conformite(db).agregats_recables == 0
+
+
+def test_garde_risques_portes_retouche_ou_different_n_est_pas_recable(db: Session) -> None:
+    executer_seed_conformite(db)
+    agregat = _remettre_risques_portes_a_l_etat_ancien(db)
+    agregat.updated_by = _utilisateur_id(db)  # paramétré à la main via l'API
+    db.flush()
+    assert executer_seed_conformite(db).agregats_recables == 0
+    assert len(_composition(db, AGREGAT_RISQUES)) == 26
+
+    agregat.updated_by = None  # composition différente de l'ancienne : une ligne en plus
+    db.add(AgregatCompte(agregat_id=agregat.id, prefixe_compte="4121", sens=1, is_system=True))
+    db.flush()
+    assert executer_seed_conformite(db).agregats_recables == 0
+    assert len(_composition(db, AGREGAT_RISQUES)) == 27

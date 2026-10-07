@@ -40,8 +40,11 @@ COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
   propre compte de provision 199 et annulerait la déduction au lieu de la faire), provisions
   correspondantes DÉDUITES (199), crédits en souffrance (291/292/293/294, même raison — PAS 29),
   provisions DÉDUITES (299), titres de placement (305+307), provisions DÉDUITES (309),
-  participations — versements restants + créances rattachées SEULEMENT (4126+4127, pas de
-  compte brut, voir note ci-dessus), provisions DÉDUITES (4129). DÉPÔTS DE GARANTIE REÇUS
+  participations — brut des DEUX buckets (412100 SFD/établissements de crédit + 412300 hors
+  SFD/EC : #1 mesure l'exposition TOTALE, sans distinction de contrepartie, contrairement à
+  #8/#9) + versements restants et créances rattachées (4126+4127), provisions DÉDUITES (4129,
+  qui capte 412910 ET 412930 par préfixe — ne jamais dupliquer), soit des titres de
+  participation NETS de provisions (publication DRS-SFD p.4-5, P2.0-e). DÉPÔTS DE GARANTIE REÇUS
   DÉDUITS (162 côté IF, 254 côté membres/clients — réduisent le risque net, collatéral détenu).
   SOUS-COMPTES « RATTACHÉS » NEUTRALISÉS (contribution nette = 0, pas une vraie déduction) :
   1136/1146/1166/1176 (Dettes rattachées, créditrices, nichées sous 11 qui est débiteur — une
@@ -224,17 +227,34 @@ AGREGATS: tuple[_AgregatDef, ...] = (
     _AgregatDef(
         code="RISQUES_PORTES",
         libelle="Risques portés (nets de provisions et dépôts de garantie)",
+        reference="Titres de participation inclus, bruts des deux buckets (412100, 412300) nets "
+        "de la provision 4129 — publication DRS-SFD p.4-5",
         composition=(
             _c("11", 1), _c("12", 1), _c("13", 1), _c("20", 1),
             _c("191", 1), _c("192", 1), _c("193", 1), _c("194", 1), _c("199", -1),
             _c("291", 1), _c("292", 1), _c("293", 1), _c("294", 1), _c("299", -1),
             _c("305", 1), _c("307", 1), _c("309", -1),
+            # Participations : brut des deux buckets (+1) ; la provision, elle, est la ligne
+            # 4129 (-1) existante, qui capte 412910 ET 412930 par préfixe (pas de doublon).
+            _c("412100", 1), _c("412300", 1),
             _c("4126", 1), _c("4127", 1), _c("4129", -1),
             _c("162", -1), _c("254", -1),
             # Neutralisation des rattachés à sens opposé nichés sous 11 (débiteur) : des
             # dettes (créditrices) qui ne sont pas une exposition au risque. Contribution
             # nette = 0, PAS une vraie déduction (voir docstring de module).
             _c("1136", -1), _c("1146", -1), _c("1166", -1), _c("1176", -1),
+        ),
+        cablage_precedent=_CablageAgregatPrecedent(
+            composition=(
+                _c("11", 1), _c("12", 1), _c("13", 1), _c("20", 1),
+                _c("191", 1), _c("192", 1), _c("193", 1), _c("194", 1), _c("199", -1),
+                _c("291", 1), _c("292", 1), _c("293", 1), _c("294", 1), _c("299", -1),
+                _c("305", 1), _c("307", 1), _c("309", -1),
+                _c("4126", 1), _c("4127", 1), _c("4129", -1),
+                _c("162", -1), _c("254", -1),
+                _c("1136", -1), _c("1146", -1), _c("1166", -1), _c("1176", -1),
+            ),
+            reference=None,
         ),
     ),
     _AgregatDef(

@@ -624,3 +624,23 @@ actif.
   seulement s'il est dans l'état exact d'avant (système, jamais retouché, ancien placeholder
   `IMMOS_PLUS_PARTICIPATIONS`, inactif, sans seuil). Le placeholder n'est plus semé ; sur une base
   existante il reste en place, inutilisé (comme `PARTICIPATIONS`).
+
+## Ratio #1 — les titres de participation entrent dans les risques portés (P2.0-e)
+
+Les titres de participation font partie des risques portés, **nets de provisions** (publication
+DRS-SFD p.4-5). Avant P2.0-b1, le brut n'existait pas dans le plan : `RISQUES_PORTES` déduisait la
+provision (`4129`) sans avoir le brut, donc le volet « participations » de #1 était incomplet.
+
+- **Ajouté** : `412100` (+1) et `412300` (+1) — les DEUX buckets, car #1 mesure l'exposition
+  totale sans distinction de contrepartie (à la différence de #8 et #9, qui n'en prennent qu'un).
+- **Provision** : la ligne `4129` (−1) existante capte `412910` ET `412930` par préfixe ; elle n'est
+  PAS dupliquée (aucun double comptage). `4126` (versements restant à effectuer) et `4127`
+  (créances rattachées) restent dans l'agrégat.
+- **Net attendu des participations dans #1** : `412100 + 412300 + 4126 + 4127 − (412910 + 412930)`.
+- **Disjonctions** : `412100` et `412300` ne ramassent ni `412910`/`412930` ni `4126`/`4127`.
+- **Effets** : le numérateur de #1 augmente du brut net des participations dès qu'il y a des
+  écritures. `RESSOURCES` (dénominateur) ne bouge pas. #2, #5, #8 et #9 n'utilisent pas
+  `RISQUES_PORTES` : inchangés.
+- **Bases existantes** : le seed recâble la composition de `RISQUES_PORTES` (deux lignes ajoutées,
+  référence) sous la garde habituelle : agrégat système jamais retouché, composition strictement
+  égale à l'ancienne, lignes toutes système.
