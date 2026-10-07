@@ -42,8 +42,8 @@ filtre glissée ailleurs.
 
 ## Le plan de comptes — référentiel officiel RCSFD + extensions IMF
 
-**Le plan actif est le référentiel officiel**, depuis le départ : **396 comptes**
-(372 comptes officiels + 24 comptes d'extension : membre/client, crédit, caisse et parts,
+**Le plan actif est le référentiel officiel**, depuis le départ : **395 comptes**
+(372 comptes officiels + 23 comptes d'extension : membre/client, crédit, caisse et parts,
 transit, et les comptes bruts dédiés de P2.0-b1), **tous provisoires**
 (`accounts.is_provisional = TRUE`) et protégés par `is_system = TRUE` — sauf 3 extensions de
 caisse et parts sociales (101111, 571111, 571121), à `is_system = FALSE` : voir « Caisse et
@@ -59,12 +59,12 @@ parts sociales » plus bas. La numérotation est sûre, mais le **sens** (D/C) e
   documentation ; les données du plan de comptes n'ont jamais été extraites de ce fichier
   bancaire.
 - [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv) — le fichier
-  réellement importé (396 lignes : les 372 + les 24 extensions), avec hiérarchie/nature/sens
+  réellement importé (395 lignes : les 372 + les 23 extensions), avec hiérarchie/nature/sens
   dérivés (méthodologie ci-dessous).
 
 | # | Valeur | Statut |
 |---|--------|--------|
-| 1 | Numéros de comptes du plan (les 396) | ✅ officiels (BCEAO) + extensions proposées |
+| 1 | Numéros de comptes du plan (les 395) | ✅ officiels (BCEAO) + extensions proposées |
 | 2 | Sens normal D/C de chaque compte | ⚠️ À VALIDER — voir priorité de relecture ci-dessous |
 | 3 | Comptes de saisie (`is_posting`) vs regroupement | ⚠️ À VALIDER (déduit mécaniquement de la hiérarchie, fiable) |
 | 4 | Hiérarchie parent/enfant | ✅ dérivée de la numérotation officielle |
@@ -143,7 +143,7 @@ un compte peut légitimement porter un solde des deux sens selon l'usage réel d
 | 3811 | Charges à répartir sur plusieurs exercices | D | 595 | Excédent ou déficit d'exploitation | C |
 | 3812 | Charges constatées d'avance | D | 596 | Excédent ou déficit exceptionnel | C |
 
-Les 396 comptes (372 officiels + 24 extensions) sont tous `is_provisional = TRUE` (sens à
+Les 395 comptes (372 officiels + 23 extensions) sont tous `is_provisional = TRUE` (sens à
 confirmer) et `is_system = TRUE` (numérotation protégée), à l'exception des 3 extensions de
 caisse et parts sociales (101111, 571111, 571121), à `is_system = FALSE` — voir la section
 suivante. Même discipline que le reste de ce document : aucune valeur n'est présentée comme
@@ -213,12 +213,12 @@ regroupement ordinaires : aucun verrouillage de `is_posting` n'est nécessaire p
 puisqu'aucun autre enfant ne s'y ajoute.
 
 Ajoutés à demeure dans [`reference/plan_comptable_import.csv`](reference/plan_comptable_import.csv)
-(396 comptes désormais, après P2.0-b1) — pas seulement importés une fois, une réinstallation fraîche les
+(395 comptes désormais, après P2.0-b1) — pas seulement importés une fois, une réinstallation fraîche les
 recrée. **Lacune corrigée au passage** : ces 3 comptes avaient été ajoutés à
 [`reference/plan_comptable_enrichi.csv`](reference/plan_comptable_enrichi.csv) (mapping bilan/
 compte de résultat) sans jamais être reportés dans le CSV d'import réel — une base migrée puis
 amorcée depuis zéro ne les créait donc jamais, bien que `seed-mapping-etats` les attende. Les
-deux fichiers portent maintenant exactement la même population de comptes (396 des deux côtés),
+deux fichiers portent maintenant exactement la même population de comptes (395 des deux côtés),
 chacun dans son propre rôle (import = création ; enrichi = mapping aux postes du bilan).
 
 À l'inverse, les comptes `101112`/`101114`/`101115` (« Caisse GAB », « Caisse principale (démo
@@ -232,7 +232,7 @@ promesse est de couvrir le plan d'une installation réelle.
 Pour les rapports « à date » (grand livre, balance, et plus tard bilan/résultat provisoires —
 voir R1/R2/R3), la nomenclature officielle (Annexe 1 du RCSFD) fait correspondre chaque poste des
 états financiers à une liste de comptes. La quasi-totalité de cette concordance résout sans
-ambiguïté sur nos 396 comptes (un compte-parent chez nous se substitue par la somme de ses
+ambiguïté sur nos 395 comptes (un compte-parent chez nous se substitue par la somme de ses
 enfants de saisie). **6 postes de la classe 2 (comptes membres/clients) restent une hypothèse, pas
 une certitude**, et devront porter un badge « à confirmer » dans l'écran du bilan le jour où il
 existera (R3) — pas ailleurs sur le rapport.

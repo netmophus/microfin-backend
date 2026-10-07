@@ -179,8 +179,7 @@
 3825;Charges à payer;3;C;TRUE;BILAN;PASSIF;Comptes de regularisation - passif
 41;IMMOBILISATIONS FINANCIERES;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
 412;Titres de participation;4;D;FALSE;BILAN;ACTIF;Immobilisations financieres
-412100;Titres de participation dans d'autres SFD - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
-412200;Titres de participation dans des etablissements de credit - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
+412100;Titres de participation dans SFD et etablissements de credit - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 412300;Titres de participation dans d'autres entites non financieres - valeur brute;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4126;Versements restant à effectuer;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres
 4127;Créances rattachées;4;D;TRUE;BILAN;ACTIF;Immobilisations financieres

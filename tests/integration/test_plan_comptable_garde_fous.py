@@ -429,9 +429,8 @@ CSV_OFFICIEL = DOCS_REFERENCE / "plan_comptable_rcsfd_officiel.csv"
 
 # numéro -> (parent, sens normal)
 EXTENSIONS_P20B1 = {
-    "412100": ("412", "D"),  # participations dans d'autres SFD (brut)
-    "412200": ("412", "D"),  # participations dans des établissements de crédit (brut)
-    "412300": ("412", "D"),  # participations dans d'autres entités non financières (brut)
+    "412100": ("412", "D"),  # participations dans SFD et établissements de crédit (brut)
+    "412300": ("412", "D"),  # participations dans les autres entités (brut)
     "441100": ("441", "D"),  # immobilisations incorporelles d'exploitation (brut)
     "442100": ("442", "D"),  # immobilisations corporelles d'exploitation (brut)
     "552400": ("552", "C"),  # écart de réévaluation (capitaux propres)
@@ -510,3 +509,25 @@ def test_creation_des_extensions_p20b1_passe_le_garde_fou_de_sens(db: Session) -
             {"n": numero},
         ).scalar_one()
         assert parent_en_base == parent
+
+
+def test_les_participations_ont_deux_buckets_bruts_sfd_ec_et_autres() -> None:
+    """P2.0-b1-bis : les participations dans les SFD et dans les établissements de crédit sont
+    traitées identiquement par les trois normes (déduites des fonds propres, exclues de #8/#9) :
+    un seul bucket brut pour les deux, un autre pour toutes les autres entités. 412200
+    (établissements de crédit seuls) n'existe plus."""
+    plan_import = _comptes_du_plan(CSV_IMPORT)
+    plan_enrichi = _comptes_du_plan(CSV_ENRICHI)
+
+    brutes = sorted(
+        n for n, ligne in plan_import.items() if ligne["parent_number"] == "412"
+        and n.startswith(("4121", "4122", "4123"))
+    )
+
+    assert brutes == ["412100", "412300"]
+    assert "412200" not in plan_import
+    assert "412200" not in plan_enrichi
+    assert plan_import["412100"]["name"] == (
+        "Titres de participation dans SFD et etablissements de credit - valeur brute"
+    )
+    assert plan_enrichi["412100"]["name"] == plan_import["412100"]["name"]

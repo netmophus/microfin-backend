@@ -179,8 +179,7 @@
 3825;Charges à payer;;3;382;C;TRUE;TRUE;
 41;IMMOBILISATIONS FINANCIERES;;4;;D;FALSE;TRUE;
 412;Titres de participation;;4;41;D;FALSE;TRUE;
-412100;Titres de participation dans d'autres SFD - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
-412200;Titres de participation dans des etablissements de credit - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
+412100;Titres de participation dans SFD et etablissements de credit - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
 412300;Titres de participation dans d'autres entites non financieres - valeur brute;;4;412;D;TRUE;TRUE;Extension projet non officielle (valeur brute, prefixe disjoint de ses provisions) - a valider par l'expert-comptable SFD
 4126;Versements restant à effectuer;;4;412;D;TRUE;TRUE;
 4127;Créances rattachées;;4;412;D;TRUE;TRUE;
