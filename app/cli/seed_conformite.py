@@ -53,12 +53,23 @@ COMPOSITION DES COMPTES — validée avec l'expert, numéro par numéro, contre
   débitrices, nichées sous 15 qui est créditeur) et 25117 (même raison, sous 25).
 
 RATIOS :
-  #1 et #5 ACTIFS (seuils validés). #2, #3, #4, #6, #7, #8, #9, #10 créés `actif=FALSE`,
+  #1, #5 et #8 ACTIFS (seuils validés). #2, #3, #4, #6, #7, #9, #10 créés `actif=FALSE`,
   « en attente » — chacun référence des agrégats-placeholders à composition VIDE (un agrégat
   BALANCE sans aucune ligne `agregat_compte` rend 0, jamais une exception — voir
   `moteur._valeur_balance`), SAUF #2 qui réutilise FONDS_PROPRES côté numérateur. AUCUN seuil
-  n'est seedé pour ces 8 : je n'ai pas de valeur validée, et CLAUDE.md interdit d'inventer une
-  valeur de configuration. #10 a un agrégat SPECIAL de part et d'autre
+  n'est seedé pour ces 7 : je n'ai pas de valeur validée, et CLAUDE.md interdit d'inventer une
+  valeur de configuration.
+
+  #8 (limitation des titres de participation, <= 25 % des fonds propres) — CÂBLÉ en P2.0-b2 :
+  numérateur PARTICIPATIONS_HORS_SFD_EC = 412300 (+1) - 4129 (-1), dénominateur FONDS_PROPRES
+  réutilisé tel quel. APPROXIMATION PRUDENTE, VALIDÉE : 4129 est un compte de provision GLOBAL
+  UNIQUE (il ne distingue pas les participations SFD/établissements de crédit de celles hors
+  SFD/EC) ; comme seul le brut 412300 entre dans #8, on lui soustrait TOUTE la provision 4129 —
+  ce qui RÉDUIT le numérateur, donc ne peut que sous-estimer le ratio (jamais le gonfler).
+  Préfixes disjoints : 412300 ne recouvre pas 4129, ni l'inverse. Le brut 412100
+  (SFD + établissements de crédit) est volontairement ABSENT : il est déduit des fonds propres
+  et exclu de #8. 4126/4127 (versements restant à effectuer, créances rattachées) ne sont pas
+  inclus : leur rôle reste à confirmer par l'expert. #10 a un agrégat SPECIAL de part et d'autre
   (`DOTATION_RESERVE_GENERALE_PERIODE`/`EXCEDENT_PERIODE`) dont la fonction n'est PAS encore
   écrite dans le moteur — lèverait `CalculSpecialInconnuError` si jamais évalué directement,
   sans risque tant que `actif=FALSE` (jamais atteint par `evaluer_tous`).
@@ -110,6 +121,16 @@ class _SeuilDef:
 
 
 @dataclass(frozen=True)
+class _CablagePrecedent:
+    """État que ce seed écrivait AVANT le câblage d'un ratio : seul un ratio encore dans cet état
+    exact est recâblé sur une base existante (voir `_recabler_ratio`)."""
+
+    numerateur: str
+    actif: bool
+    reference: str | None
+
+
+@dataclass(frozen=True)
 class _RatioDef:
     code: str
     libelle: str
@@ -120,6 +141,7 @@ class _RatioDef:
     actif: bool = True
     reference_reglementaire: str | None = REFERENCE_REGLEMENTAIRE
     ancien_libelle: str | None = None
+    cablage_precedent: _CablagePrecedent | None = None
     seuils: Sequence[_SeuilDef] = field(default_factory=tuple)
 
 
@@ -177,6 +199,14 @@ AGREGATS: tuple[_AgregatDef, ...] = (
         type="SPECIAL",
         calcul_special="PLUS_GROS_EMPRUNTEUR",
     ),
+    _AgregatDef(
+        code="PARTICIPATIONS_HORS_SFD_EC",
+        libelle="Participations hors SFD et établissements de crédit (nettes de provisions)",
+        reference="Instruction 010-08-2010 et 016-12-2010 — brut 412300 moins TOUTE la "
+        "provision 4129 (compte global unique) : approximation prudente",
+        nets_de_provisions=True,
+        composition=(_c("412300", 1), _c("4129", -1)),
+    ),
     # --- Placeholders « en attente » (lot P2.1.c) — composition VIDE à dessein : un agrégat
     # BALANCE sans ligne rend 0, jamais une exception (voir moteur._valeur_balance). Les 8
     # ratios qui les référencent sont actif=FALSE, jamais évalués par evaluer_tous().
@@ -227,13 +257,6 @@ AGREGATS: tuple[_AgregatDef, ...] = (
         libelle="Opérations autres qu'épargne et crédit",
         ancien_libelle="Opérations autres qu'épargne et crédit "
         "(en attente — définition du numérateur à vérifier contre le texte réglementaire)",
-    ),
-    # Compte brut absent du plan (voir docstring de module).
-    _AgregatDef(
-        code="PARTICIPATIONS",
-        libelle="Participations hors établissements de crédit et SFD",
-        ancien_libelle="Participations hors établissements de crédit "
-        "et SFD (en attente — compte brut absent du plan, voir docstring)",
     ),
     # Même gap que les participations.
     _AgregatDef(
@@ -335,11 +358,18 @@ RATIOS: tuple[_RatioDef, ...] = (
         code="RATIO_8_LIMITATION_PARTICIPATIONS",
         libelle="Limitation des participations",
         ancien_libelle="Limitation des participations (en attente)",
-        numerateur="PARTICIPATIONS",
+        numerateur="PARTICIPATIONS_HORS_SFD_EC",
         denominateur="FONDS_PROPRES",
         operateur="LE",
         ordre=8,
-        actif=False,
+        reference_reglementaire="Instruction 010-08-2010 (limitation des titres de "
+        "participation) + Instruction 016-12-2010",
+        cablage_precedent=_CablagePrecedent(
+            numerateur="PARTICIPATIONS",
+            actif=False,
+            reference=REFERENCE_REGLEMENTAIRE,
+        ),
+        seuils=(_SeuilDef(categorie_sfd=None, valeur=25),),
     ),
     _RatioDef(
         code="RATIO_9_IMMOS_PLUS_PARTICIPATIONS",
@@ -373,6 +403,8 @@ class RapportSeedConformite:
     # Resynchronisation de présentation sur des lignes déjà en base (voir docstring de module).
     references_resynchronisees: int = 0
     libelles_resynchronises: int = 0
+    # Ratios recâblés sur une base existante (agrégat numérateur, activation, seuil, référence).
+    ratios_recables: int = 0
 
 
 def _non_retouche(ligne: AgregatPrudentiel | RatioPrudentiel) -> bool:
@@ -393,6 +425,45 @@ def _resynchroniser_libelle(
     if ancien_libelle is not None and _non_retouche(ligne) and ligne.libelle == ancien_libelle:
         ligne.libelle = libelle
         rapport.libelles_resynchronises += 1
+
+
+def _recabler_ratio(
+    db: Session,
+    ratio: RatioPrudentiel,
+    definition: _RatioDef,
+    agregats_par_code: dict[str, AgregatPrudentiel],
+    rapport: RapportSeedConformite,
+) -> None:
+    """Recâble un ratio EXISTANT sur le câblage courant du seed — seulement s'il est encore dans
+    l'état exact que ce seed écrivait avant (`cablage_precedent`) : ligne système jamais retouchée
+    (`updated_by IS NULL`), même agrégat numérateur, même état d'activation, AUCUN seuil posé.
+    Dès qu'une de ces conditions est fausse, quelqu'un a commencé à paramétrer ce ratio :
+    on n'y touche pas. La référence n'est remplacée que si elle est vide ou égale à l'ancienne."""
+    precedent = definition.cablage_precedent
+    if precedent is None or not _non_retouche(ratio) or ratio.actif != precedent.actif:
+        return
+    numerateur_actuel = db.get(AgregatPrudentiel, ratio.agregat_numerateur_id)
+    if numerateur_actuel is None or numerateur_actuel.code != precedent.numerateur:
+        return
+    if db.execute(select(RatioSeuil.id).where(RatioSeuil.ratio_id == ratio.id)).first():
+        return
+
+    ratio.agregat_numerateur_id = agregats_par_code[definition.numerateur].id
+    ratio.actif = definition.actif
+    if ratio.reference_reglementaire in (None, precedent.reference):
+        ratio.reference_reglementaire = definition.reference_reglementaire
+    for seuil in definition.seuils:
+        db.add(
+            RatioSeuil(
+                ratio_id=ratio.id,
+                categorie_sfd=seuil.categorie_sfd,
+                valeur_seuil=seuil.valeur,
+                is_system=True,
+            )
+        )
+        rapport.seuils_crees += 1
+    db.flush()
+    rapport.ratios_recables += 1
 
 
 def executer_seed_conformite(db: Session) -> RapportSeedConformite:
@@ -449,6 +520,7 @@ def executer_seed_conformite(db: Session) -> RapportSeedConformite:
             select(RatioPrudentiel).where(RatioPrudentiel.code == ratio_def.code)
         ).scalar_one_or_none()
         if ratio_existant is not None:
+            _recabler_ratio(db, ratio_existant, ratio_def, agregats_par_code, rapport)
             if (
                 _non_retouche(ratio_existant)
                 and ratio_existant.reference_reglementaire is None

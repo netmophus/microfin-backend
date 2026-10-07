@@ -10,9 +10,11 @@ plan RCSFD (importés par le bootstrap de test, voir conftest.py) que :
     (dénominateurs nuls -> NON_CALCULABLE, jamais une exception).
 """
 
+import csv
 import uuid
 from collections.abc import Generator
 from datetime import date
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
@@ -28,12 +30,19 @@ from app.core.database import engine
 from app.modules.comptabilite import ecritures, journee
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.models import Account, Journal
-from app.modules.conformite.models import AgregatPrudentiel, RatioPrudentiel
+from app.modules.comptabilite.plan import importer
+from app.modules.conformite.models import (
+    AgregatCompte,
+    AgregatPrudentiel,
+    RatioPrudentiel,
+    RatioSeuil,
+)
 from app.modules.conformite.moteur import (
     AVERT_FONDS_PROPRES_NULS,
     AVERT_NUMERATEUR_NUL,
     STATUT_CONFORME,
     STATUT_NON_CALCULABLE,
+    STATUT_NON_CONFORME,
     agregat_valeur,
     compter_ecritures_validees,
     evaluer_ratio,
@@ -147,8 +156,8 @@ def test_rattache_ressources_est_neutralise(db: Session) -> None:
 
 
 def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
-    """Base sans aucune activité réelle (juste le seed) : les 2 ratios actifs doivent
-    renvoyer un résultat — NON_CALCULABLE est attendu (dénominateurs nuls), jamais une
+    """Base sans aucune activité réelle (juste le seed) : les 3 ratios actifs (#1, #5, #8)
+    doivent renvoyer un résultat — NON_CALCULABLE est attendu (dénominateurs nuls), jamais une
     exception, jamais un ratio inactif dans la liste."""
     executer_seed_conformite(db)
 
@@ -157,6 +166,7 @@ def test_evaluer_tous_apres_seed_ne_plante_pas(db: Session) -> None:
     assert [r.code for r in resultats] == [
         "RATIO_1_COUVERTURE_RISQUES",
         "RATIO_5_DIVISION_RISQUES",
+        "RATIO_8_LIMITATION_PARTICIPATIONS",
     ]
     for resultat in resultats:
         assert resultat.statut == STATUT_NON_CALCULABLE
@@ -342,7 +352,9 @@ def test_les_10_ratios_ont_une_reference_et_aucun_libelle_en_attente(db: Session
     agregats = db.execute(select(AgregatPrudentiel)).scalars().all()
 
     assert len(ratios) == 10
-    assert all(r.reference_reglementaire == REFERENCE_REGLEMENTAIRE for r in ratios)
+    # Chaque ratio cite l'Instruction 010-08-2010 ; le #8 y ajoute la 016-12-2010 (câblage P2.0-b2).
+    assert all("010-08-2010" in (r.reference_reglementaire or "") for r in ratios)
+    assert sum(r.reference_reglementaire == REFERENCE_REGLEMENTAIRE for r in ratios) == 9
     assert REFERENCE_REGLEMENTAIRE == "Instruction 010-08-2010"
     assert not [r.libelle for r in ratios if "(en attente" in r.libelle]
     assert not [a.libelle for a in agregats if "(en attente" in a.libelle]
@@ -361,7 +373,7 @@ def test_rejeu_sur_base_a_jour_ne_resynchronise_rien(db: Session) -> None:
 
 def test_lignes_anciennes_sont_corrigees_au_rejeu_puis_idempotent(db: Session) -> None:
     """Base seedée avant la correction (référence NULL, ancien libellé, jamais retouchée) :
-    10 références + 8 libellés de ratios + 11 libellés d'agrégats resynchronisés — une seule
+    10 références + 8 libellés de ratios + 10 libellés d'agrégats resynchronisés — une seule
     fois."""
     executer_seed_conformite(db)
     _revenir_a_l_etat_ancien(db)
@@ -369,7 +381,7 @@ def test_lignes_anciennes_sont_corrigees_au_rejeu_puis_idempotent(db: Session) -
     rejeu = executer_seed_conformite(db)
 
     assert rejeu.references_resynchronisees == 10
-    assert rejeu.libelles_resynchronises == 8 + 11
+    assert rejeu.libelles_resynchronises == 8 + 10
     assert _ratio_par_code(db, CODE_RATIO_ANCIEN).libelle == "Capitalisation générale"
     assert _ratio_par_code(db, CODE_RATIO_ANCIEN).reference_reglementaire == (
         REFERENCE_REGLEMENTAIRE
@@ -424,9 +436,9 @@ def test_garde_ligne_retouchee_par_un_utilisateur_n_est_pas_touchee(db: Session)
     assert ratio.reference_reglementaire is None
     assert ratio.libelle == _ancien_libelle_ratio(CODE_RATIO_ANCIEN)
     assert agregat.libelle == _ancien_libelle_agregat(CODE_AGREGAT_ANCIEN)
-    # Les 9 autres ratios et 10 autres agrégats, eux, n'ont pas été retouchés.
+    # Les 9 autres ratios et 9 autres agrégats, eux, n'ont pas été retouchés.
     assert rejeu.references_resynchronisees == 9
-    assert rejeu.libelles_resynchronises == 7 + 10
+    assert rejeu.libelles_resynchronises == 7 + 9
 
 
 def test_garde_ligne_non_systeme_n_est_pas_touchee(db: Session) -> None:
@@ -455,3 +467,250 @@ def test_seed_est_idempotent(db: Session) -> None:
     ).scalar_one()
 
     assert nb_ratios_avant == nb_ratios_apres == len(RATIOS)
+
+
+# --- Ratio #8 — limitation des titres de participation (P2.0-b2) -------------------------------
+
+RATIO_8 = "RATIO_8_LIMITATION_PARTICIPATIONS"
+AGREGAT_PARTICIPATIONS = "PARTICIPATIONS_HORS_SFD_EC"
+CSV_PLAN_B2 = (
+    Path(__file__).resolve().parents[2] / "docs" / "reference" / "plan_comptable_import.csv"
+)
+
+
+def _composition(db: Session, code_agregat: str) -> set[tuple[str, int]]:
+    lignes = db.execute(
+        select(AgregatCompte.prefixe_compte, AgregatCompte.sens)
+        .join(AgregatPrudentiel, AgregatPrudentiel.id == AgregatCompte.agregat_id)
+        .where(AgregatPrudentiel.code == code_agregat)
+    ).all()
+    return {(prefixe, sens) for prefixe, sens in lignes}
+
+
+def _seuils(db: Session, code_ratio: str) -> list[tuple[str | None, int]]:
+    ratio = _ratio_par_code(db, code_ratio)
+    lignes = db.execute(
+        select(RatioSeuil.categorie_sfd, RatioSeuil.valeur_seuil).where(
+            RatioSeuil.ratio_id == ratio.id
+        )
+    ).all()
+    return [(categorie, int(valeur)) for categorie, valeur in lignes]
+
+
+def _poser_participations(db: Session, *, brut: int, provision: int) -> None:
+    """Fonds propres 100 000 (5521) ; brut 412300 et provision 4129 prélevés sur la caisse."""
+    importer(db, str(CSV_PLAN_B2))  # 412300 / 412100 sont des comptes P2.0-b1
+    caisse = _id_compte(db, "101111")
+    _valider_od(
+        db,
+        [LigneSaisie(caisse, "D", 100_000), LigneSaisie(_id_compte(db, "5521"), "C", 100_000)],
+        AUJOURDHUI,
+    )
+    if brut:
+        _valider_od(
+            db,
+            [LigneSaisie(_id_compte(db, "412300"), "D", brut), LigneSaisie(caisse, "C", brut)],
+            AUJOURDHUI,
+        )
+    if provision:
+        _valider_od(
+            db,
+            [
+                LigneSaisie(caisse, "D", provision),
+                LigneSaisie(_id_compte(db, "4129"), "C", provision),
+            ],
+            AUJOURDHUI,
+        )
+
+
+def test_ratio_8_est_cable_et_actif_apres_seed(db: Session) -> None:
+    executer_seed_conformite(db)
+
+    ratio = _ratio_par_code(db, RATIO_8)
+    numerateur = db.get(AgregatPrudentiel, ratio.agregat_numerateur_id)
+    denominateur = db.get(AgregatPrudentiel, ratio.agregat_denominateur_id)
+
+    assert ratio.actif is True
+    assert ratio.operateur == "LE"
+    assert numerateur is not None and numerateur.code == AGREGAT_PARTICIPATIONS
+    assert denominateur is not None and denominateur.code == "FONDS_PROPRES"  # réutilisé tel quel
+    assert "010-08-2010" in (ratio.reference_reglementaire or "")
+    assert "016-12-2010" in (ratio.reference_reglementaire or "")
+    assert _seuils(db, RATIO_8) == [(None, 25)]  # seuil universel, comme #1 et #5
+    assert _composition(db, AGREGAT_PARTICIPATIONS) == {("412300", 1), ("4129", -1)}
+    assert numerateur.nets_de_provisions is True
+    assert "4129" in (numerateur.reference or "")  # approximation documentée dans l'agrégat
+    # L'ancien placeholder vide n'est plus semé.
+    assert not db.execute(
+        select(AgregatPrudentiel).where(AgregatPrudentiel.code == "PARTICIPATIONS")
+    ).first()
+
+
+def test_412300_et_4129_ont_des_prefixes_disjoints() -> None:
+    """Pas de piège 19/199 : le préfixe du brut ne ramasse pas la provision, ni l'inverse."""
+    assert not "4129".startswith("412300")
+    assert not "412300".startswith("4129")
+    with open(CSV_PLAN_B2, encoding="utf-8-sig", newline="") as f:
+        numeros = [ligne["account_number"] for ligne in csv.DictReader(f, delimiter=";")]
+    assert [n for n in numeros if n.startswith("412300")] == ["412300"]
+    assert [n for n in numeros if n.startswith("4129")] == ["4129"]
+
+
+def test_ratio_8_chiffre_conforme_a_22_pour_cent_puis_non_conforme_a_30(db: Session) -> None:
+    """Brut 30 000, provision 4129 de 8 000 -> net 22 000 ; fonds propres 100 000 -> 22 %."""
+    executer_seed_conformite(db)
+    _poser_participations(db, brut=30_000, provision=8_000)
+
+    resultat = evaluer_ratio(db, RATIO_8, AUJOURDHUI)
+
+    assert resultat.valeur_numerateur == 22_000
+    assert resultat.valeur_denominateur == 100_000
+    assert resultat.valeur_ratio_pct == 22
+    assert resultat.statut == STATUT_CONFORME
+    assert resultat.marge == 3  # 25 - 22
+    assert resultat.avertissements == ()
+
+    # Brut porté à 38 000 : net 30 000 -> 30 % > 25 %.
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "412300"), "D", 8_000),
+            LigneSaisie(_id_compte(db, "101111"), "C", 8_000),
+        ],
+        AUJOURDHUI,
+    )
+    depasse = evaluer_ratio(db, RATIO_8, AUJOURDHUI)
+
+    assert depasse.valeur_numerateur == 30_000
+    assert depasse.valeur_ratio_pct == 30
+    assert depasse.statut == STATUT_NON_CONFORME
+    assert depasse.marge == -5
+
+
+def test_ratio_8_exclut_le_bucket_sfd_et_etablissements_de_credit(db: Session) -> None:
+    """412100 (SFD + établissements de crédit) est déduit des fonds propres et exclu de #8 : le
+    poser ne change PAS le numérateur."""
+    executer_seed_conformite(db)
+    _poser_participations(db, brut=30_000, provision=8_000)
+    avant = evaluer_ratio(db, RATIO_8, AUJOURDHUI)
+    _valider_od(
+        db,
+        [
+            LigneSaisie(_id_compte(db, "412100"), "D", 50_000),
+            LigneSaisie(_id_compte(db, "101111"), "C", 50_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    apres = evaluer_ratio(db, RATIO_8, AUJOURDHUI)
+
+    assert apres.valeur_numerateur == avant.valeur_numerateur == 22_000
+
+
+def test_ratio_8_deduit_toute_la_provision_4129_meme_sans_brut(db: Session) -> None:
+    """Approximation prudente documentée : 4129 est un compte global unique, TOUTE sa provision
+    est soustraite du seul brut 412300 — le numérateur ne peut que diminuer."""
+    executer_seed_conformite(db)
+    _poser_participations(db, brut=0, provision=8_000)
+
+    assert agregat_valeur(db, AGREGAT_PARTICIPATIONS, AUJOURDHUI) == -8_000
+
+
+def test_ratios_1_et_5_ne_bougent_pas_quand_le_ratio_8_est_actif(db: Session) -> None:
+    """Risques 150 000, dépôts 100 000, réserves 50 000 : #1 = 100 % conforme sans avertissement ;
+    #5 = 0 % (aucun encours), et l'ordre des ratios actifs est #1, #5, #8."""
+    executer_seed_conformite(db)
+    credits = _id_compte(db, "202221")
+    depots = _id_compte(db, "251121")
+    reserves = _id_compte(db, "5521")
+    _valider_od(
+        db,
+        [
+            LigneSaisie(credits, "D", 150_000),
+            LigneSaisie(depots, "C", 100_000),
+            LigneSaisie(reserves, "C", 50_000),
+        ],
+        AUJOURDHUI,
+    )
+
+    resultats = {r.code: r for r in evaluer_tous(db, AUJOURDHUI)}
+
+    assert list(resultats) == [
+        "RATIO_1_COUVERTURE_RISQUES",
+        "RATIO_5_DIVISION_RISQUES",
+        RATIO_8,
+    ]
+    un = resultats["RATIO_1_COUVERTURE_RISQUES"]
+    assert (un.valeur_numerateur, un.valeur_denominateur) == (150_000, 150_000)
+    assert un.valeur_ratio_pct == 100
+    assert un.statut == STATUT_CONFORME
+    assert un.avertissements == ()
+    cinq = resultats["RATIO_5_DIVISION_RISQUES"]
+    assert (cinq.valeur_numerateur, cinq.valeur_denominateur) == (0, 50_000)
+    assert cinq.statut == STATUT_CONFORME
+
+
+def _remettre_ratio_8_a_l_etat_ancien(db: Session) -> RatioPrudentiel:
+    """Base seedée AVANT le câblage : numérateur = ancien placeholder vide, inactif, sans
+    seuil, référence d'origine."""
+    ratio = _ratio_par_code(db, RATIO_8)
+    placeholder = AgregatPrudentiel(
+        code="PARTICIPATIONS",
+        libelle="Participations hors établissements de crédit et SFD",
+        type="BALANCE",
+        is_system=True,
+    )
+    db.add(placeholder)
+    db.flush()
+    ratio.agregat_numerateur_id = placeholder.id
+    ratio.actif = False
+    ratio.reference_reglementaire = REFERENCE_REGLEMENTAIRE
+    db.execute(text("DELETE FROM conformite.ratio_seuil WHERE ratio_id = :r"), {"r": ratio.id})
+    db.flush()
+    return ratio
+
+
+def test_base_existante_est_recablee_au_rejeu_puis_idempotent(db: Session) -> None:
+    executer_seed_conformite(db)
+    ratio = _remettre_ratio_8_a_l_etat_ancien(db)
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.ratios_recables == 1
+    assert rejeu.seuils_crees == 1
+    numerateur = db.get(AgregatPrudentiel, ratio.agregat_numerateur_id)
+    assert numerateur is not None and numerateur.code == AGREGAT_PARTICIPATIONS
+    assert ratio.actif is True
+    assert "016-12-2010" in (ratio.reference_reglementaire or "")
+    assert _seuils(db, RATIO_8) == [(None, 25)]
+
+    deuxieme = executer_seed_conformite(db)
+    assert deuxieme.ratios_recables == 0
+    assert deuxieme.seuils_crees == 0
+
+
+def test_garde_ratio_8_retouche_par_un_utilisateur_n_est_pas_recable(db: Session) -> None:
+    executer_seed_conformite(db)
+    ratio = _remettre_ratio_8_a_l_etat_ancien(db)
+    ratio.updated_by = _utilisateur_id(db)
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.ratios_recables == 0
+    assert ratio.actif is False
+    assert _seuils(db, RATIO_8) == []
+
+
+def test_garde_ratio_8_avec_seuil_deja_pose_n_est_pas_recable(db: Session) -> None:
+    """Quelqu'un a commencé à le paramétrer (un seuil existe) : le seed n'y touche plus."""
+    executer_seed_conformite(db)
+    ratio = _remettre_ratio_8_a_l_etat_ancien(db)
+    db.add(RatioSeuil(ratio_id=ratio.id, categorie_sfd=None, valeur_seuil=30))
+    db.flush()
+
+    rejeu = executer_seed_conformite(db)
+
+    assert rejeu.ratios_recables == 0
+    assert ratio.actif is False
+    assert _seuils(db, RATIO_8) == [(None, 30)]  # son seuil n'est pas écrasé

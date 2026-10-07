@@ -305,10 +305,11 @@ def seed_conformite() -> None:
         typer.echo("  parametre_institution amorcé (catégorie NON_AFFILIE, à ajuster à l'écran).")
     typer.echo(
         f"  Resynchronisation : {rapport.references_resynchronisees} référence(s) + "
-        f"{rapport.libelles_resynchronises} libellé(s) resynchronisé(s)."
+        f"{rapport.libelles_resynchronises} libellé(s) resynchronisé(s) ; "
+        f"{rapport.ratios_recables} ratio(s) recâblé(s)."
     )
     typer.secho(
-        "  2 ratios actifs (#1, #5) ; 8 en attente (actif=FALSE) — voir "
+        "  3 ratios actifs (#1, #5, #8) ; 7 en attente (actif=FALSE) — voir "
         "app/cli/seed_conformite.py pour le détail des gaps.",
         fg=typer.colors.YELLOW,
     )
