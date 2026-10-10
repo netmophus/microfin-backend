@@ -91,6 +91,7 @@ def _vers_item(ligne: LigneAnnuaire) -> UtilisateurListeItem:
         last_name=user.last_name,
         first_name=user.first_name,
         agence=_agence(ligne.agence),
+        roles=[_role(role) for role in sorted(user.roles, key=lambda r: r.name)],
         is_active=user.is_active,
         is_locked=user.is_locked,
     )

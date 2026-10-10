@@ -204,6 +204,9 @@ def lister(
     lignes = db.execute(
         select(User, Agency)
         .outerjoin(Agency, User.primary_agency_id == Agency.id)
+        # Une requête groupée pour les rôles de toute la page ; explicite pour ne pas dépendre
+        # du chargement par défaut de User.roles.
+        .options(selectinload(User.roles))
         .where(*conditions)
         # Tri déterministe, id en dernier ressort : deux homonymes sans départage feraient
         # osciller l'ordre entre deux pages, donc apparaître ou disparaître des lignes.

@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 from sqlalchemy.orm import Session
 
 from app.core.database import engine, get_db
@@ -505,3 +505,52 @@ def test_la_fiche_montre_roles_et_habilitations(
     assert [role["code"] for role in corps["roles"]] == ["CAISSIER"]
     assert corps["agence_principale"]["id"] == str(decor.agence_b.id)
     assert [a["id"] for a in corps["agences_habilitees"]] == [str(decor.agence_a.id)]
+
+
+# --- rôles dans la liste -------------------------------------------------------------
+
+
+def _compter_requetes(client: TestClient, headers: dict[str, str]) -> tuple[int, dict]:
+    """Nombre d'ordres SQL émis par GET /users (authentification et autorisation comprises)."""
+    emises: list[str] = []
+
+    def _ecouter(_conn, _curseur, statement, *_args) -> None:  # type: ignore[no-untyped-def]
+        emises.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _ecouter)
+    try:
+        reponse = client.get("/users", headers=headers, params={"taille": 100})
+    finally:
+        event.remove(engine, "before_cursor_execute", _ecouter)
+    assert reponse.status_code == 200
+    return len(emises), reponse.json()
+
+
+def test_la_liste_porte_les_roles_et_un_utilisateur_sans_role_a_une_liste_vide(
+    client: TestClient, db: Session, decor: Decor, resp: dict[str, str]
+) -> None:
+    sans_role = _utilisateur(db, "Zeta", "Aucun", "CAISSIER", decor.agence_a)
+    db.execute(delete(UserRole).where(UserRole.user_id == sans_role.id))
+    db.flush()
+    db.expire_all()
+
+    corps = client.get("/users", headers=resp, params={"taille": 100}).json()
+
+    roles = {ligne["last_name"]: ligne["roles"] for ligne in corps["lignes"]}
+    assert roles["Diallo"] == [{"code": "RESPONSABLE_AGENCE", "name": "Responsable d'agence"}]
+    assert [r["code"] for r in roles["Kané"]] == ["CAISSIER"]
+    assert roles["Zeta"] == []
+
+
+def test_le_nombre_de_requetes_ne_depend_pas_du_nombre_d_utilisateurs(
+    client: TestClient, db: Session, decor: Decor, resp: dict[str, str]
+) -> None:
+    petit, corps_petit = _compter_requetes(client, resp)
+    for i in range(20):
+        _utilisateur(db, f"Masse{i:02d}", "Test", "CAISSIER", decor.agence_a)
+    db.expire_all()
+
+    grand, corps_grand = _compter_requetes(client, resp)
+
+    assert len(corps_grand["lignes"]) >= len(corps_petit["lignes"]) + 20
+    assert grand == petit

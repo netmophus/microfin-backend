@@ -81,9 +81,10 @@ class RoleBref(BaseModel):
 class UtilisateurListeItem(BaseModel):
     """Une ligne de tableau. Volontairement PLUS PAUVRE que la fiche.
 
-    Pas de rôles ici : la liste ne les affiche pas, et les charger coûterait une requête
-    par ligne. On ne paie pas ce qu'on n'affiche pas. Filtrer PAR rôle reste possible
-    (paramètre role), ce qui est une autre question que les exposer.
+    Les rôles y figurent (libellé et code) pour savoir d'un coup d'œil qui est responsable
+    d'agence ou caissier. Ils sont chargés en UNE requête groupée pour toute la page
+    (selectinload dans utilisateurs.lister), jamais une par ligne : le nombre de requêtes ne
+    dépend pas du nombre d'utilisateurs affichés.
 
     Pas de téléphone non plus : une donnée personnelle n'a pas à voyager dans un listing
     quand elle n'est utile que sur la fiche.
@@ -96,6 +97,7 @@ class UtilisateurListeItem(BaseModel):
     last_name: str
     first_name: str
     agence: AgenceBreve | None
+    roles: list[RoleBref]
     is_active: bool
     is_locked: bool
 
