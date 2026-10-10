@@ -615,14 +615,21 @@ def liberer_parts_endpoint(
     db: Annotated[Session, Depends(get_db)],
 ) -> ResultatParts:
     """Libération (paiement de parts souscrites non libérées) — le caissier encaisse.
-    D 5721 / C 1022 ; is_member bascule si le minimum libéré est atteint."""
+    D compte de la session / C 1022 ; is_member bascule si le minimum libéré est atteint.
+    Exige une session de caisse OUVERTE pour l'acteur : la CAISSE débitée est celle de SA
+    session, pas celle de l'agence."""
     try:
         resultat = liberer(db, courant, tier_id, corps.shares_count, contexte=_contexte(request))
     except PartsTierIntrouvable:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError, AucuneJourneeOuverteError) as erreur:
+    except (
+        PartsError,
+        RattachementPartsManquantError,
+        AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
+    ) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 
@@ -635,15 +642,22 @@ def rembourser_parts_endpoint(
     courant: Annotated[UtilisateurCourant, Depends(exige("tiers.shares.refund"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ResultatParts:
-    """Remboursement de parts LIBÉRÉES (départ) — le responsable. D 1021 / C 5721 : le capital
-    sort. Remboursement TOTAL -> is_member repasse à FALSE (redevient client), dans la txn."""
+    """Remboursement de parts LIBÉRÉES (départ) — le responsable. D 1021 / C compte de la
+    session : le capital sort. Exige une session de caisse OUVERTE pour l'acteur : l'argent sort
+    de SON tiroir, pas de la caisse de l'agence. Remboursement TOTAL -> is_member repasse à
+    FALSE (redevient client), dans la txn."""
     try:
         resultat = rembourser(db, courant, tier_id, corps.shares_count, contexte=_contexte(request))
     except PartsTierIntrouvable:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE
         ) from None
-    except (PartsError, RattachementPartsManquantError, AucuneJourneeOuverteError) as erreur:
+    except (
+        PartsError,
+        RattachementPartsManquantError,
+        AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
+    ) as erreur:
         raise _parts_erreur(erreur) from None
     return _resultat_parts(resultat)
 

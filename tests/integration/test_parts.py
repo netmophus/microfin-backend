@@ -20,13 +20,23 @@ from app.core.database import engine
 from app.core.engagements import verificateurs_enregistres
 from app.modules.audit.service import CONTEXTE_VIDE
 from app.modules.caisse.models import Poste, PosteAssignation
-from app.modules.caisse.service import ouvrir_session
+from app.modules.caisse.service import (
+    AucuneSessionOuverteError,
+    calculer_solde_theorique,
+    ouvrir_session,
+    resoudre_session_active,
+)
 from app.modules.comptabilite import journee
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers import parts, parts_parametres
 from app.modules.tiers.cycle_de_vie import EngagementsOuvertsError, executer_transition
 from app.modules.tiers.parts_engagements import verifier_engagements_parts
+from app.modules.tiers.parts_operations import (
+    TYPE_LIBERATION,
+    RattachementPartsManquantError,
+    poser_ecriture_parts,
+)
 from app.modules.tiers.parts_rapprochement import rapprocher_capital_libere
 
 pytestmark = pytest.mark.integration
@@ -90,9 +100,15 @@ def _cadre(
     unit_value: int = 5000,
     minimum: int = 1,
     membership_on: str = "liberation",
+    avec_session: bool = True,
+    compte_poste: str = "101111",
 ) -> tuple[UtilisateurCourant, uuid.UUID]:
     """Agence + tier ACTIF + config de parts (provisoire, valeurs de test). Committé (au savepoint)
-    pour que le test d'interruption puisse rollback la SEULE opération, pas le décor."""
+    pour que le test d'interruption puisse rollback la SEULE opération, pas le décor.
+
+    `compte_poste` : compte de caisse du POSTE (donc ancré par la session) ; l'agence garde
+    toujours 101111 — un compte différent prouve que l'opération suit la session, pas l'agence.
+    `avec_session=False` : l'acteur n'a aucune session ouverte."""
     agence = Agency(code=f"AGP-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "101111"))
     db.add(agence)
     db.flush()
@@ -129,15 +145,16 @@ def _cadre(
     # Poste + session de caisse OUVERTE pour l'acteur (Bloc C3) : la souscription au comptant
     # exige désormais SA session, plus la seule agence — même compte que l'ancien
     # Agency.compte_caisse_id, miroir du backfill de la migration 0041.
-    poste = Poste(
-        agency_id=agence.id, code="01", libelle="Caisse principale",
-        compte_caisse_id=agence.compte_caisse_id,
-    )
-    db.add(poste)
-    db.flush()
-    db.add(PosteAssignation(poste_id=poste.id, user_id=courant.user_id))
-    db.flush()
-    ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+    if avec_session:
+        poste = Poste(
+            agency_id=agence.id, code="01", libelle="Caisse principale",
+            compte_caisse_id=_cid(db, compte_poste),
+        )
+        db.add(poste)
+        db.flush()
+        db.add(PosteAssignation(poste_id=poste.id, user_id=courant.user_id))
+        db.flush()
+        ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
     db.commit()
     return courant, tier_id
 
@@ -464,3 +481,122 @@ def test_remboursement_interrompu_ne_laisse_rien(
     assert liberees == 10
     assert nb_remb == 0
     assert _est_membre(db, tier_id) is True
+
+
+# --- Règle : toute opération d'espèces passe par la session de caisse OUVERTE de l'acteur -------
+
+COMPTE_AGENCE = "101111"
+COMPTE_SESSION = "1T9111"
+
+
+def _creer_compte_session(db: Session) -> None:
+    """Un compte de caisse de poste DISTINCT de celui de l'agence (101111) : si une opération
+    imputait encore l'agence, le test le verrait."""
+    db.execute(
+        text(
+            "INSERT INTO comptabilite.accounts "
+            "(account_number, name, account_class, normal_side, is_posting) "
+            "VALUES (:n, 'Caisse de poste (test)', 1, 'D', TRUE)"
+        ),
+        {"n": COMPTE_SESSION},
+    )
+
+
+def _nb_mouvements(db: Session, tier_id: uuid.UUID) -> int:
+    return db.execute(
+        text("SELECT count(*) FROM tiers.share_subscriptions WHERE tier_id = :t"), {"t": tier_id}
+    ).scalar_one()
+
+
+def _solde_session(db: Session, courant: UtilisateurCourant) -> int:
+    return calculer_solde_theorique(db, resoudre_session_active(db, courant.user_id))
+
+
+def test_liberation_sans_session_refusee_et_rien_ecrit(db: Session) -> None:
+    courant, tier_id = _cadre(db, "LS", avec_session=False)
+    parts.souscrire(db, courant, tier_id, 4, comptant=False)  # sans espèces : sans session
+    avant = _nb_mouvements(db, tier_id)
+
+    with pytest.raises(AucuneSessionOuverteError):
+        parts.liberer(db, courant, tier_id, 4)
+
+    db.rollback()
+    assert _nb_mouvements(db, tier_id) == avant
+    assert _lignes(db, tier_id, "liberation") == set()
+    assert _est_membre(db, tier_id) is False
+
+
+def test_liberation_avec_session_debite_le_compte_de_la_session_pas_l_agence(db: Session) -> None:
+    _creer_compte_session(db)
+    courant, tier_id = _cadre(db, "LA", compte_poste=COMPTE_SESSION)
+    parts.souscrire(db, courant, tier_id, 4, comptant=False)
+    avant = _solde_session(db, courant)
+
+    parts.liberer(db, courant, tier_id, 4)
+
+    lignes = _lignes(db, tier_id, "liberation")
+    assert lignes == {(COMPTE_SESSION, "D", 20000), ("571121", "C", 20000)}
+    assert all(numero != COMPTE_AGENCE for numero, _, _ in lignes)
+    assert _solde_session(db, courant) == avant + 20000
+
+
+def test_remboursement_sans_session_refuse_et_rien_ecrit(db: Session) -> None:
+    courant, tier_id = _cadre(db, "RS", avec_session=False)
+    # Capital libéré posé sans passer par la caisse : seul le cache compte pour ce test.
+    db.execute(
+        text("INSERT INTO tiers.member_shares (tier_id, shares_liberees) VALUES (:t, 10)"),
+        {"t": tier_id},
+    )
+    db.commit()
+
+    with pytest.raises(AucuneSessionOuverteError):
+        parts.rembourser(db, courant, tier_id, 10)
+
+    db.rollback()
+    assert _nb_mouvements(db, tier_id) == 0
+    liberees = db.execute(
+        text("SELECT shares_liberees FROM tiers.member_shares WHERE tier_id = :t"), {"t": tier_id}
+    ).scalar_one()
+    assert liberees == 10
+
+
+def test_remboursement_avec_session_credite_le_compte_de_la_session_et_baisse_son_solde(
+    db: Session,
+) -> None:
+    _creer_compte_session(db)
+    courant, tier_id = _cadre(db, "RV", compte_poste=COMPTE_SESSION)
+    parts.souscrire(db, courant, tier_id, 10, comptant=True)  # +50 000 dans le tiroir
+    assert _solde_session(db, courant) == 50000
+
+    parts.rembourser(db, courant, tier_id, 4)  # 4 x 5000 = 20 000 qui sortent
+
+    lignes = _lignes(db, tier_id, "remboursement")
+    assert lignes == {("571111", "D", 20000), (COMPTE_SESSION, "C", 20000)}
+    assert all(numero != COMPTE_AGENCE for numero, _, _ in lignes)
+    assert _solde_session(db, courant) == 30000  # le solde théorique de la session a baissé
+
+
+def test_operations_sans_especes_n_exigent_aucune_session(db: Session) -> None:
+    courant, tier_id = _cadre(db, "SE", avec_session=False)
+
+    r1 = parts.souscrire(db, courant, tier_id, 6, comptant=False)  # D 1022 / C 1021
+    r2 = parts.annuler_souscription(db, courant, tier_id, 6)  # D 1021 / C 1022
+
+    assert (r1.shares_non_liberees, r2.shares_non_liberees) == (6, 0)
+    assert _lignes(db, tier_id, "souscription") == {("571121", "D", 30000), ("571111", "C", 30000)}
+    assert _lignes(db, tier_id, "annulation") == {("571111", "D", 30000), ("571121", "C", 30000)}
+
+
+def test_une_operation_d_especes_sans_compte_ancre_ne_retombe_pas_sur_l_agence(
+    db: Session,
+) -> None:
+    """Le garde-fou de `_resolveur` : un futur appelant qui oublierait `compte_caisse_id` doit
+    échouer, pas imputer silencieusement le compte de l'agence."""
+    courant, _ = _cadre(db, "GF")
+
+    with pytest.raises(RattachementPartsManquantError, match="sans compte de caisse ancré"):
+        poser_ecriture_parts(
+            db, TYPE_LIBERATION, 5000, courant.user_id, agency_id=courant.agency_id,
+            compte_liberees_id=_cid(db, "571111"), compte_non_liberees_id=_cid(db, "571121"),
+            libelle="garde-fou",
+        )

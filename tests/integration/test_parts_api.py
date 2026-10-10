@@ -195,6 +195,7 @@ def test_liberation_par_caissier_apres_engagement_rend_membre(
     agence, tier_id = _cadre(db, "L1")
     charge = _entete(db, agence, "CHARGE_CLIENTELE")
     caissier = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, caissier)  # la libération encaisse : session exigée
 
     client.post(f"/tiers/{tier_id}/parts/souscription", json={"shares_count": 3}, headers=charge)
     reponse = client.post(
@@ -270,3 +271,26 @@ def test_charge_ne_peut_pas_rembourser_403(client: TestClient, db: Session) -> N
         f"/tiers/{tier_id}/parts/remboursement", json={"shares_count": 5}, headers=charge
     )
     assert reponse.status_code == 403
+
+
+def test_liberation_et_remboursement_sans_session_refuses_422(
+    client: TestClient, db: Session
+) -> None:
+    agence, tier_id = _cadre(db, "SS")
+    charge = _entete(db, agence, "CHARGE_CLIENTELE")
+    caissier = _entete(db, agence, "CAISSIER")  # aucune session ouverte
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")  # idem
+    client.post(f"/tiers/{tier_id}/parts/souscription", json={"shares_count": 3}, headers=charge)
+
+    liberation = client.post(
+        f"/tiers/{tier_id}/parts/liberation", json={"shares_count": 3}, headers=caissier
+    )
+    remboursement = client.post(
+        f"/tiers/{tier_id}/parts/remboursement", json={"shares_count": 3}, headers=resp
+    )
+
+    assert liberation.status_code == 422
+    assert "session de caisse" in liberation.json()["detail"]
+    assert remboursement.status_code == 422
+    assert "session de caisse" in remboursement.json()["detail"]
+

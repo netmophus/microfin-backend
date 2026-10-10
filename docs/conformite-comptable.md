@@ -468,6 +468,33 @@ libérée, une créance — motif « capital souscrit appelé / non appelé »).
 `571111 - 571121` = `Σ(crédit - débit)` sur les deux comptes (et, pour l'historique, `57111 -
 57112`). La libération crédite 571121 (la créance s'éteint) → le net monte. Un écart = anomalie.
 
+**Espèces des parts : toujours la session de caisse de l'acteur (10/10/2026).** Constat sur
+MIZNAS : une caissière encaisse 50 000 parts au lieu de 5 000 (erreur de frappe) ; le
+remboursement correctif de 45 000 parts aurait crédité 101111 (compte de l'agence) au lieu du
+compte du poste, laissant la caisse du poste surévaluée et 101111 négatif. Cause : seule la
+souscription au comptant était ancrée sur la session (Bloc C3) ; libération et remboursement
+retombaient sur `agency.compte_caisse_id`. Règle désormais : **toute opération de parts qui
+touche des espèces** (souscription au comptant, libération, remboursement) exige une session de
+caisse OUVERTE de l'acteur et impute le compte ANCRÉ de cette session ; sans session, refus
+(`AucuneSessionOuverteError`, 422 « Aucune session de caisse ouverte… »), rien n'est écrit. Le
+repli sur le compte de l'agence est supprimé de `parts_operations._resolveur` : une opération
+d'espèces sans compte ancré lève `RattachementPartsManquantError`. Inchangées, sans session : la
+souscription différée (D 571121 / C 571111) et l'annulation (D 571111 / C 571121), qui ne
+touchent aucune espèce.
+
+| Opération | CAISSE imputée | Session exigée |
+|-----------|----------------|----------------|
+| Souscription au comptant | compte de la session (D) | oui |
+| Libération | compte de la session (D) | oui |
+| Remboursement | compte de la session (C) | oui |
+| Souscription différée, annulation | aucune | non |
+
+Conséquence d'exploitation : le **remboursement sort de l'argent du tiroir de celui qui l'exécute**
+(le solde théorique de SA session baisse). Le responsable qui rembourse doit donc avoir ouvert
+une session de caisse, avec les espèces nécessaires. La permission `tiers.shares.refund` reste
+au responsable. Le solde théorique est calculé depuis le grand livre (compte ancré, écritures
+du caissier de la session) : aucun mouvement de caisse séparé n'est enregistré.
+
 ## Amorçage d'une installation neuve (02/10/2026)
 
 Après `alembic upgrade head` + `seed-security` + `creer-admin` + `import-plan-comptable` +

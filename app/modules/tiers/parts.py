@@ -401,10 +401,14 @@ def liberer(
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> ResultatParts:
     """Libère (paie) des parts souscrites non libérées -> D CAISSE / C 1022. Le capital devient
-    réel ; is_member bascule si le minimum libéré est atteint (paramètre 'liberation')."""
+    réel ; is_member bascule si le minimum libéré est atteint (paramètre 'liberation').
+    CAISSE = celle de la session de caisse OUVERTE de l'acteur (compte ANCRÉ à l'ouverture),
+    jamais celle de l'agence ; sans session ouverte, refus — rien n'est écrit."""
+    compte_caisse_id = resoudre_session_active(db, courant.user_id).compte_caisse_id
     return _operer(
         db, courant, tier_id, shares_count,
-        code_operation=TYPE_LIBERATION, action_audit=ActionsAudit.LIBERATION, contexte=contexte,
+        code_operation=TYPE_LIBERATION, action_audit=ActionsAudit.LIBERATION,
+        compte_caisse_id=compte_caisse_id, contexte=contexte,
     )
 
 
@@ -419,11 +423,14 @@ def rembourser(
     """Rembourse des parts LIBÉRÉES (départ du sociétaire) -> D 1021 / C CAISSE, le capital sort.
     Refusé si les parts ne sont pas remboursables (statuts). Le marqueur suit : sous le minimum
     libéré, is_member repasse à FALSE (redevient client) — remboursement TOTAL = sortie complète.
-    N'exige PAS un membre actif : un membre suspendu doit pouvoir récupérer son capital."""
+    N'exige PAS un membre actif : un membre suspendu doit pouvoir récupérer son capital.
+    CAISSE = celle de la session de caisse OUVERTE de l'acteur (compte ANCRÉ à l'ouverture),
+    jamais celle de l'agence : l'argent sort de SON tiroir ; sans session ouverte, refus."""
+    compte_caisse_id = resoudre_session_active(db, courant.user_id).compte_caisse_id
     return _operer(
         db, courant, tier_id, shares_count,
         code_operation=TYPE_REMBOURSEMENT, action_audit=ActionsAudit.REMBOURSEMENT,
-        exiger_actif=False, contexte=contexte,
+        exiger_actif=False, compte_caisse_id=compte_caisse_id, contexte=contexte,
     )
 
 

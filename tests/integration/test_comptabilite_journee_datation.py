@@ -337,6 +337,7 @@ def test_operation_de_parts_porte_la_date_de_la_journee(db: Session) -> None:
         compte_liberees_id=_cid(db, "571111"),
         compte_non_liberees_id=_cid(db, "571121"),
         libelle="Test lot3 parts",
+        compte_caisse_id=_cid(db, "101111"),
     )
     assert entry.entry_date == JOURNEE_DATE
 
