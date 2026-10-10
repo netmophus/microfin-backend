@@ -267,3 +267,70 @@ def modifier_mapping(
     ligne.updated_by = par
     db.flush()
     return ligne
+
+
+# --- Héritage du mapping à la création d'un compte --------------------------------------------
+# Un compte créé à l'écran n'a aucune ligne de mapping (le seed ne lit que le CSV) : il sortirait
+# du bilan. Il hérite donc de la ligne de son parent — même esprit que l'héritage du sens.
+
+
+@dataclass(frozen=True)
+class RapportRattrapageMapping:
+    crees: list[tuple[str, str, str]]  # (compte, parent, poste)
+    ignores: list[tuple[str, str]]  # (compte, motif)
+
+
+def _copier_mapping(
+    db: Session, compte_id: uuid.UUID, modele: FinancialStatementMapping, par: uuid.UUID | None
+) -> None:
+    # gere_manuellement reste FALSE : le seed et l'écran d'admin gardent le droit de l'ajuster.
+    db.add(
+        FinancialStatementMapping(
+            account_id=compte_id,
+            etat=modele.etat,
+            masse=modele.masse,
+            poste_libelle=modele.poste_libelle,
+            poste_ordre=modele.poste_ordre,
+            gere_manuellement=False,
+            created_by=par,
+            updated_by=par,
+        )
+    )
+
+
+def heriter_mapping_du_parent(db: Session, compte: Account, par: uuid.UUID | None) -> str:
+    """Donne au compte la ligne de mapping de son parent, si le parent en a une. Rend la mention
+    d'audit. Aucune ligne n'est devinée si le parent n'est pas mappé."""
+    parent = db.get(Account, compte.parent_id) if compte.parent_id is not None else None
+    modele = db.get(FinancialStatementMapping, parent.id) if parent is not None else None
+    if parent is None or modele is None:
+        return "sans mapping (parent non mappé)"
+    _copier_mapping(db, compte.id, modele, par)
+    db.flush()
+    return f"mapping hérité de {parent.account_number} : {modele.poste_libelle}"
+
+
+def rattraper_mapping_orphelins(
+    db: Session, par: uuid.UUID | None = None
+) -> RapportRattrapageMapping:
+    """Applique la règle d'héritage aux comptes déjà en base sans mapping. Parents traités avant
+    leurs enfants (ordre de numéro) : une chaîne d'orphelins se mappe d'un seul passage."""
+    orphelins = db.execute(
+        select(Account)
+        .outerjoin(FinancialStatementMapping, FinancialStatementMapping.account_id == Account.id)
+        .where(FinancialStatementMapping.account_id.is_(None))
+        .order_by(Account.account_number)
+    ).scalars().all()
+    crees: list[tuple[str, str, str]] = []
+    ignores: list[tuple[str, str]] = []
+    for compte in orphelins:
+        parent = db.get(Account, compte.parent_id) if compte.parent_id is not None else None
+        modele = db.get(FinancialStatementMapping, parent.id) if parent is not None else None
+        if parent is None or modele is None:
+            motif = "sans parent" if parent is None else f"parent {parent.account_number} non mappé"
+            ignores.append((compte.account_number, motif))
+            continue
+        _copier_mapping(db, compte.id, modele, par)
+        db.flush()
+        crees.append((compte.account_number, parent.account_number, modele.poste_libelle))
+    return RapportRattrapageMapping(crees=crees, ignores=ignores)

@@ -45,6 +45,7 @@ from app.core.database import SessionLocal
 from app.modules.audit import models as _audit_models  # noqa: F401
 from app.modules.caisse import models as _caisse_models  # noqa: F401
 from app.modules.comptabilite import models as _comptabilite_models  # noqa: F401
+from app.modules.comptabilite.etats_financiers import rattraper_mapping_orphelins
 from app.modules.comptabilite.plan import (
     FichierInvalideError,
     ImportRefuseError,
@@ -234,6 +235,33 @@ def seed_epargne() -> None:
     typer.secho(
         "  PROVISOIRES — à valider/compléter par l'IMF (taux, règles).", fg=typer.colors.YELLOW
     )
+    typer.echo("")
+
+
+@app.command("rattraper-mapping-orphelins")
+def rattraper_mapping_orphelins_cmd(
+    appliquer: Annotated[
+        bool, typer.Option("--appliquer", help="Écrit les lignes (sinon : simulation).")
+    ] = False,
+) -> None:
+    """Donne à chaque compte sans mapping la ligne de son parent, si le parent est mappé (même
+    règle que la création à l'écran). Simulation par défaut ; --appliquer pour écrire."""
+    with SessionLocal() as db:
+        rapport = rattraper_mapping_orphelins(db)
+        if appliquer:
+            db.commit()
+        else:
+            db.rollback()
+    typer.echo("")
+    for numero, parent, poste in rapport.crees:
+        typer.echo(f"  {numero}  <-  {parent}  ({poste})")
+    typer.secho(
+        f"  {len(rapport.crees)} ligne(s) {'créée(s)' if appliquer else 'à créer'} ; "
+        f"{len(rapport.ignores)} compte(s) ignoré(s) (sans parent ou parent non mappé).",
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    typer.echo("  Écrit." if appliquer else "  Simulation — rien n'a été écrit (--appliquer).")
     typer.echo("")
 
 

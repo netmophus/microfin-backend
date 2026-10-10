@@ -277,6 +277,25 @@ vérifiés) à reposer sur une hypothèse plutôt qu'une correspondance mécaniq
 l'extraction (classes 1, 3 à 7, Annexes 2 et 3) est disponible dans le dépôt de travail, sans point
 en suspens.
 
+### Mapping des états financiers : héritage à la création d'un compte (10/10/2026)
+
+Le mapping (`comptabilite.financial_statement_mapping`, une ligne par compte) n'était créé que par
+`seed-mapping-etats` depuis le CSV ; l'écran d'admin ne faisait que modifier. Un compte créé à
+l'écran (coffre, caisse principale, guichets d'une institution) n'avait donc aucune ligne et sortait
+du bilan (« non mappé »).
+
+- **Règle** : à la création (`comptes.creer()`, même transaction que le compte), si le parent a une
+  ligne de mapping, le nouveau compte en hérite (`etat`, `masse`, `poste_libelle`, `poste_ordre`)
+  avec `gere_manuellement = FALSE` : le seed et l'écran d'admin gardent le droit de l'ajuster (un
+  PATCH écran la passe à `TRUE`, comme toute ligne). Parent non mappé : **aucune ligne n'est
+  devinée**.
+- **Audit** : l'entrée `compta.plan.created` porte `mapping` = « mapping hérité de <parent> :
+  <poste> » ou « sans mapping (parent non mappé) ».
+- **Rattrapage de l'existant** : `python -m app.cli rattraper-mapping-orphelins` applique la même
+  règle à tous les comptes déjà sans mapping dont le parent est mappé (parents traités avant leurs
+  enfants). Simulation par défaut ; `--appliquer` pour écrire. Rapport : lignes créées / comptes
+  ignorés (sans parent ou parent non mappé). Idempotente.
+
 ## Les schémas d'écriture (E1, paramétrables — POSÉS, provisoires)
 
 Pour **chaque opération**, quels comptes sont débités / crédités. Le moteur (poser une écriture

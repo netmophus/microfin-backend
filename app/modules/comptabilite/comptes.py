@@ -26,6 +26,7 @@ from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.comptabilite.etats_financiers import heriter_mapping_du_parent
 from app.modules.comptabilite.models import Account
 from app.modules.comptabilite.service import compte_a_des_ecritures
 from app.modules.comptabilite.service import desactiver as _desactiver_service
@@ -181,6 +182,8 @@ def creer(
     )
     db.add(compte)
     db.flush()
+    # Même transaction que le compte : jamais un compte sans sa ligne de mapping (ou l'inverse).
+    mapping = heriter_mapping_du_parent(db, compte, par)
 
     ecrire_audit(
         db,
@@ -196,6 +199,7 @@ def creer(
             "normal_side": normal_side,
             "is_posting": is_posting,
             "parent_number": parent_number,
+            "mapping": mapping,
         },
     )
     return compte
