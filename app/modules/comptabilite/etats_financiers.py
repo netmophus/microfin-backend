@@ -35,6 +35,7 @@ from datetime import date
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.comptabilite import affectation_resultat, rapports
 from app.modules.comptabilite.models import Account, Exercice, FinancialStatementMapping
 
@@ -224,6 +225,30 @@ def compte_resultat(db: Session, exercice: Exercice) -> CompteResultat:
 # (voir seed_financial_statement_mapping.py) : le prochain seed ne réécrira plus cette ligne.
 
 
+RESSOURCE_MAPPING = "comptabilite.financial_statement_mapping"
+
+
+class MappingExistantError(Exception):
+    """Ce compte porte déjà une ligne de mapping."""
+
+
+class CompteIntrouvableError(Exception):
+    """Le compte à ranger n'existe pas."""
+
+
+class CompteRegroupementError(Exception):
+    """Seuls les comptes de saisie portent un solde, donc un poste."""
+
+
+def _valeurs_mapping(ligne: FinancialStatementMapping) -> dict[str, object]:
+    return {
+        "etat": ligne.etat,
+        "masse": ligne.masse,
+        "poste_libelle": ligne.poste_libelle,
+        "poste_ordre": ligne.poste_ordre,
+    }
+
+
 class MappingIntrouvableError(Exception):
     """Pas de ligne de mapping pour ce compte — le seed n'a jamais été joué, ou l'id est faux."""
 
@@ -252,6 +277,7 @@ def modifier_mapping(
     poste_libelle: str,
     poste_ordre: int,
     par: uuid.UUID | None,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> FinancialStatementMapping:
     """Ajuste une ligne À LA MAIN — pose `gere_manuellement = TRUE`, verrouillée contre le seed
     jusqu'à une future réinitialisation (pas codée dans ce lot, voir security.roles pour le
@@ -259,6 +285,7 @@ def modifier_mapping(
     ligne = db.get(FinancialStatementMapping, account_id)
     if ligne is None:
         raise MappingIntrouvableError(f"aucune ligne de mapping pour le compte {account_id}.")
+    avant = _valeurs_mapping(ligne)
     ligne.etat = etat
     ligne.masse = masse
     ligne.poste_libelle = poste_libelle
@@ -266,6 +293,16 @@ def modifier_mapping(
     ligne.gere_manuellement = True
     ligne.updated_by = par
     db.flush()
+    ecrire_audit(
+        db,
+        action="compta.mapping.updated",
+        contexte=contexte,
+        acteur_id=par,
+        resource_type=RESSOURCE_MAPPING,
+        resource_id=account_id,
+        old_values=avant,
+        new_values=_valeurs_mapping(ligne),
+    )
     return ligne
 
 
@@ -334,3 +371,76 @@ def rattraper_mapping_orphelins(
         db.flush()
         crees.append((compte.account_number, parent.account_number, modele.poste_libelle))
     return RapportRattrapageMapping(crees=crees, ignores=ignores)
+
+
+def creer_mapping(
+    db: Session,
+    account_id: uuid.UUID,
+    *,
+    etat: str,
+    masse: str,
+    poste_libelle: str,
+    poste_ordre: int,
+    par: uuid.UUID | None,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> FinancialStatementMapping:
+    """Range à la main un compte sans mapping. `gere_manuellement = TRUE` : c'est un choix humain,
+    le seed ne doit pas l'écraser."""
+    compte = db.get(Account, account_id)
+    if compte is None:
+        raise CompteIntrouvableError(f"compte {account_id} introuvable.")
+    if not compte.is_posting:
+        raise CompteRegroupementError(
+            "Ce compte est un regroupement : seuls les comptes de saisie portent un poste."
+        )
+    if db.get(FinancialStatementMapping, account_id) is not None:
+        raise MappingExistantError("Ce compte est déjà mappé — utilisez Modifier.")
+    ligne = FinancialStatementMapping(
+        account_id=account_id,
+        etat=etat,
+        masse=masse,
+        poste_libelle=poste_libelle,
+        poste_ordre=poste_ordre,
+        gere_manuellement=True,
+        created_by=par,
+        updated_by=par,
+    )
+    db.add(ligne)
+    db.flush()
+    ecrire_audit(
+        db,
+        action="compta.mapping.created",
+        contexte=contexte,
+        acteur_id=par,
+        resource_type=RESSOURCE_MAPPING,
+        resource_id=account_id,
+        new_values={**_valeurs_mapping(ligne), "origine": "saisie manuelle"},
+    )
+    return ligne
+
+
+@dataclass(frozen=True)
+class CompteOrphelin:
+    compte: Account
+    parent: Account | None
+    mapping_parent: FinancialStatementMapping | None
+
+
+def lister_orphelins(db: Session) -> list[CompteOrphelin]:
+    """Comptes de saisie actifs sans ligne de mapping, avec le parent et son poste s'il existe."""
+    comptes = db.execute(
+        select(Account)
+        .outerjoin(FinancialStatementMapping, FinancialStatementMapping.account_id == Account.id)
+        .where(
+            FinancialStatementMapping.account_id.is_(None),
+            Account.is_posting.is_(True),
+            Account.is_active.is_(True),
+        )
+        .order_by(Account.account_number)
+    ).scalars()
+    resultat: list[CompteOrphelin] = []
+    for compte in comptes:
+        parent = db.get(Account, compte.parent_id) if compte.parent_id is not None else None
+        modele = db.get(FinancialStatementMapping, parent.id) if parent is not None else None
+        resultat.append(CompteOrphelin(compte=compte, parent=parent, mapping_parent=modele))
+    return resultat

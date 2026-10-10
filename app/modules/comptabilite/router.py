@@ -119,6 +119,7 @@ from app.modules.comptabilite.schemas import (
     CompteApercuSchema,
     CompteDetail,
     CompteNonMappeSchema,
+    CompteOrphelinMapping,
     CompteRapport,
     CompteResultatSchema,
     CompteResume,
@@ -128,6 +129,7 @@ from app.modules.comptabilite.schemas import (
     CreationCompte,
     CreationEcritureOD,
     CreationJourFerie,
+    CreationMapping,
     DesactivationCompte,
     DiffChampSchema,
     EcritureODDetail,
@@ -1139,6 +1141,7 @@ def compte_resultat_endpoint(
 
 
 MESSAGE_MAPPING_INTROUVABLE = "Aucune ligne de mapping pour ce compte."
+MESSAGE_COMPTE_A_RANGER_INTROUVABLE = "Ce compte n'existe pas."
 
 
 def _vers_ligne_mapping(compte: Account, mapping: FinancialStatementMapping) -> LigneMappingAdmin:
@@ -1169,10 +1172,76 @@ def lister_mapping_endpoint(
     ]
 
 
+@router.get("/etats/mapping/orphelins", response_model=list[CompteOrphelinMapping])
+def lister_orphelins_mapping_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[CompteOrphelinMapping]:
+    """Comptes de saisie actifs sans poste : ils sortiraient du bilan."""
+    resultat: list[CompteOrphelinMapping] = []
+    for o in etats_financiers.lister_orphelins(db):
+        modele = o.mapping_parent
+        resultat.append(
+            CompteOrphelinMapping.model_validate(
+                {
+                    "account_id": o.compte.id,
+                    "account_number": o.compte.account_number,
+                    "name": o.compte.name,
+                    "account_class": o.compte.account_class,
+                    "parent_number": o.parent.account_number if o.parent else None,
+                    "parent_etat": modele.etat if modele else None,
+                    "parent_masse": modele.masse if modele else None,
+                    "parent_poste_libelle": modele.poste_libelle if modele else None,
+                    "parent_poste_ordre": modele.poste_ordre if modele else None,
+                }
+            )
+        )
+    return resultat
+
+
+@router.post(
+    "/etats/mapping", response_model=LigneMappingAdmin, status_code=status.HTTP_201_CREATED
+)
+def creer_mapping_endpoint(
+    corps: CreationMapping,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> LigneMappingAdmin:
+    """Range un compte sans poste. Verrouillé contre le seed (gere_manuellement = TRUE)."""
+    try:
+        mapping = etats_financiers.creer_mapping(
+            db,
+            corps.account_id,
+            etat=corps.etat,
+            masse=corps.masse,
+            poste_libelle=corps.poste_libelle,
+            poste_ordre=corps.poste_ordre,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+        db.commit()
+    except etats_financiers.CompteIntrouvableError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_A_RANGER_INTROUVABLE
+        ) from erreur
+    except etats_financiers.CompteRegroupementError as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    except etats_financiers.MappingExistantError as erreur:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(erreur)) from erreur
+    compte = db.get(Account, corps.account_id)
+    assert compte is not None
+    return _vers_ligne_mapping(compte, mapping)
+
+
 @router.patch("/etats/mapping/{account_id}", response_model=LigneMappingAdmin)
 def modifier_mapping_endpoint(
     account_id: uuid.UUID,
     corps: ModificationMapping,
+    request: Request,
     courant: Annotated[UtilisateurCourant, Depends(exige("compta.plan.manage"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> LigneMappingAdmin:
@@ -1186,6 +1255,7 @@ def modifier_mapping_endpoint(
             poste_libelle=corps.poste_libelle,
             poste_ordre=corps.poste_ordre,
             par=courant.user_id,
+            contexte=_contexte(request),
         )
         db.commit()
     except etats_financiers.MappingIntrouvableError as erreur:

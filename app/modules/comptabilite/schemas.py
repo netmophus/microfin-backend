@@ -475,3 +475,22 @@ class ModificationMapping(BaseModel):
     masse: Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT", "MIXTE"]
     poste_libelle: str = Field(min_length=1, max_length=200)
     poste_ordre: int = Field(ge=0, le=32767)
+
+
+class CreationMapping(ModificationMapping):
+    account_id: uuid.UUID
+
+
+class CompteOrphelinMapping(BaseModel):
+    """Compte de saisie sans poste ; les champs parent_* disent ce que le rangement proposerait
+    (hériter du parent) quand le parent est mappé."""
+
+    account_id: uuid.UUID
+    account_number: str
+    name: str
+    account_class: int
+    parent_number: str | None
+    parent_etat: Literal["BILAN", "RESULTAT"] | None
+    parent_masse: Literal["ACTIF", "PASSIF", "CONTRA_ACTIF", "CHARGE", "PRODUIT", "MIXTE"] | None
+    parent_poste_libelle: str | None
+    parent_poste_ordre: int | None
