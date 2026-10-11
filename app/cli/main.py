@@ -19,6 +19,7 @@ from app.cli.seed_comptabilite import (
     seed_parametres_parts,
 )
 from app.cli.seed_conformite import executer_seed_conformite
+from app.cli.seed_conformite_lbcft import SEUIL_PROVISOIRE, executer_seed_lbcft
 from app.cli.seed_credit import executer_seed_paliers_souffrance, executer_seed_produits_credit
 from app.cli.seed_dev import (
     MOT_DE_PASSE_DEV,
@@ -312,6 +313,28 @@ def seed_credit() -> None:
         "  PROVISOIRE — taux/seuils de démonstration, comptes non rattachés, à valider par l'IMF.",
         fg=typer.colors.YELLOW,
     )
+    typer.echo("")
+
+
+@app.command("seed-conformite-lbcft")
+def seed_conformite_lbcft() -> None:
+    """Installe le seuil de bénéficiaire effectif LBC/FT (25 %, PROVISOIRE). Idempotente : une
+    valeur déjà en place n'est jamais réécrite."""
+    with SessionLocal() as db:
+        cree = executer_seed_lbcft(db)
+        db.commit()
+    typer.echo("")
+    if cree:
+        typer.secho(
+            f"  Seuil de bénéficiaire effectif installé : {SEUIL_PROVISOIRE} % (PROVISOIRE).",
+            fg=typer.colors.GREEN,
+            bold=True,
+        )
+        typer.secho(
+            "  À confirmer sur la loi uniforme LBC/FT de l'UEMOA.", fg=typer.colors.YELLOW
+        )
+    else:
+        typer.echo("  Seuil de bénéficiaire effectif déjà en place : rien à faire.")
     typer.echo("")
 
 

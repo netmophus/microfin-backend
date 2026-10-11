@@ -24,7 +24,7 @@ sans la grille ni le code de l'époque. `is_provisional` de la grille y est GEL�
 """
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.comptabilite.journee import journee_de_reference
 from app.modules.parameters.models import (
     Country,
     KycRiskGrid,
@@ -40,7 +41,13 @@ from app.modules.parameters.models import (
     SecteurActivite,
 )
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.tiers.models import IndividualProfile, RiskAssessment, Tier
+from app.modules.tiers.models import (
+    IndividualProfile,
+    RiskAssessment,
+    Tier,
+    TierRelatedPerson,
+    liens_en_cours,
+)
 
 SCHEMA_SNAPSHOT = 1
 
@@ -358,6 +365,153 @@ def extraire_entrees(db: Session, tier: Tier) -> EntreeRisque:
     )
 
 
+# --- personnes morales et groupements : risque HÉRITÉ des personnes liées ---------------
+#
+# RÈGLE PROVISOIRE (à définir avec l'expert) : le niveau d'une PM ou d'un groupement est le plus
+# haut niveau parmi ses personnes liées EN COURS (une PPE au bureau relève donc la PM). Les
+# critères propres aux PM (secteur, pays, structure du capital) ne sont pas encore modélisés.
+# Aucune personne liée évaluée -> pas de score : le gate d'activation réclame un représentant légal.
+
+REGLE_PM_HERITEE = "pm_heritee"
+_LABEL_NIVEAU = {"faible": "faible", "moyen": "moyen", "eleve": "élevé"}
+_LABEL_ROLE = {
+    "representant_legal": "représentant légal",
+    "dirigeant": "dirigeant",
+    "membre_bureau": "membre du bureau",
+    "beneficiaire_effectif": "bénéficiaire effectif",
+    "signataire": "signataire",
+}
+
+
+def _couperet_actif(db: Session, tier_id: uuid.UUID) -> bool:
+    """La dernière évaluation archivée de la personne porte-t-elle un couperet ?"""
+    return bool(
+        db.execute(
+            select(RiskAssessment.couperet_declenche)
+            .where(RiskAssessment.tier_id == tier_id)
+            .order_by(RiskAssessment.assessed_at.desc(), RiskAssessment.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    )
+
+
+def evaluer_pm(db: Session, tier: Tier, declencheur: str) -> ResultatRisque:
+    """Risque d'une PM/d'un groupement = le plus haut niveau de ses personnes liées en cours."""
+    aujourdhui = journee_de_reference(db)
+    liens = db.execute(
+        select(TierRelatedPerson, IndividualProfile)
+        .join(IndividualProfile, IndividualProfile.id == TierRelatedPerson.individual_tier_id)
+        .where(
+            TierRelatedPerson.tier_id == tier.id,
+            liens_en_cours(aujourdhui),
+            IndividualProfile.deleted_at.is_(None),
+        )
+        .order_by(TierRelatedPerson.created_at, TierRelatedPerson.id)
+    ).all()
+
+    personnes: list[dict[str, Any]] = []
+    couperet = False
+    for lien, individu in liens:
+        if individu.risk_level is None or individu.risk_score is None:
+            continue  # personne liée jamais évaluée : on ne fabrique pas de niveau
+        # Le reflet de la fiche est mis à jour dans la même transaction que l'archive.
+        couperet = couperet or _couperet_actif(db, individu.id)
+        personnes.append(
+            {
+                "nom": f"{individu.last_name} {individu.first_name}",
+                "numero": individu.tier_number,
+                "role": lien.role,
+                "niveau": individu.risk_level,
+                "score": individu.risk_score,
+            }
+        )
+
+    base: dict[str, Any] = {
+        "schema_version": SCHEMA_SNAPSHOT,
+        "declencheur": declencheur,
+        "regle": REGLE_PM_HERITEE,
+        "regle_provisoire": True,
+        "type_tiers": _LABEL_TYPE_TIERS.get(tier.tier_type, tier.tier_type),
+        "personnes_liees": personnes,
+    }
+    if not personnes:
+        base["sans_evaluation"] = True
+        base["explication"] = "Aucune personne liée évaluée : niveau de risque non déterminé."
+        return ResultatRisque(
+            score=0,
+            niveau_bareme="faible",
+            niveau_effectif="faible",
+            couperet_declenche=False,
+            donnees_manquantes=[],
+            detail=base,
+        )
+
+    origine = max(personnes, key=lambda p: (_RANG.get(p["niveau"], 0), p["score"]))
+    niveau = origine["niveau"]
+    role = _LABEL_ROLE.get(origine["role"], origine["role"])
+    base["origine"] = origine
+    base["explication"] = (
+        f"{_LABEL_NIVEAU.get(niveau, niveau).capitalize()} — hérité de {origine['nom']}, {role}"
+    )
+    return ResultatRisque(
+        score=max(p["score"] for p in personnes),
+        niveau_bareme=niveau,
+        niveau_effectif=niveau,
+        couperet_declenche=couperet,
+        donnees_manquantes=[],
+        detail=base,
+    )
+
+
+def evaluer_tiers(
+    db: Session, tier: Tier, grille: GrilleSnapshot, declencheur: str
+) -> ResultatRisque:
+    """Point d'entrée unique du calcul : grille pour une personne physique, héritage sinon."""
+    if isinstance(tier, IndividualProfile):
+        return evaluer(extraire_entrees(db, tier), grille, declencheur)
+    return evaluer_pm(db, tier, declencheur)
+
+
+def _evaluer_et_archiver_pm(
+    db: Session, tier: Tier, declencheur: str, acteur_id: uuid.UUID | None
+) -> ResultatRisque:
+    resultat = evaluer_pm(db, tier, declencheur)
+    if resultat.detail.get("sans_evaluation"):
+        # Plus de personne évaluée : le reflet est effacé (rien à archiver, rien à inventer).
+        tier.risk_level = None
+        tier.risk_score = None
+        tier.risk_computed_at = None
+        tier.risk_grid_version = None
+        db.flush()
+        return resultat
+    # Règle PM provisoire : le drapeau est gelé à vrai dans l'archive.
+    grille = replace(charger_grille_active(db), is_provisional=True)
+    enregistrer(db, tier, resultat, grille, declencheur, acteur_id)
+    return resultat
+
+
+def _propager_aux_liens(db: Session, individu: Tier, acteur_id: uuid.UUID | None) -> None:
+    """Le niveau d'une personne physique a changé : recalcule chaque PM/groupement qui l'a pour
+    personne liée EN COURS (c'est ce qui fait remonter une PPE jusqu'à la PM)."""
+    aujourdhui = journee_de_reference(db)
+    parents = (
+        db.execute(
+            select(TierRelatedPerson.tier_id)
+            .where(
+                TierRelatedPerson.individual_tier_id == individu.id, liens_en_cours(aujourdhui)
+            )
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    for parent_id in parents:
+        parent = db.get(Tier, parent_id)
+        if parent is None or parent.deleted_at is not None:
+            continue
+        _evaluer_et_archiver_pm(db, parent, "personne_liee_modifiee", acteur_id)
+
+
 def enregistrer(
     db: Session,
     tier: Tier,
@@ -367,6 +521,7 @@ def enregistrer(
     acteur_id: uuid.UUID | None,
 ) -> RiskAssessment:
     """Archive l'évaluation (append-only) et met à jour le REFLET sur la fiche. Ne committe pas."""
+    ancien = (tier.risk_level, tier.risk_score)
     evaluation = RiskAssessment(
         tier_id=tier.id,
         assessed_by=acteur_id,
@@ -388,6 +543,8 @@ def enregistrer(
     tier.risk_computed_at = datetime.now(UTC)
     tier.risk_grid_version = grille.version
     db.flush()
+    if isinstance(tier, IndividualProfile) and ancien != (tier.risk_level, tier.risk_score):
+        _propager_aux_liens(db, tier, acteur_id)
     return evaluation
 
 
@@ -400,9 +557,10 @@ def evaluer_et_enregistrer(
     """Orchestration : charge la grille, extrait les entrées, ÉVALUE (pur), archive. Sans commit.
 
     courant None = calcul système (ex. à la création) -> assessed_by NULL."""
-    grille = charger_grille_active(db)
-    entrees = extraire_entrees(db, tier)
-    resultat = evaluer(entrees, grille, declencheur)
     acteur = courant.user_id if courant is not None else None
+    if not isinstance(tier, IndividualProfile):
+        return _evaluer_et_archiver_pm(db, tier, declencheur, acteur)
+    grille = charger_grille_active(db)
+    resultat = evaluer_tiers(db, tier, grille, declencheur)
     enregistrer(db, tier, resultat, grille, declencheur, acteur)
     return resultat

@@ -12,9 +12,9 @@ n'est pas écrit explicitement ne sort pas.
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import ClassVar, Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Genre = Literal["M", "F"]
 EtatCivil = Literal["celibataire", "marie", "divorce", "veuf", "union_libre", "autre"]
@@ -431,3 +431,156 @@ class ModificationParametresParts(BaseModel):
     compte_parts_liberees: str | None
     compte_parts_non_liberees: str | None
     motif: str = Field(min_length=3, max_length=500)
+
+
+# --- personnes liées aux PM et groupements (lot PM/groupements) ------------------------
+
+RoleLien = Literal[
+    "representant_legal", "dirigeant", "membre_bureau", "beneficiaire_effectif", "signataire"
+]
+_ROLE_AVEC_POURCENTAGE = "beneficiaire_effectif"
+
+
+class CreationLien(BaseModel):
+    """`date_debut` est une date MÉTIER (nomination au PV, entrée en fonction) : obligatoire,
+    jamais la date de saisie. Le pourcentage est exigé pour un bénéficiaire effectif et refusé
+    pour les autres rôles."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    individual_tier_id: uuid.UUID
+    role: RoleLien
+    fonction: str | None = Field(default=None, max_length=100)
+    pourcentage_detention: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    pouvoir_signature: bool = False
+    date_debut: date
+    date_fin: date | None = None
+
+    @model_validator(mode="after")
+    def _coherence(self) -> "CreationLien":
+        if self.role == _ROLE_AVEC_POURCENTAGE and self.pourcentage_detention is None:
+            raise ValueError("Un bénéficiaire effectif doit avoir un pourcentage de détention.")
+        if self.role != _ROLE_AVEC_POURCENTAGE and self.pourcentage_detention is not None:
+            raise ValueError(
+                "Le pourcentage de détention ne concerne que le bénéficiaire effectif."
+            )
+        if self.date_fin is not None and self.date_fin < self.date_debut:
+            raise ValueError("La date de fin ne peut pas précéder la date de début.")
+        return self
+
+
+class ModificationLien(BaseModel):
+    """Seuls les champs envoyés changent. Le rôle et la personne ne se modifient pas."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fonction: str | None = Field(default=None, max_length=100)
+    pourcentage_detention: Decimal | None = Field(default=None, ge=0, le=100, decimal_places=2)
+    pouvoir_signature: bool | None = None
+    date_debut: date | None = None
+    date_fin: date | None = None
+
+    @model_validator(mode="after")
+    def _non_nuls(self) -> "ModificationLien":
+        for champ in ("pouvoir_signature", "date_debut"):
+            if champ in self.model_fields_set and getattr(self, champ) is None:
+                raise ValueError("Ce champ ne peut pas être vidé.")
+        return self
+
+
+class SuppressionLien(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    motif: str = Field(min_length=3, max_length=500)
+
+
+class LienItem(BaseModel):
+    """Exposition minimale : nom, numéro, statut, niveau de risque, et le lien lui-même."""
+
+    id: uuid.UUID
+    individual_tier_id: uuid.UUID
+    nom: str
+    tier_number: str
+    statut: str
+    niveau_risque: str | None
+    role: str
+    fonction: str | None
+    pourcentage_detention: Decimal | None
+    pouvoir_signature: bool
+    date_debut: date
+    date_fin: date | None
+    en_cours: bool
+    atteint_le_seuil: bool  # bénéficiaire effectif dont la détention atteint le seuil paramétré
+
+
+class OrigineRisque(BaseModel):
+    nom: str
+    numero: str
+    role: str
+    niveau: str
+
+
+class RisqueHerite(BaseModel):
+    """Niveau de risque d'une PM/d'un groupement, hérité de ses personnes liées (règle PROVISOIRE).
+    `niveau` est nul tant qu'aucune personne liée évaluée n'existe."""
+
+    niveau: str | None
+    explication: str
+    origine: OrigineRisque | None
+    provisoire: bool = True
+
+
+class PersonnesLiees(BaseModel):
+    items: list[LienItem]
+    total_beneficiaires: Decimal
+    seuil: Decimal | None  # nul : le paramètre n'est pas installé, aucun indicateur
+    seuil_provisoire: bool
+    risque: RisqueHerite
+
+
+# --- modification du profil d'une PM ou d'un groupement -------------------------------
+
+
+class _ProfilModifiable(BaseModel):
+    """Seuls les champs envoyés changent ; un champ obligatoire ne peut pas être vidé."""
+
+    model_config = ConfigDict(extra="forbid")
+    _OBLIGATOIRES: ClassVar[tuple[str, ...]] = ()
+
+    @model_validator(mode="after")
+    def _obligatoires_non_vides(self) -> Self:
+        for champ in self._OBLIGATOIRES:
+            if champ in self.model_fields_set and getattr(self, champ) is None:
+                raise ValueError("Ce champ est obligatoire et ne peut pas être vidé.")
+        return self
+
+
+class ModificationPersonneMorale(_ProfilModifiable):
+    _OBLIGATOIRES: ClassVar[tuple[str, ...]] = (
+        "legal_name",
+        "legal_form",
+        "constitution_date",
+        "headquarters_country_id",
+    )
+
+    legal_name: str | None = Field(default=None, min_length=1, max_length=300)
+    commercial_name: str | None = Field(default=None, max_length=300)
+    legal_form: FormeJuridique | None = None
+    rccm_number: str | None = Field(default=None, max_length=50)
+    nif_number: str | None = Field(default=None, max_length=50)
+    constitution_date: date | None = None
+    capital_amount: Decimal | None = Field(default=None, ge=0)
+    capital_currency_id: uuid.UUID | None = None
+    business_purpose: str | None = None
+    headquarters_country_id: uuid.UUID | None = None
+
+
+class ModificationGroupement(_ProfilModifiable):
+    _OBLIGATOIRES: ClassVar[tuple[str, ...]] = ("group_name", "group_type", "constitution_date")
+
+    group_name: str | None = Field(default=None, min_length=1, max_length=300)
+    group_type: TypeGroupement | None = None
+    constitution_date: date | None = None
+    intervention_zone: str | None = Field(default=None, max_length=200)
+    group_purpose: str | None = None
+    expected_member_count: int | None = Field(default=None, gt=0)

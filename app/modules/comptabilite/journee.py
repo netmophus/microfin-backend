@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
@@ -94,6 +94,23 @@ def date_comptable_obligatoire(db: Session) -> date:
     jour = date_comptable_courante(db)
     if jour is None:
         raise AucuneJourneeOuverteError("Aucune journée comptable n'est ouverte.")
+    return jour
+
+
+def journee_de_reference(db: Session) -> date:
+    """La journée comptable de RÉFÉRENCE pour une lecture (jamais pour dater une écriture) : la
+    journée ouverte, sinon la dernière journée clôturée. Ne refuse jamais : une consultation ne
+    doit pas échouer parce que la caisse est fermée. Ce n'est qu'en l'absence de toute journée
+    (installation neuve) qu'on retombe sur la date du jour lue côté base."""
+    jour = date_comptable_courante(db)
+    if jour is None:
+        jour = db.execute(
+            select(func.max(JourneeComptable.date_comptable)).where(
+                JourneeComptable.status == "cloturee"
+            )
+        ).scalar_one()
+    if jour is None:
+        jour = cast(date, db.execute(text("SELECT CURRENT_DATE")).scalar_one())
     return jour
 
 

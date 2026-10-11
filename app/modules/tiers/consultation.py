@@ -198,17 +198,22 @@ def telephone_principal(db: Session, tier_id: uuid.UUID) -> str | None:
 
 
 def dernier_risque(db: Session, tier_id: uuid.UUID) -> tuple[str | None, bool]:
-    """Niveau de risque courant + drapeau provisoire, DEPUIS la dernière évaluation archivée.
-    (None, False) si jamais évaluée. Le provisoire est celui GELÉ à l'évaluation."""
-    ligne = db.execute(
-        select(_RA.c.niveau_effectif, _RA.c.is_provisional)
+    """Niveau de risque courant + drapeau provisoire pour le badge de la fiche.
+
+    Le NIVEAU est lu sur le reflet de la fiche (`tiers.risk_level`), jamais sur « la dernière
+    archive » : le reflet est tenu à jour dans la transaction de chaque calcul, et il est vide
+    quand rien n'est évalué (une PM sans personne liée évaluée) -> (None, False), « non évalué ».
+    Le drapeau provisoire est celui GELÉ dans la dernière archive."""
+    niveau = db.execute(select(_T.c.risk_level).where(_T.c.id == tier_id)).scalar_one_or_none()
+    if niveau is None:
+        return None, False
+    provisoire = db.execute(
+        select(_RA.c.is_provisional)
         .where(_RA.c.tier_id == tier_id)
         .order_by(_RA.c.assessed_at.desc(), _RA.c.id.desc())
         .limit(1)
-    ).first()
-    if ligne is None:
-        return None, False
-    return ligne.niveau_effectif, ligne.is_provisional
+    ).scalar_one_or_none()
+    return niveau, bool(provisoire)
 
 
 def _est_visible(

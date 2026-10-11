@@ -136,6 +136,9 @@ TABLES_ATTENDUES = frozenset(
         # Identité & contacts (migration 0009).
         "tiers.identity_documents",
         "tiers.contacts",
+        # Personnes liées aux PM/groupements + paramètres LBC/FT (migration 0061).
+        "tiers.tier_related_persons",
+        "tiers.parametres_lbcft",
         # KYC : référentiel secteurs + grille de risque paramétrable (migration 0013).
         "parameters.secteurs_activite",
         "parameters.kyc_risk_grid",

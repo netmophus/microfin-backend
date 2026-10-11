@@ -23,7 +23,7 @@ vue), jamais 403. Le FOR UPDATE sérialise deux transitions concurrentes sur la 
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -41,14 +41,14 @@ from app.modules.tiers.models import (
     LifecycleEvent,
     Tier,
 )
+from app.modules.tiers.personnes_liees import representants_et_non_actifs
 from app.modules.tiers.pieces import controler_unicite_fiche, etat_validite
 from app.modules.tiers.risque import (
     GrilleSnapshot,
     ResultatRisque,
     charger_grille_active,
     enregistrer,
-    evaluer,
-    extraire_entrees,
+    evaluer_tiers,
 )
 
 # Capacité de valider un profil à RISQUE ÉLEVÉ — réservée au LBC/FT (le contrôle du blanchiment
@@ -145,6 +145,10 @@ _C_AUTO_VALIDATION = ConditionActivation(
     "AUTO_VALIDATION_INTERDITE",
     "Double regard requis : un autre agent que celui qui a vérifié la pièce doit activer.",
 )
+_C_REPRESENTANT = ConditionActivation(
+    "REPRESENTANT_LEGAL_MANQUANT",
+    "Enregistrez au moins un représentant légal (onglet Personnes liées).",
+)
 # Données de risque manquantes -> condition dédiée par champ (le moteur T3b désigne le champ).
 _C_DONNEE_RISQUE = {
     "secteur_activite": ConditionActivation(
@@ -178,6 +182,23 @@ def _agence_exige_double(db: Session, tier: Tier) -> bool:
     return agence.double_validation_kyc if agence is not None else True
 
 
+def _conditions_personnes_liees(db: Session, tier: Tier) -> list[ConditionActivation]:
+    """PM/groupement : un représentant légal en cours, et TOUTES les personnes liées en cours
+    doivent être actives (chacune est nommée, pour que l'agent sache qui activer d'abord)."""
+    representants, non_actives = representants_et_non_actifs(db, tier.id)
+    conditions: list[ConditionActivation] = []
+    if representants == 0:
+        conditions.append(_C_REPRESENTANT)
+    conditions.extend(
+        ConditionActivation(
+            "PERSONNE_LIEE_NON_ACTIVE",
+            f"La personne liée {nom} doit d'abord être activée.",
+        )
+        for nom in non_actives
+    )
+    return conditions
+
+
 def conditions_dossier(
     db: Session, tier: Tier
 ) -> tuple[list[ConditionActivation], ResultatRisque, GrilleSnapshot]:
@@ -186,7 +207,7 @@ def conditions_dossier(
     elles disent quoi COMPLÉTER, avant même de cliquer « Activer ». « KYC complet » est DÉLÉGUÉ au
     moteur T3b (donnees_manquantes) — une seule définition partagée."""
     grille = charger_grille_active(db)
-    resultat = evaluer(extraire_entrees(db, tier), grille, "activation")
+    resultat = evaluer_tiers(db, tier, grille, "activation")
 
     manquantes: list[ConditionActivation] = []
 
@@ -213,6 +234,9 @@ def conditions_dossier(
 
     if isinstance(tier, IndividualProfile) and not (tier.origine_fonds or "").strip():
         manquantes.append(_C_ORIGINE_FONDS)
+
+    if not isinstance(tier, IndividualProfile):
+        manquantes.extend(_conditions_personnes_liees(db, tier))
 
     for champ in resultat.donnees_manquantes:
         manquantes.append(
@@ -442,6 +466,8 @@ def activer(
         raise ActivationImpossibleError(manquantes)
 
     # Archive l'évaluation exacte sur laquelle s'appuie l'activation (met aussi à jour le reflet).
+    if not isinstance(tier, IndividualProfile):
+        grille = replace(grille, is_provisional=True)  # règle PM provisoire, gelée telle quelle
     evaluation = enregistrer(db, tier, resultat, grille, "activation", courant.user_id)
     # Vrai seulement si l'agence a assoupli le quatre-yeux (sinon la condition aurait bloqué).
     auto = _auto_validation(db, courant, tier.id)

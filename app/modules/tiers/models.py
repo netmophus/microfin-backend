@@ -575,3 +575,88 @@ class ShareAccountRole(Base):
     )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+
+class TierRelatedPerson(Base):
+    """Personne physique liée à une personne morale ou à un groupement (migration 0061).
+
+    Rôles : représentant légal, dirigeant, membre du bureau, bénéficiaire effectif (PM seulement,
+    pourcentage de détention obligatoire), signataire. `date_debut` est une date MÉTIER saisie
+    (nomination, entrée en fonction), jamais la date de saisie. Le typage des deux fiches
+    (PM/groupement d'un côté, personne physique de l'autre) est porté par le service : un CHECK ne
+    lit pas une autre table.
+    """
+
+    __tablename__ = "tier_related_persons"
+    __table_args__ = (
+        sa.Index(
+            "ix_tier_related_persons_tier_id",
+            "tier_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_tier_related_persons_individual_tier_id",
+            "individual_tier_id",
+            postgresql_where=sa.text("deleted_at IS NULL"),
+        ),
+        sa.Index(
+            "uq_tier_related_persons_ouvert",
+            "tier_id",
+            "individual_tier_id",
+            "role",
+            unique=True,
+            postgresql_where=sa.text("deleted_at IS NULL AND date_fin IS NULL"),
+        ),
+        {"schema": "tiers"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
+    tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
+    individual_tier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey(FK_TIER), nullable=False
+    )
+    role: Mapped[str] = mapped_column(sa.String(30), nullable=False)
+    fonction: Mapped[str | None] = mapped_column(sa.String(100))
+    pourcentage_detention: Mapped[Decimal | None] = mapped_column(sa.Numeric(5, 2))
+    pouvoir_signature: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.false()
+    )
+    date_debut: Mapped[date] = mapped_column(sa.Date(), nullable=False)
+    date_fin: Mapped[date | None] = mapped_column(sa.Date())
+    created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+    deletion_reason: Mapped[str | None] = mapped_column(sa.Text())
+
+
+class ParametresLbcft(Base):
+    """Paramètres de conformité LBC/FT (migration 0061) — UNE seule ligne (id = 1).
+
+    Le seuil de détention au-delà duquel une personne est signalée bénéficiaire effectif n'est
+    jamais une constante du code. `is_provisional` : valeur à confirmer sur la loi uniforme LBC/FT
+    UEMOA. Aucune ligne -> aucun indicateur affiché.
+    """
+
+    __tablename__ = "parametres_lbcft"
+    __table_args__ = ({"schema": "tiers"},)
+
+    id: Mapped[int] = mapped_column(sa.SmallInteger(), primary_key=True)
+    seuil_beneficiaire_effectif: Mapped[Decimal] = mapped_column(sa.Numeric(5, 2), nullable=False)
+    is_provisional: Mapped[bool] = mapped_column(
+        sa.Boolean(), nullable=False, server_default=sa.true()
+    )
+    updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
+
+
+def liens_en_cours(jour: date) -> sa.ColumnElement[bool]:
+    """Filtre des liens EN COURS à la journée comptable `jour` : non supprimés et
+    date_debut <= jour < date_fin (ou sans date de fin)."""
+    return sa.and_(
+        TierRelatedPerson.deleted_at.is_(None),
+        TierRelatedPerson.date_debut <= jour,
+        sa.or_(TierRelatedPerson.date_fin.is_(None), TierRelatedPerson.date_fin > jour),
+    )

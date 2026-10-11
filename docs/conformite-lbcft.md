@@ -47,6 +47,8 @@ réglementaires — à remplacer par les valeurs de l'expert.
 | 11 | Correspondance liste de sanctions | couperet | **blocage de l'activation** (données en T6) | ⚠️ À VALIDER |
 | 12 | Double validation KYC (quatre-yeux : activateur ≠ vérificateur) | politique | **exigée par défaut**, assouplissable **par agence** (`agencies.double_validation_kyc`) ; auto-validation tracée | ⚠️ À VALIDER (expert + déploiement) |
 | 13 | Activation sous barème PROVISOIRE | politique | **autorisée + avertissement + traçable** (registre dérivable) ; blocage éventuel à la mise en production, pas par fiche | ⚠️ À VALIDER (expert + déploiement) |
+| 14 | Seuil de détention signalant un **bénéficiaire effectif** (personne morale) | paramètre | **25 %** (`tiers.parametres_lbcft`, `is_provisional`), informatif : ne bloque rien | ⚠️ PROVISOIRE — à confirmer sur la loi uniforme LBC/FT UEMOA |
+| 15 | Risque d'une **PM / d'un groupement** | règle | **plus haut niveau parmi les personnes liées en cours** (une PPE au bureau → élevé) ; aucune personne liée évaluée → pas de score | ⚠️ PROVISOIRE — critères propres aux PM (secteur, pays, structure du capital) à définir avec l'expert |
 
 Structure paramétrable : `parameters.kyc_risk_grid` (conteneur versionné, `is_provisional`),
 `parameters.kyc_risk_rules` (les trois types), `parameters.kyc_risk_thresholds` (barème),
@@ -56,8 +58,32 @@ Structure paramétrable : `parameters.kyc_risk_grid` (conteneur versionné, `is_
 
 - Conservation des données **10 ans** après la fin de la relation (soft delete + restauration déjà en place).
 - Vigilance **renforcée** obligatoire pour les PPE et les relations à risque élevé.
-- Identification du **bénéficiaire effectif** pour les personnes morales (chantier ultérieur).
+- Identification du **bénéficiaire effectif** pour les personnes morales : en place depuis le 11/10/2026 (voir ci-dessous).
 - Filtrage **anti-listes de sanctions** à la validation (module T6).
+
+## 11/10/2026 — Identification des dirigeants et des bénéficiaires effectifs (PM et groupements)
+
+Révélé par MIZNAS : une SARL ou un groupement n'avait aucun moyen d'enregistrer ses dirigeants,
+son bureau, ses bénéficiaires effectifs ni ses signataires. Les **personnes liées**
+(`tiers.tier_related_persons`) relient une PM ou un groupement à des **personnes physiques** :
+représentant légal, dirigeant, membre du bureau, bénéficiaire effectif (PM seulement, avec
+pourcentage de détention, somme <= 100 %), signataire. Chaque lien a une date de début **métier**
+(nomination, entrée en fonction), jamais la date de saisie, et peut être terminé ou retiré
+(suppression logique, motif obligatoire, audit avec anciennes et nouvelles valeurs).
+
+- **Activation** : une PM ou un groupement exige au moins un représentant légal en cours, et que
+  TOUTES ses personnes liées en cours soient actives (chacune est nommée dans le bandeau).
+  Une fiche sortie du statut prospect garde toujours un représentant légal en cours.
+- **Seuil de bénéficiaire effectif : 25 % — PROVISOIRE.** Paramètre `tiers.parametres_lbcft`
+  (jamais une constante du code), à confirmer sur la loi uniforme LBC/FT de l'UEMOA. Informatif :
+  il signale une détention qui atteint le seuil, il ne bloque rien. Sans ligne, aucun indicateur.
+  Installé par `seed-conformite-lbcft` (idempotent, ne réécrit jamais une valeur corrigée).
+- **Risque d'une PM ou d'un groupement — règle PROVISOIRE** : le niveau est le plus haut niveau
+  parmi ses personnes liées en cours, recalculé à chaque ajout, retrait ou changement de niveau
+  d'une personne liée (une PPE au bureau fait remonter la PM à « élevé » et la route donc vers le
+  responsable LBC/FT). Chaque recalcul est archivé avec son déclencheur. Les critères propres aux
+  PM (secteur d'activité, pays, structure du capital) ne sont pas modélisés : **à définir avec
+  l'expert**.
 
 _Mettre à jour ce tableau à chaque décision de l'expert : remplacer le défaut provisoire par la
 valeur validée et passer le statut à ✅ VALIDÉ (avec la date et le nom du valideur)._

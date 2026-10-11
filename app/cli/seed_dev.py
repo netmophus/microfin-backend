@@ -24,6 +24,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.cli.seed_comptabilite import seed_niveaux_caisse_dev
+from app.cli.seed_conformite_lbcft import executer_seed_lbcft
 from app.modules.parameters.models import Agency
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
@@ -129,5 +130,6 @@ def executer_seed_dev(db: Session) -> RapportSeedDev:
     # Bloc 3 : propose coffre/principale pour CE siège de dev seulement — jamais le réseau,
     # jamais écrasé si déjà paramétré (voir seed_comptabilite.py::seed_niveaux_caisse_dev).
     niveaux_rattaches = seed_niveaux_caisse_dev(db, agence.id)
+    executer_seed_lbcft(db)  # seuil de bénéficiaire effectif (provisoire), idempotent
 
     return RapportSeedDev(crees=crees, ignores=ignores, niveaux_caisse_rattaches=niveaux_rattaches)

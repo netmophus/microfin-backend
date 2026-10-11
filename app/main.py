@@ -21,6 +21,7 @@ from app.modules.security.router_roles import router as roles_router
 from app.modules.security.router_users import router as users_router
 from app.modules.tiers.parts_engagements import enregistrer as enregistrer_engagements_parts
 from app.modules.tiers.router import router as tiers_router
+from app.modules.tiers.router_pm import router as tiers_pm_router
 
 app = FastAPI(title="Microfinance SIG", version="0.1.0")
 
@@ -41,6 +42,7 @@ app.include_router(roles_router)
 app.include_router(permissions_router)
 app.include_router(audit_router)
 app.include_router(tiers_router)
+app.include_router(tiers_pm_router)
 app.include_router(epargne_router)
 app.include_router(comptabilite_router)
 app.include_router(credit_router)
