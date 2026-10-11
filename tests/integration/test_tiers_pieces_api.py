@@ -27,7 +27,12 @@ from app.modules.parameters.models import Agency
 from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
-from app.modules.tiers.models import IdentityDocument, IndividualProfile
+from app.modules.tiers.models import (
+    GroupProfile,
+    IdentityDocument,
+    IndividualProfile,
+    LegalEntityProfile,
+)
 from app.modules.tiers.pieces import etat_validite, normaliser_numero
 
 pytestmark = pytest.mark.integration
@@ -159,6 +164,7 @@ def test_une_piece_perimee_est_acceptee_et_signalee(db: Session, client: TestCli
         json={
             "document_type_id": str(_type_piece(db, "CNI")),
             "document_number": "NER-0001",
+            "issuing_authority": "Préfecture de Niamey",
             "expiry_date": "2020-01-01",
             "is_primary": True,
         },
@@ -181,7 +187,8 @@ def test_un_doublon_de_cni_dans_mon_agence_nomme_la_fiche(db: Session, client: T
 
     reponse = client.post(
         f"/tiers/{nouveau.id}/identity-documents",
-        json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "NER-123"},
+        json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "NER-123",
+              "issuing_authority": "Préfecture de Niamey", "expiry_date": "2035-01-01"},
         headers=_entete(user, "CHARGE_CLIENTELE"),
     )
 
@@ -206,7 +213,8 @@ def test_un_doublon_hors_perimetre_reste_generique_et_est_audite(
 
     reponse = client.post(
         f"/tiers/{ma_fiche.id}/identity-documents",
-        json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "NER-999"},
+        json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "NER-999",
+              "issuing_authority": "Préfecture de Niamey", "expiry_date": "2035-01-01"},
         headers=_entete(user, "CHARGE_CLIENTELE"),
     )
 
@@ -242,7 +250,8 @@ def test_la_normalisation_rattrape_les_variantes_d_espaces(
     # « ab 12 34 » est le même numéro que « AB1234 » -> doublon détecté.
     reponse = client.post(
         f"/tiers/{nouveau.id}/identity-documents",
-        json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "ab 12 34"},
+        json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "ab 12 34",
+              "issuing_authority": "Préfecture de Niamey", "expiry_date": "2035-01-01"},
         headers=_entete(user, "CHARGE_CLIENTELE"),
     )
     assert reponse.status_code == 422, reponse.text
@@ -258,7 +267,8 @@ def test_un_type_sans_unicite_tolere_le_doublon(db: Session, client: TestClient)
 
     reponse = client.post(
         f"/tiers/{nouveau.id}/identity-documents",
-        json={"document_type_id": str(attestation), "document_number": "0001"},
+        json={"document_type_id": str(attestation), "document_number": "0001",
+              "issuing_authority": "Mairie de Niamey"},
         headers=_entete(user, "CHARGE_CLIENTELE"),
     )
     assert reponse.status_code == 201, reponse.text  # même numéro d'ordre toléré
@@ -309,12 +319,14 @@ def test_supprimer_la_principale_est_refuse_s_il_en_reste(db: Session, client: T
     principale = client.post(
         f"/tiers/{tier.id}/identity-documents",
         json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "P-1",
-              "is_primary": True},
+              "issuing_authority": "Préfecture de Niamey",
+              "expiry_date": "2035-01-01", "is_primary": True},
         headers=entete,
     ).json()
     client.post(
         f"/tiers/{tier.id}/identity-documents",
-        json={"document_type_id": str(_type_piece(db, "PASSPORT")), "document_number": "P-2"},
+        json={"document_type_id": str(_type_piece(db, "PASSPORT")), "document_number": "P-2",
+              "issuing_authority": "Préfecture de Niamey", "expiry_date": "2035-01-01"},
         headers=entete,
     )
 
@@ -335,7 +347,8 @@ def test_la_suppression_est_logique_et_garde_le_motif(db: Session, client: TestC
     piece = client.post(
         f"/tiers/{tier.id}/identity-documents",
         json={"document_type_id": str(_type_piece(db, "CNI")), "document_number": "P-9",
-              "is_primary": True},
+              "issuing_authority": "Préfecture de Niamey",
+              "expiry_date": "2035-01-01", "is_primary": True},
         headers=entete,
     ).json()
 
@@ -376,3 +389,199 @@ def test_les_pieces_hors_perimetre_sont_404(db: Session, client: TestClient) -> 
         headers=_entete(intrus, "CHARGE_CLIENTELE"),
     )
     assert lecture.status_code == 404, lecture.text
+
+
+# --- types de pièces applicables au type de fiche --------------------------------------
+
+
+def _societe(db: Session, agence: Agency) -> LegalEntityProfile:
+    tier = LegalEntityProfile(
+        tier_number=f"M-2999-{uuid.uuid4().int % 10_000_000:07d}",
+        primary_agency_id=agence.id,
+        legal_name="SARL Exemple",
+        legal_form="SARL",
+        constitution_date=date(2020, 1, 1),
+        headquarters_country_id=_pays(db, "SN"),
+    )
+    db.add(tier)
+    db.flush()
+    return tier
+
+
+def _groupement(db: Session, agence: Agency) -> GroupProfile:
+    tier = GroupProfile(
+        tier_number=f"M-2999-{uuid.uuid4().int % 10_000_000:07d}",
+        primary_agency_id=agence.id,
+        group_name="Groupement Exemple",
+        group_type="tontine",
+        constitution_date=date(2020, 1, 1),
+    )
+    db.add(tier)
+    db.flush()
+    return tier
+
+
+def _poster(
+    client: TestClient,
+    tier_id: uuid.UUID,
+    type_id: uuid.UUID,
+    numero: str,
+    entete,
+    *,
+    emetteur: str | None = "Greffe du tribunal",
+    expiration: str | None = None,
+):
+    corps = {"document_type_id": str(type_id), "document_number": numero, "is_primary": True}
+    if emetteur is not None:
+        corps["issuing_authority"] = emetteur
+    if expiration is not None:
+        corps["expiry_date"] = expiration
+    return client.post(f"/tiers/{tier_id}/identity-documents", json=corps, headers=entete)
+
+
+def test_un_rccm_sur_une_personne_physique_est_refuse(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    tier = _tier(db, agence)
+
+    entete = _entete(user, "CHARGE_CLIENTELE")
+
+    reponse = _poster(client, tier.id, _type_piece(db, "RCCM"), "RC-1", entete)
+
+    assert reponse.status_code == 422
+    assert "ne s'applique pas" in reponse.json()["detail"]
+    pieces = db.execute(select(IdentityDocument).where(IdentityDocument.tier_id == tier.id))
+    assert pieces.first() is None
+
+
+def test_une_cni_sur_une_societe_est_refusee(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    societe = _societe(db, agence)
+
+    entete = _entete(user, "CHARGE_CLIENTELE")
+
+    reponse = _poster(client, societe.id, _type_piece(db, "CNI"), "NER-1", entete)
+
+    assert reponse.status_code == 422
+
+
+def test_les_pieces_propres_aux_personnes_morales_sont_acceptees(
+    db: Session, client: TestClient
+) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    entete = _entete(user, "CHARGE_CLIENTELE")
+    societe = _societe(db, agence)
+    groupement = _groupement(db, agence)
+
+    assert _poster(client, societe.id, _type_piece(db, "RCCM"), "RC-2", entete).status_code == 201
+    # STATUTS vaut pour la société ET pour le groupement (applies_to = deux valeurs).
+    statuts = _type_piece(db, "STATUTS")
+    assert _poster(client, societe.id, statuts, "S-1", entete, emetteur=None).status_code == 201
+    assert _poster(client, groupement.id, statuts, "S-2", entete, emetteur=None).status_code == 201
+    assert (
+        _poster(client, groupement.id, _type_piece(db, "RECEPISSE_RECONNAISSANCE"), "R-1", entete)
+        .status_code
+        == 201
+    )
+
+
+def test_un_recepisse_de_groupement_est_refuse_sur_une_societe(
+    db: Session, client: TestClient
+) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    societe = _societe(db, agence)
+
+    entete = _entete(user, "CHARGE_CLIENTELE")
+    recepisse = _type_piece(db, "RECEPISSE_RECONNAISSANCE")
+
+    reponse = _poster(client, societe.id, recepisse, "R-9", entete)
+
+    assert reponse.status_code == 422
+
+
+def test_le_rccm_est_unique_d_une_societe_a_l_autre(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    entete = _entete(user, "CHARGE_CLIENTELE")
+    premiere, seconde = _societe(db, agence), _societe(db, agence)
+
+    rccm = _type_piece(db, "RCCM")
+
+    assert _poster(client, premiere.id, rccm, "NI-NIA-2020-B-0001", entete).status_code == 201
+    doublon = _poster(client, seconde.id, rccm, "ni-nia-2020 -b-0001", entete)
+
+    assert doublon.status_code == 422  # enforce_unique=TRUE sur RCCM, normalisation comprise
+
+
+def test_la_contrainte_de_base_refuse_un_applies_to_vide_ou_inconnu(db: Session) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    for valeur in ("ARRAY[]::text[]", "ARRAY['inconnu']::text[]"):
+        with pytest.raises(IntegrityError), db.begin_nested():
+            db.execute(
+                text(
+                    "INSERT INTO parameters.identity_document_types (code, name, applies_to) "
+                    f"VALUES ('X-TEST', 'Test', {valeur})"
+                )
+            )
+
+
+# --- autorité émettrice et date d'expiration exigées par le type ------------------------
+
+
+def test_une_cni_sans_autorite_emettrice_est_refusee(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    tier = _tier(db, agence)
+    entete = _entete(user, "CHARGE_CLIENTELE")
+
+    cni = _type_piece(db, "CNI")
+    reponse = _poster(client, tier.id, cni, "NER-9", entete, emetteur=None, expiration="2035-01-01")
+    blanc = _poster(client, tier.id, cni, "NER-9", entete, emetteur="   ", expiration="2035-01-01")
+
+    assert reponse.status_code == 422
+    assert reponse.json()["detail"] == "Ce type de pièce exige l'autorité émettrice."
+    assert blanc.status_code == 422  # une saisie d'espaces ne vaut pas une autorité
+    pieces = db.execute(select(IdentityDocument).where(IdentityDocument.tier_id == tier.id))
+    assert pieces.first() is None
+
+
+def test_une_cni_sans_date_d_expiration_est_refusee(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    tier = _tier(db, agence)
+    entete = _entete(user, "CHARGE_CLIENTELE")
+
+    reponse = _poster(client, tier.id, _type_piece(db, "CNI"), "NER-8", entete)
+
+    assert reponse.status_code == 422
+    assert reponse.json()["detail"] == "Ce type de pièce exige une date d'expiration."
+
+
+def test_une_cni_complete_est_acceptee(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    tier = _tier(db, agence)
+
+    reponse = _poster(
+        client, tier.id, _type_piece(db, "CNI"), "NER-7", _entete(user, "CHARGE_CLIENTELE"),
+        expiration="2035-01-01",
+    )
+
+    assert reponse.status_code == 201, reponse.text
+
+
+def test_les_statuts_s_acceptent_sans_autorite_emettrice(db: Session, client: TestClient) -> None:
+    agence = _agence(db, "Agence Centre")
+    user = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    societe = _societe(db, agence)
+
+    reponse = _poster(
+        client, societe.id, _type_piece(db, "STATUTS"), "S-9", _entete(user, "CHARGE_CLIENTELE"),
+        emetteur=None,
+    )
+
+    assert reponse.status_code == 201, reponse.text

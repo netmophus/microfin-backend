@@ -93,6 +93,34 @@ def test_liste_les_types_de_pieces(client: TestClient, db: Session) -> None:
     assert set(corps[0]) == {"id", "code", "name", "requires_expiry_date"}
 
 
+def _codes_types(client: TestClient, db: Session, tier_type: str) -> set[str]:
+    reponse = client.get(f"/identity-document-types?tier_type={tier_type}", headers=_entete(db))
+    assert reponse.status_code == 200
+    return {item["code"] for item in reponse.json()}
+
+
+def test_les_types_de_pieces_se_filtrent_par_type_de_fiche(
+    client: TestClient, db: Session
+) -> None:
+    physique = _codes_types(client, db, "individual")
+    morale = _codes_types(client, db, "legal_entity")
+    groupement = _codes_types(client, db, "group")
+
+    assert {"CNI", "PASSPORT"} <= physique
+    pieces_morales = {"RCCM", "STATUTS", "PV_NOMINATION", "RECEPISSE_RECONNAISSANCE", "AGREMENT"}
+    assert not physique & pieces_morales
+    assert morale == {"RCCM", "STATUTS", "PV_NOMINATION", "AGREMENT"}
+    assert groupement == {"STATUTS", "PV_NOMINATION", "RECEPISSE_RECONNAISSANCE"}
+    # Sans filtre, tout est proposé (compatibilité).
+    tous = {i["code"] for i in client.get("/identity-document-types", headers=_entete(db)).json()}
+    assert tous >= physique | morale | groupement
+
+
+def test_un_type_de_fiche_inconnu_est_refuse(client: TestClient, db: Session) -> None:
+    reponse = client.get("/identity-document-types?tier_type=autre", headers=_entete(db))
+    assert reponse.status_code == 422
+
+
 def test_liste_les_secteurs_activite(client: TestClient, db: Session) -> None:
     corps = client.get("/secteurs-activite", headers=_entete(db)).json()
 

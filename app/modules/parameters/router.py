@@ -25,9 +25,9 @@ guichets cités en dépendent).
 """
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -273,9 +273,16 @@ class TypePieceItem(BaseModel):
 def lister_types_pieces(
     _: Annotated[UtilisateurCourant, Depends(exige_authentification())],
     db: Annotated[Session, Depends(get_db)],
+    tier_type: Annotated[
+        Literal["individual", "legal_entity", "group"] | None,
+        Query(description="Ne garde que les types applicables à ce type de fiche."),
+    ] = None,
 ) -> list[TypePieceItem]:
-    """Liste les types de pièces ACTIFS (display_order), pour le sélecteur de saisie des pièces."""
-    lignes = db.execute(
+    """Liste les types de pièces ACTIFS (display_order), pour le sélecteur de saisie des pièces.
+
+    Avec `tier_type`, seulement ceux qui s'appliquent à ce type de fiche (pas de CNI pour une
+    société, pas de RCCM pour une personne physique)."""
+    requete = (
         select(
             IdentityDocumentType.id,
             IdentityDocumentType.code,
@@ -285,6 +292,9 @@ def lister_types_pieces(
         .where(IdentityDocumentType.is_active.is_(True))
         .order_by(IdentityDocumentType.display_order, IdentityDocumentType.name)
     )
+    if tier_type is not None:
+        requete = requete.where(IdentityDocumentType.applies_to.contains([tier_type]))
+    lignes = db.execute(requete)
     return [
         TypePieceItem(
             id=ligne.id,

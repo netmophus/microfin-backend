@@ -97,8 +97,10 @@ from app.modules.tiers.parts_parametres import modifier as modifier_parametres_p
 from app.modules.tiers.pieces import (
     DonneesPiece,
     DoublonPieceError,
+    PieceIncompleteError,
     PieceIntrouvableError,
     SuppressionPrincipaleError,
+    TypePieceNonApplicableError,
     ajouter_piece,
     definir_principale,
     etat_validite,
@@ -1103,6 +1105,13 @@ def _traduire_piece(erreur: Exception) -> HTTPException:
                 "tier_number": erreur.tier_number,
                 "nom": erreur.nom,
             },
+        )
+    if isinstance(erreur, PieceIncompleteError):
+        return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur))
+    if isinstance(erreur, TypePieceNonApplicableError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Ce type de pièce ne s'applique pas à ce type de fiche.",
         )
     if isinstance(erreur, SuppressionPrincipaleError):
         return HTTPException(

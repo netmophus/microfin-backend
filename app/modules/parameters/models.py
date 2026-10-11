@@ -217,6 +217,13 @@ class IdentityDocumentType(Base):
     enforce_unique: Mapped[bool] = mapped_column(sa.Boolean(), nullable=False, server_default=TRUE)
     format_regex: Mapped[str | None] = mapped_column(sa.String(200))
     format_example: Mapped[str | None] = mapped_column(sa.String(100))
+    # À quels types de tiers le type de pièce s'applique (migration 0060) : individual,
+    # legal_entity, group. Un tableau : STATUTS vaut pour les PM ET les groupements.
+    applies_to: Mapped[list[str]] = mapped_column(
+        postgresql.ARRAY(sa.Text()),
+        nullable=False,
+        server_default=sa.text("ARRAY['individual','legal_entity','group']::text[]"),
+    )
     acceptance_level: Mapped[str] = mapped_column(
         sa.String(20), nullable=False, server_default=sa.text("'standard'")
     )

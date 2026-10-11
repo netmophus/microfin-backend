@@ -58,6 +58,9 @@ def _nom_fiche() -> ColumnElement[str]:
 # (et signal KYC), pas une donnée stockée — donc modifiable sans migration.
 SEUIL_EXPIRATION_PROCHE = timedelta(days=90)
 
+MESSAGE_EMETTEUR_EXIGE = "Ce type de pièce exige l'autorité émettrice."
+MESSAGE_EXPIRATION_EXIGEE = "Ce type de pièce exige une date d'expiration."
+
 
 class TierIntrouvableError(Exception):
     """Tiers inexistant, supprimé, OU hors périmètre. -> 404."""
@@ -85,6 +88,16 @@ class DoublonPieceError(Exception):
         self.tier_id = tier_id
         self.tier_number = tier_number
         self.nom = nom
+
+
+class TypePieceNonApplicableError(Exception):
+    """Le type de pièce ne s'applique pas à ce type de tiers (un RCCM sur une personne physique,
+    une CNI sur une société…). -> 422."""
+
+
+class PieceIncompleteError(Exception):
+    """Le type de pièce exige une information absente (autorité émettrice, date d'expiration).
+    Le message, destiné à l'utilisateur, est porté par l'exception. -> 422."""
 
 
 class SuppressionPrincipaleError(Exception):
@@ -158,6 +171,22 @@ def _debasculer_principale(db: Session, tier_id: uuid.UUID) -> None:
         )
         .values(is_primary=False)
     )
+
+
+def _controler_type(db: Session, tier: Tier, donnees: DonneesPiece) -> None:
+    """Refuse un type de pièce inapplicable au type du tiers (`applies_to`), ou dont l'autorité
+    émettrice / la date d'expiration exigées par le type manquent."""
+    type_piece = db.execute(
+        select(IdentityDocumentType).where(IdentityDocumentType.id == donnees.document_type_id)
+    ).scalar_one_or_none()
+    if type_piece is None:
+        return
+    if tier.tier_type not in type_piece.applies_to:
+        raise TypePieceNonApplicableError()
+    if type_piece.requires_issuer and not (donnees.issuing_authority or "").strip():
+        raise PieceIncompleteError(MESSAGE_EMETTEUR_EXIGE)
+    if type_piece.requires_expiry_date and donnees.expiry_date is None:
+        raise PieceIncompleteError(MESSAGE_EXPIRATION_EXIGEE)
 
 
 def _controler_unicite(
@@ -293,6 +322,7 @@ def ajouter_piece(
     contexte: ContexteRequete,
 ) -> IdentityDocument:
     tier = _charger_tier(db, courant, tier_id)
+    _controler_type(db, tier, donnees)
     numero_norm = normaliser_numero(donnees.document_number)
     # Peut lever DoublonPieceError (et auditer + commit le refus) AVANT toute insertion.
     _controler_unicite(db, courant, tier_id, donnees.document_type_id, numero_norm, contexte)
