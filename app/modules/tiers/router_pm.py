@@ -93,6 +93,7 @@ def _vue(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -> Person
     origine = vue.origine
     return PersonnesLiees(
         items=[_vers_item(ligne, vue.seuil) for ligne in vue.lignes],
+        journee_reference=vue.journee_reference,
         total_beneficiaires=vue.total_beneficiaires,
         seuil=vue.seuil,
         seuil_provisoire=vue.seuil_provisoire,

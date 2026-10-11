@@ -385,6 +385,7 @@ class LigneLien:
 @dataclass(frozen=True)
 class VueLiens:
     lignes: list[LigneLien]
+    journee_reference: date
     total_beneficiaires: Decimal
     seuil: Decimal | None
     seuil_provisoire: bool
@@ -433,6 +434,7 @@ def lister_liens(db: Session, courant: UtilisateurCourant, tier_id: uuid.UUID) -
     sans = bool(resultat.detail.get("sans_evaluation"))
     return VueLiens(
         lignes=lignes,
+        journee_reference=aujourdhui,
         total_beneficiaires=_somme_beneficiaires(db, tier_id, aujourdhui),
         seuil=parametres.seuil_beneficiaire_effectif if parametres else None,
         seuil_provisoire=parametres.is_provisional if parametres else False,

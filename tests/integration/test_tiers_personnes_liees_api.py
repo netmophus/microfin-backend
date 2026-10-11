@@ -447,6 +447,7 @@ def test_en_cours_se_juge_sur_la_journee_comptable_pas_sur_la_date_civile(
 
     journee.ouvrir_journee(cadre.db, date(2024, 1, 2), None)
     pendant = etat()["en_cours"]
+    assert cadre.lire(societe.id).json()["journee_reference"] == "2024-01-02"  # la date à proposer
     risque_pendant = cadre.lire(societe.id).json()["risque"]["niveau"]
     journee.cloturer_journee(cadre.db, None)
     # Sans journée ouverte : la dernière journée clôturée sert de référence (lecture, pas de refus).

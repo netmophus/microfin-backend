@@ -532,6 +532,9 @@ class RisqueHerite(BaseModel):
 
 class PersonnesLiees(BaseModel):
     items: list[LienItem]
+    # Journée comptable de référence (ouverte, sinon dernière clôturée) : celle qui juge « en
+    # cours », et la date que l'écran propose pour le début d'un mandat.
+    journee_reference: date
     total_beneficiaires: Decimal
     seuil: Decimal | None  # nul : le paramètre n'est pas installé, aucun indicateur
     seuil_provisoire: bool
