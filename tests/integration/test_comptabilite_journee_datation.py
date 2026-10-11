@@ -45,7 +45,9 @@ from app.modules.epargne import guichet, service
 from app.modules.epargne.models import Product as SavingsProduct
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
-from app.modules.security.models import User
+from app.modules.security.jwt import creer_access_token
+from app.modules.security.models import Role, User, UserRole
+from app.modules.security.password import hasher_mot_de_passe
 from app.modules.tiers.parts_operations import TYPE_SOUSCRIPTION_COMPTANT, poser_ecriture_parts
 
 pytestmark = pytest.mark.integration
@@ -369,3 +371,61 @@ def test_operation_refusee_proprement_si_aucune_journee_nest_ouverte(db: Session
             compte_non_liberees_id=_cid(db, "571121"),
             libelle="Test lot3 sans journée",
         )
+
+
+# --- Historique des parts : la date affichée est celle de la pièce, pas celle de la saisie --------
+
+
+def test_historique_des_parts_expose_la_date_comptable_et_non_la_date_de_saisie(
+    client: TestClient, db: Session
+) -> None:
+    _ouvrir_journee_passee(db)
+    _exercice_couvrant(db, "J3HP")
+    agence = Agency(code="J3HP", name="Agence J3HP", compte_caisse_id=_cid(db, "101111"))
+    db.add(agence)
+    db.flush()
+    tier_id = _tier(db, agence, "HP")
+    db.execute(text("DELETE FROM tiers.share_parameters"))
+    db.execute(
+        text(
+            "INSERT INTO tiers.share_parameters "
+            "(unit_value, minimum_shares, is_refundable, membership_on, "
+            " compte_parts_liberees_id, compte_parts_non_liberees_id, is_provisional) "
+            "VALUES (5000, 1, TRUE, 'liberation', "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number='571111'), "
+            " (SELECT id FROM comptabilite.accounts WHERE account_number='571121'), TRUE)"
+        )
+    )
+    role = db.execute(select(Role).where(Role.code == "RESPONSABLE_AGENCE")).scalar_one()
+    s = uuid.uuid4().hex[:8]
+    user = User(
+        matricule=f"MAT-{s}", email=f"{s}@ex.com", username=f"u{s}",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="A",
+        primary_agency_id=agence.id,
+    )
+    db.add(user)
+    db.flush()
+    db.add(UserRole(user_id=user.id, role_id=role.id))
+    db.flush()
+    _poste_assigne_et_session_ouverte(db, agence, user.id)
+    entete = {
+        "Authorization": "Bearer "
+        + creer_access_token(
+            user_id=user.id, roles=["RESPONSABLE_AGENCE"],
+            primary_agency_id=agence.id, agency_id=agence.id,
+        )
+    }
+
+    posee = client.post(
+        f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 2}, headers=entete
+    )
+    assert posee.status_code == 200
+    historique = client.get(f"/tiers/{tier_id}/parts", headers=entete)
+
+    assert historique.status_code == 200
+    [mouvement] = historique.json()["mouvements"]
+    assert mouvement["date_comptable"] == JOURNEE_DATE.isoformat()  # 2024-03-04
+    aujourdhui = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    assert mouvement["saisi_le"][:10] == aujourdhui.isoformat()  # la saisie, elle, est réelle
+    assert mouvement["saisi_le"][:10] != mouvement["date_comptable"]
+    assert "created_at" not in mouvement

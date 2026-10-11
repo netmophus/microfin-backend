@@ -22,7 +22,7 @@ telle quelle ; si l'IMF change la valeur, il faudra historiser (comme la date de
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -108,7 +108,8 @@ class MouvementParts:
     unit_value: int
     amount: int
     entry_number: str | None
-    created_at: datetime
+    date_comptable: date | None  # date de la pièce (journée comptable), celle que le métier lit
+    saisi_le: datetime  # horodatage de saisie (audit) : jamais la date affichée
 
 
 @dataclass(frozen=True)
@@ -163,12 +164,13 @@ def consulter(
 
     mouvements = [
         MouvementParts(
-            type=t, shares_count=n, unit_value=uv, amount=m, entry_number=piece, created_at=quand
+            type=t, shares_count=n, unit_value=uv, amount=m, entry_number=piece,
+            date_comptable=jour, saisi_le=quand,
         )
-        for t, n, uv, m, piece, quand in db.execute(
+        for t, n, uv, m, piece, jour, quand in db.execute(
             text(
                 "SELECT ss.type, ss.shares_count, ss.unit_value, ss.amount, je.entry_number, "
-                "ss.created_at FROM tiers.share_subscriptions ss "
+                "je.entry_date, ss.created_at FROM tiers.share_subscriptions ss "
                 "LEFT JOIN comptabilite.journal_entries je ON je.id = ss.journal_entry_id "
                 "WHERE ss.tier_id = :t ORDER BY ss.created_at, ss.id"
             ),

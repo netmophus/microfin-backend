@@ -535,7 +535,8 @@ def lire_parts_endpoint(
                 unit_value=m.unit_value,
                 amount=m.amount,
                 entry_number=m.entry_number,
-                created_at=m.created_at,
+                date_comptable=m.date_comptable,
+                saisi_le=m.saisi_le,
             )
             for m in fiche.mouvements
         ],

@@ -353,7 +353,8 @@ class MouvementPartsItem(BaseModel):
     unit_value: int
     amount: int  # francs CFA entiers
     entry_number: str | None  # n° de la pièce comptable liée
-    created_at: datetime
+    date_comptable: date | None  # date de la pièce : c'est elle que l'écran affiche
+    saisi_le: datetime  # horodatage de saisie, pour l'audit
 
 
 class FichePartsSociales(BaseModel):
