@@ -438,7 +438,10 @@ class RiskAssessment(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=GEN_UUID)
     tier_id: Mapped[uuid.UUID] = mapped_column(UUID, sa.ForeignKey(FK_TIER), nullable=False)
-    assessed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
+    # clock_timestamp() : l'instant réel de l'insertion (NOW() est figé par transaction).
+    assessed_at: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=sa.text("clock_timestamp()")
+    )
     assessed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     trigger_event: Mapped[str] = mapped_column(sa.String(30), nullable=False)
     score: Mapped[int] = mapped_column(sa.Integer(), nullable=False)

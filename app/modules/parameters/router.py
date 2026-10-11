@@ -259,14 +259,17 @@ def lister_devises(
 
 
 class TypePieceItem(BaseModel):
-    """Type de pièce pour le sélecteur de saisie (T2c). `requires_expiry_date` dit au formulaire
-    s'il doit réclamer une échéance ; `enforce_unique` n'est PAS exposé (le contrôle d'unicité
-    reste au service — le front n'a pas à connaître la règle pour l'appliquer)."""
+    """Type de pièce pour le sélecteur de saisie (T2c). `requires_expiry_date` et
+    `requires_issuer` disent au formulaire quels champs rendre obligatoires (le service applique la
+    même règle) ; `applies_to` dit à quels types de fiche le type s'applique. `enforce_unique`
+    n'est PAS exposé (le contrôle d'unicité reste au service)."""
 
     id: uuid.UUID
     code: str
     name: str
     requires_expiry_date: bool
+    requires_issuer: bool
+    applies_to: list[str]
 
 
 @router_doctypes.get("", response_model=list[TypePieceItem])
@@ -288,6 +291,8 @@ def lister_types_pieces(
             IdentityDocumentType.code,
             IdentityDocumentType.name,
             IdentityDocumentType.requires_expiry_date,
+            IdentityDocumentType.requires_issuer,
+            IdentityDocumentType.applies_to,
         )
         .where(IdentityDocumentType.is_active.is_(True))
         .order_by(IdentityDocumentType.display_order, IdentityDocumentType.name)
@@ -301,6 +306,8 @@ def lister_types_pieces(
             code=ligne.code,
             name=ligne.name,
             requires_expiry_date=ligne.requires_expiry_date,
+            requires_issuer=ligne.requires_issuer,
+            applies_to=list(ligne.applies_to),
         )
         for ligne in lignes
     ]

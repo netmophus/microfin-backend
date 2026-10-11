@@ -90,7 +90,13 @@ def test_liste_les_types_de_pieces(client: TestClient, db: Session) -> None:
     assert types["CNI"]["requires_expiry_date"] is True  # une CNI a une échéance
     assert types["ATTESTATION_NAISSANCE"]["requires_expiry_date"] is False
     # enforce_unique n'est PAS exposé : le contrôle d'unicité reste au service.
-    assert set(corps[0]) == {"id", "code", "name", "requires_expiry_date"}
+    assert set(corps[0]) == {
+        "id", "code", "name", "requires_expiry_date", "requires_issuer", "applies_to"
+    }
+    assert types["CNI"]["requires_issuer"] is True
+    assert types["CNI"]["applies_to"] == ["individual"]
+    assert types["STATUTS"]["requires_issuer"] is False
+    assert types["STATUTS"]["applies_to"] == ["legal_entity", "group"]
 
 
 def _codes_types(client: TestClient, db: Session, tier_type: str) -> set[str]:

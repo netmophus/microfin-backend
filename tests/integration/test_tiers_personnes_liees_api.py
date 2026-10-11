@@ -821,6 +821,75 @@ def test_le_badge_de_la_fiche_lit_le_reflet_et_non_la_derniere_archive(cadre: Ca
     assert apres["risk_provisional"] is False
 
 
+def test_deux_archives_d_une_meme_transaction_ont_des_horodatages_croissants(
+    cadre: Cadre,
+) -> None:
+    """`assessed_at` vaut l'instant réel de l'insertion (clock_timestamp), pas le début de la
+    transaction : « la dernière archive » est donc déterministe."""
+    personne = cadre.personne("Horloge")
+    assert cadre.kyc(personne.id, ppe=True).status_code == 200
+    assert cadre.kyc(personne.id, ppe=False).status_code == 200
+
+    lignes = cadre.db.execute(
+        text(
+            "SELECT assessed_at, niveau_effectif FROM tiers.risk_assessments "
+            "WHERE tier_id = :t ORDER BY assessed_at"
+        ),
+        {"t": personne.id},
+    ).all()
+
+    horodatages = [ligne.assessed_at for ligne in lignes]
+    assert len(horodatages) == 3  # création du score, PPE, retour à la normale
+    assert horodatages == sorted(set(horodatages))  # tous distincts, donc ordonnés
+    assert [ligne.niveau_effectif for ligne in lignes] == ["faible", "eleve", "faible"]
+
+
+def test_la_creation_accepte_les_champs_du_profil_complet(cadre: Cadre) -> None:
+    pays = _pays(cadre.db, "NE")
+    societe = cadre.client.post(
+        "/tiers/legal-entities",
+        json={
+            "legal_name": "TANDA SERVICES",
+            "commercial_name": "Tanda",
+            "legal_form": "SARL",
+            "rccm_number": "NI-NIA-2020-B-0042",
+            "nif_number": "NIF-123",
+            "constitution_date": "2020-03-15",
+            "business_purpose": "Négoce de céréales",
+            "headquarters_country_id": str(pays),
+        },
+        headers=cadre.entete,
+    )
+    groupement = cadre.client.post(
+        "/tiers/groups",
+        json={
+            "group_name": "HASKE",
+            "group_type": "tontine",
+            "constitution_date": "2019-06-01",
+            "intervention_zone": "Commune de Tahoua",
+            "group_purpose": "Épargne et entraide",
+            "expected_member_count": 25,
+        },
+        headers=cadre.entete,
+    )
+
+    assert societe.status_code == 201, societe.text
+    pm = societe.json()["personne_morale"]
+    assert (pm["commercial_name"], pm["rccm_number"], pm["nif_number"]) == (
+        "Tanda",
+        "NI-NIA-2020-B-0042",
+        "NIF-123",
+    )
+    assert pm["business_purpose"] == "Négoce de céréales"
+    assert groupement.status_code == 201, groupement.text
+    g = groupement.json()["groupement"]
+    assert (g["intervention_zone"], g["group_purpose"], g["expected_member_count"]) == (
+        "Commune de Tahoua",
+        "Épargne et entraide",
+        25,
+    )
+
+
 # --- 7. le seuil LBC/FT ------------------------------------------------------------------
 
 
