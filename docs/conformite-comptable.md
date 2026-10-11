@@ -424,6 +424,25 @@ explicite, jamais silencieuse).
   que le bilan reflète la qualité au jour J. Plus lourd (déplace des soldes), à auditer. **AUCUN
   transfert automatique n'est codé** ; cette option n'existera que si l'expert la valide.
 
+**Règles de guichet par produit : dépôt initial minimum et solde plancher (10/10/2026).** Deux
+paramètres métier, par produit, défaut 0 = aucune contrainte (comportement d'avant), éditables
+par l'administrateur fonctionnel (`epargne.product.manage`) sur l'écran Produits d'épargne et
+tracés avant/après dans l'audit `epargne.product.updated`. Valeurs ⚠️ À VALIDER par l'IMF.
+
+| Paramètre | Colonne | Règle | Refus (422) |
+|-----------|---------|-------|-------------|
+| Dépôt initial minimum | `epargne.products.depot_initial_minimum` (migration 0058) | `deposer()` refuse le PREMIER dépôt d'un compte jamais mouvementé s'il est inférieur au minimum ; l'ouverture reste à solde 0 | « Premier dépôt insuffisant : ce produit exige au moins X F à l'ouverture. » |
+| Solde plancher | `epargne.products.min_balance` (déjà là depuis 0018, exposé par ce lot) | `retirer()` refuse si le solde après retrait descendrait sous le plancher | « Retrait refusé : le solde ne peut pas descendre sous X F sur ce produit. » |
+
+- « Jamais mouvementé » se lit dans l'historique des mouvements, pas dans le solde : un compte
+  vidé puis rechargé n'est plus un compte neuf (le minimum ne revient pas).
+- La **clôture** n'est pas un retrait : elle restitue le solde et le ramène à 0 sans être soumise
+  au plancher. Le prélèvement automatique du crédit respecte déjà `min_balance`.
+- Seuls les dépôts de **guichet** sont soumis au minimum : un premier crédit du compte par une
+  autre voie (décaissement de crédit, versement d'intérêts) en fait un compte déjà mouvementé.
+- `solde_minimum_remunere` est une AUTRE notion (seuil de rémunération : en dessous, aucun
+  intérêt n'est versé) ; il n'est pas touché.
+
 ## Parts sociales (PS1, PROVISOIRES) — la mécanique accueille, l'expert/les statuts choisissent
 
 Config d'institution `tiers.share_parameters` (une ligne, `is_provisional`), toutes valeurs

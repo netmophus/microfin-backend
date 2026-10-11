@@ -213,6 +213,8 @@ def test_modification_reussie_avec_motif_trace(client: TestClient, db: Session) 
         "base_jours": 365,
         "regle_arrondi": "plancher",
         "solde_minimum_remunere": 1000,
+        "min_balance": 0,
+        "depot_initial_minimum": 0,
         "motif": "Refonte du produit",
     }
 
@@ -243,7 +245,8 @@ def test_modification_decouvert_autorise_rejetee_422(client: TestClient, db: Ses
     corps = {
         "name": "X", "type": "a_vue", "taux_bp": 0, "periodicite": "annuelle",
         "methode_calcul_solde": "fin_periode", "base_jours": 360,
-        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0, "motif": "Tentative",
+        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0,
+        "min_balance": 0, "depot_initial_minimum": 0, "motif": "Tentative",
         "decouvert_autorise": 5000,
     }
 
@@ -260,7 +263,8 @@ def test_modification_motif_absent_refusee(client: TestClient, db: Session) -> N
     corps = {
         "name": "X", "type": "a_vue", "taux_bp": 0, "periodicite": "annuelle",
         "methode_calcul_solde": "fin_periode", "base_jours": 360,
-        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0, "motif": "",
+        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0,
+        "min_balance": 0, "depot_initial_minimum": 0, "motif": "",
     }
 
     reponse = client.patch(f"/epargne/produits/{produit.id}", json=corps, headers=admin)
@@ -273,7 +277,8 @@ def test_modification_sans_permission_403(client: TestClient, db: Session) -> No
     corps = {
         "name": "X", "type": "a_vue", "taux_bp": 0, "periodicite": "annuelle",
         "methode_calcul_solde": "fin_periode", "base_jours": 360,
-        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0, "motif": "Tentative",
+        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0,
+        "min_balance": 0, "depot_initial_minimum": 0, "motif": "Tentative",
     }
 
     reponse = client.patch(f"/epargne/produits/{produit.id}", json=corps, headers=comptable)
@@ -285,7 +290,8 @@ def test_modification_produit_introuvable_404(client: TestClient, db: Session) -
     corps = {
         "name": "X", "type": "a_vue", "taux_bp": 0, "periodicite": "annuelle",
         "methode_calcul_solde": "fin_periode", "base_jours": 360,
-        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0, "motif": "Tentative",
+        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0,
+        "min_balance": 0, "depot_initial_minimum": 0, "motif": "Tentative",
     }
 
     reponse = client.patch(f"/epargne/produits/{uuid.uuid4()}", json=corps, headers=admin)
@@ -435,3 +441,92 @@ def test_activation_produit_introuvable_404(client: TestClient, db: Session) -> 
         headers=admin,
     )
     assert reponse.status_code == 404
+
+
+# --- Paramètres de guichet : solde plancher (min_balance) et dépôt initial minimum ----------
+
+
+def test_creation_porte_le_plancher_et_le_depot_initial_minimum(
+    client: TestClient, db: Session
+) -> None:
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+
+    reponse = client.post(
+        "/epargne/produits",
+        json={**CORPS_CREATION, "min_balance": 2000, "depot_initial_minimum": 5000},
+        headers=admin,
+    )
+
+    assert reponse.status_code == 201
+    assert (reponse.json()["min_balance"], reponse.json()["depot_initial_minimum"]) == (2000, 5000)
+    produit = db.execute(select(Product).where(Product.code == "TST01")).scalar_one()
+    assert (produit.min_balance, produit.depot_initial_minimum) == (2000, 5000)
+
+
+def test_creation_sans_ces_champs_laisse_zero(client: TestClient, db: Session) -> None:
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+
+    reponse = client.post("/epargne/produits", json=CORPS_CREATION, headers=admin)
+
+    assert (reponse.json()["min_balance"], reponse.json()["depot_initial_minimum"]) == (0, 0)
+
+
+def test_montants_negatifs_refuses_422(client: TestClient, db: Session) -> None:
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+    for champ in ("min_balance", "depot_initial_minimum"):
+        reponse = client.post(
+            "/epargne/produits", json={**CORPS_CREATION, champ: -1}, headers=admin
+        )
+        assert reponse.status_code == 422
+
+
+def test_modification_change_les_deux_parametres_et_les_trace(
+    client: TestClient, db: Session
+) -> None:
+    produit = _produit(db, code="MOD-GUI")
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+    corps = {
+        "name": "X", "type": "a_vue", "taux_bp": 0, "periodicite": "annuelle",
+        "methode_calcul_solde": "fin_periode", "base_jours": 360,
+        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0,
+        "min_balance": 2500, "depot_initial_minimum": 10000, "motif": "Règles du guichet",
+    }
+
+    reponse = client.patch(f"/epargne/produits/{produit.id}", json=corps, headers=admin)
+
+    assert reponse.status_code == 200
+    assert (reponse.json()["min_balance"], reponse.json()["depot_initial_minimum"]) == (
+        2500,
+        10000,
+    )
+    ligne = db.execute(
+        text(
+            "SELECT old_values, new_values FROM audit.audit_logs "
+            "WHERE action = 'epargne.product.updated' AND resource_id = :r"
+        ),
+        {"r": produit.id},
+    ).one()
+    assert ligne.old_values["min_balance"] == 0 and ligne.new_values["min_balance"] == 2500
+    assert ligne.new_values["depot_initial_minimum"] == 10000
+
+
+@pytest.mark.parametrize("champ_omis", ["min_balance", "depot_initial_minimum"])
+def test_modification_incomplete_refusee_422_sans_rien_changer(
+    client: TestClient, db: Session, champ_omis: str
+) -> None:
+    """Un PATCH sans l'un des deux paramètres n'est jamais une remise à 0 silencieuse."""
+    produit = _produit(db, code="MOD-INC", min_balance=2000, depot_initial_minimum=5000)
+    admin = _entete_auth(db, "ADMIN_FONCTIONNEL")
+    corps = {
+        "name": "X", "type": "a_vue", "taux_bp": 0, "periodicite": "annuelle",
+        "methode_calcul_solde": "fin_periode", "base_jours": 360,
+        "regle_arrondi": "plus_proche", "solde_minimum_remunere": 0,
+        "min_balance": 0, "depot_initial_minimum": 0, "motif": "Mise à jour partielle",
+    }
+    del corps[champ_omis]
+
+    reponse = client.patch(f"/epargne/produits/{produit.id}", json=corps, headers=admin)
+
+    assert reponse.status_code == 422
+    db.refresh(produit)
+    assert (produit.min_balance, produit.depot_initial_minimum) == (2000, 5000)

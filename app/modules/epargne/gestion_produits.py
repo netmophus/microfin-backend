@@ -43,6 +43,8 @@ def creer_produit(
     base_jours: int,
     regle_arrondi: str,
     solde_minimum_remunere: int,
+    min_balance: int = 0,
+    depot_initial_minimum: int = 0,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Product:
@@ -70,6 +72,8 @@ def creer_produit(
         base_jours=base_jours,
         regle_arrondi=regle_arrondi,
         solde_minimum_remunere=solde_minimum_remunere,
+        min_balance=min_balance,
+        depot_initial_minimum=depot_initial_minimum,
         created_by=par,
         updated_by=par,
     )
@@ -83,7 +87,14 @@ def creer_produit(
         acteur_id=par,
         resource_type=RESSOURCE,
         resource_id=produit.id,
-        new_values={"code": code, "name": name, "type": type, "taux_bp": taux_bp},
+        new_values={
+            "code": code,
+            "name": name,
+            "type": type,
+            "taux_bp": taux_bp,
+            "min_balance": min_balance,
+            "depot_initial_minimum": depot_initial_minimum,
+        },
     )
     return produit
 
@@ -100,6 +111,8 @@ def modifier_produit(
     base_jours: int,
     regle_arrondi: str,
     solde_minimum_remunere: int,
+    min_balance: int = 0,
+    depot_initial_minimum: int = 0,
     motif: str,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
@@ -116,6 +129,8 @@ def modifier_produit(
         "base_jours": produit.base_jours,
         "regle_arrondi": produit.regle_arrondi,
         "solde_minimum_remunere": produit.solde_minimum_remunere,
+        "min_balance": produit.min_balance,
+        "depot_initial_minimum": produit.depot_initial_minimum,
     }
 
     produit.name = name
@@ -126,6 +141,8 @@ def modifier_produit(
     produit.base_jours = base_jours
     produit.regle_arrondi = regle_arrondi
     produit.solde_minimum_remunere = solde_minimum_remunere
+    produit.min_balance = min_balance
+    produit.depot_initial_minimum = depot_initial_minimum
     produit.updated_by = par
     db.flush()
 
@@ -146,6 +163,8 @@ def modifier_produit(
             "base_jours": base_jours,
             "regle_arrondi": regle_arrondi,
             "solde_minimum_remunere": solde_minimum_remunere,
+            "min_balance": min_balance,
+            "depot_initial_minimum": depot_initial_minimum,
             "motif": motif,
         },
     )

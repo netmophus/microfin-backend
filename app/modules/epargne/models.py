@@ -80,6 +80,11 @@ class Product(Base):
     solde_minimum_remunere: Mapped[int] = mapped_column(
         sa.BigInteger, nullable=False, server_default=sa.text("0")
     )
+    # Montant minimum du PREMIER dépôt sur un compte jamais mouvementé (migration 0058). 0 = aucune
+    # contrainte. Porté par guichet.deposer(), pas par l'ouverture (qui reste à solde 0).
+    depot_initial_minimum: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
     compte_charge_interet_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.accounts.id")
     )

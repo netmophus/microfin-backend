@@ -18,7 +18,12 @@ numérotation des tiers. Le second attend le premier et lit le solde RÉEL.
 
 PLANCHER (3) : un retrait est refusé si `montant > solde - min_balance + decouvert_autorise`.
 Épargne à vue standard : min_balance = decouvert_autorise = 0, donc le solde ne descend pas sous
-zéro. Les deux sont des PARAMÈTRES PRODUIT provisoires (l'expert dira les valeurs).
+zéro. Les deux sont des PARAMÈTRES PRODUIT provisoires (l'expert dira les valeurs). `min_balance`
+EST le « solde plancher » du produit (écran Produits d'épargne). La clôture d'un compte
+(`fermer_compte`) n'est pas un retrait : elle ramène le solde à 0 sans être soumise au plancher.
+
+PREMIER DÉPÔT (3) : `produit.depot_initial_minimum` (0 = aucune contrainte) s'applique au PREMIER
+dépôt d'un compte jamais mouvementé — l'ouverture reste à solde 0. Refus avant toute écriture.
 
 CLOISONNEMENT (4) : le compte est chargé DANS le périmètre de l'acteur (le caissier n'opère que
 sur son agence) ; hors périmètre -> 404 (n'existe pas de son point de vue), jamais 403.
@@ -71,6 +76,10 @@ class OperationGeleeError(OperationError):
 
 class SoldeInsuffisantError(OperationError):
     """Le retrait dépasse le disponible (solde - plancher + découvert autorisé)."""
+
+
+class PremierDepotInsuffisantError(OperationError):
+    """Le premier dépôt d'un compte jamais mouvementé est sous le minimum du produit."""
 
 
 class ActionsAudit:
@@ -126,6 +135,24 @@ def _controler(db: Session, compte: SavingsAccount, montant: int) -> None:
         raise OperationGeleeError("Opérations gelées : le membre est suspendu.")
 
 
+def _controler_premier_depot(
+    db: Session, compte: SavingsAccount, produit: Product, montant: int
+) -> None:
+    """Refuse un premier dépôt sous `depot_initial_minimum`. « Premier » = aucun mouvement
+    enregistré sur ce compte (lu sous le verrou de ligne du compte : deux premiers dépôts
+    concurrents ne peuvent pas passer tous les deux)."""
+    if produit.depot_initial_minimum <= 0 or montant >= produit.depot_initial_minimum:
+        return
+    deja_mouvemente = db.execute(
+        select(SavingsMovement.id).where(SavingsMovement.account_id == compte.id).limit(1)
+    ).first()
+    if deja_mouvemente is None:
+        raise PremierDepotInsuffisantError(
+            "Premier dépôt insuffisant : ce produit exige au moins "
+            f"{_fcfa(produit.depot_initial_minimum)} à l'ouverture."
+        )
+
+
 def _enregistrer_mouvement(
     db: Session,
     compte: SavingsAccount,
@@ -173,28 +200,22 @@ def _operer(
     compte = _charger_compte_verrou(db, courant, compte_id)
     _controler(db, compte, montant)
 
+    produit = db.get(Product, compte.product_id)
+    assert produit is not None  # FK garantit l'existence
+
+    if signe > 0:  # dépôt : le minimum ne vaut que pour le PREMIER, sur un compte jamais mouvementé
+        _controler_premier_depot(db, compte, produit, montant)
+
     if signe < 0:  # retrait : contrôle du plancher
-        produit = db.get(Product, compte.product_id)
-        assert produit is not None  # FK garantit l'existence
         disponible = compte.balance - produit.min_balance + produit.decouvert_autorise
         if montant > disponible:
-            # Détail (solde minimum / découvert) SEULEMENT s'il fait diverger le disponible du
-            # solde brut ; sinon « disponible = solde », inutile à dire.
-            raison = ""
-            if disponible != compte.balance:
-                raisons = []
-                if produit.min_balance > 0:
-                    raisons.append(
-                        f"un solde minimum de {_fcfa(produit.min_balance)} doit rester "
-                        "sur le compte"
-                    )
-                if produit.decouvert_autorise > 0:
-                    raisons.append(
-                        f"un découvert de {_fcfa(produit.decouvert_autorise)} est autorisé"
-                    )
-                raison = f" ({' et '.join(raisons)})"
+            if produit.min_balance > 0:
+                raise SoldeInsuffisantError(
+                    "Retrait refusé : le solde ne peut pas descendre sous "
+                    f"{_fcfa(produit.min_balance)} sur ce produit."
+                )
             raise SoldeInsuffisantError(
-                f"Retrait impossible : le solde disponible est de {_fcfa(disponible)}{raison}, "
+                f"Retrait impossible : le solde disponible est de {_fcfa(disponible)}, "
                 f"le retrait demandé de {_fcfa(montant)}."
             )
 

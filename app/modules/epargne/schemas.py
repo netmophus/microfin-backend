@@ -177,6 +177,8 @@ class ProduitEpargneDetail(BaseModel):
     base_jours: int
     regle_arrondi: str
     solde_minimum_remunere: int
+    min_balance: int  # solde plancher : ce qui doit rester sur le compte après un retrait
+    depot_initial_minimum: int  # minimum du premier dépôt (0 = aucune contrainte)
 
 
 class CreationProduitEpargne(BaseModel):
@@ -202,6 +204,8 @@ class CreationProduitEpargne(BaseModel):
     base_jours: Literal[360, 365] = 360
     regle_arrondi: Literal["plus_proche", "plancher"] = "plus_proche"
     solde_minimum_remunere: int = Field(default=0, ge=0)
+    min_balance: int = Field(default=0, ge=0)
+    depot_initial_minimum: int = Field(default=0, ge=0)
 
 
 class ModificationProduitEpargne(BaseModel):
@@ -222,6 +226,8 @@ class ModificationProduitEpargne(BaseModel):
     base_jours: Literal[360, 365]
     regle_arrondi: Literal["plus_proche", "plancher"]
     solde_minimum_remunere: int = Field(ge=0)
+    min_balance: int = Field(ge=0)
+    depot_initial_minimum: int = Field(ge=0)
     motif: str = Field(min_length=3, max_length=500)
 
 

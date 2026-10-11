@@ -459,3 +459,33 @@ def test_rapprochement_sans_permission_403(client: TestClient, db: Session) -> N
 
     reponse = client.get("/epargne/rapprochement", headers=caissier)
     assert reponse.status_code == 403
+
+
+def test_refus_du_serveur_premier_depot_et_plancher_en_422_avec_message_humain(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "AG-GPAR")
+    compte = _compte(db, agence)
+    produit = db.get(Product, compte.product_id)
+    produit.depot_initial_minimum = 5000
+    produit.min_balance = 2000
+    db.flush()
+    entete = _entete(db, agence, "CAISSIER")
+    _ouvrir_session_caisse(db, agence, entete)
+
+    premier = client.post(
+        f"/epargne/comptes/{compte.id}/depot", json={"montant": 1000}, headers=entete
+    )
+    assert premier.status_code == 422
+    assert premier.json()["detail"] == (
+        "Premier dépôt insuffisant : ce produit exige au moins 5 000 F à l'ouverture."
+    )
+
+    client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 5000}, headers=entete)
+    retrait = client.post(
+        f"/epargne/comptes/{compte.id}/retrait", json={"montant": 3500}, headers=entete
+    )
+    assert retrait.status_code == 422
+    assert retrait.json()["detail"] == (
+        "Retrait refusé : le solde ne peut pas descendre sous 2 000 F sur ce produit."
+    )

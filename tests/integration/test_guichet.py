@@ -24,8 +24,10 @@ from app.modules.epargne.guichet import (
     CompteIntrouvableError,
     MontantInvalideError,
     OperationGeleeError,
+    PremierDepotInsuffisantError,
     SoldeInsuffisantError,
     deposer,
+    fermer_compte,
     retirer,
 )
 from app.modules.epargne.models import Product, SavingsAccount
@@ -116,12 +118,19 @@ class Cadre:
     caissier: UtilisateurCourant
 
 
-def _cadre(db: Session, suffixe: str, *, min_balance: int = 0, decouvert: int = 0) -> Cadre:
+def _cadre(
+    db: Session,
+    suffixe: str,
+    *,
+    min_balance: int = 0,
+    decouvert: int = 0,
+    depot_initial_minimum: int = 0,
+) -> Cadre:
     agence = Agency(code=f"AGG-{suffixe}", name="Agence", compte_caisse_id=_compte_id(db, "101111"))
     produit = Product(
         code=f"PG{suffixe}", name="Épargne", type="a_vue",
         compte_epargne_id=_compte_id(db, "251111"), min_balance=min_balance,
-        decouvert_autorise=decouvert,
+        decouvert_autorise=decouvert, depot_initial_minimum=depot_initial_minimum,
     )
     db.add_all([agence, produit])
     db.flush()
@@ -272,3 +281,92 @@ def test_rapprochement_concorde_apres_une_serie_doperations(db: Session) -> None
     # Nos opérations font bouger auxiliaire ET général du MÊME montant (700 + 500).
     assert resultat.auxiliaire - base.auxiliaire == 1200
     assert resultat.general - base.general == 1200
+
+
+# --- Paramètres produit : dépôt initial minimum et solde plancher ---------------------------
+
+
+def _nb_mouvements_et_pieces(db: Session, compte_id: uuid.UUID) -> tuple[int, int]:
+    mouvements = db.execute(
+        text("SELECT count(*) FROM epargne.movements WHERE account_id = :a"), {"a": compte_id}
+    ).scalar_one()
+    pieces = db.execute(text("SELECT count(*) FROM comptabilite.journal_entries")).scalar_one()
+    return mouvements, pieces
+
+
+def test_premier_depot_sous_le_minimum_refuse_et_rien_ecrit(db: Session) -> None:
+    c = _cadre(db, "D1", depot_initial_minimum=5000)
+    avant = _nb_mouvements_et_pieces(db, c.compte.id)
+
+    with pytest.raises(PremierDepotInsuffisantError) as erreur:
+        deposer(db, c.caissier, c.compte.id, 4999)
+
+    assert str(erreur.value) == (
+        "Premier dépôt insuffisant : ce produit exige au moins 5 000 F à l'ouverture."
+    )
+    db.refresh(c.compte)
+    assert c.compte.balance == 0
+    assert _nb_mouvements_et_pieces(db, c.compte.id) == avant
+
+
+def test_premier_depot_egal_au_minimum_accepte(db: Session) -> None:
+    c = _cadre(db, "D2", depot_initial_minimum=5000)
+
+    assert deposer(db, c.caissier, c.compte.id, 5000).nouveau_solde == 5000
+
+
+def test_second_depot_sous_le_minimum_accepte(db: Session) -> None:
+    c = _cadre(db, "D3", depot_initial_minimum=5000)
+    deposer(db, c.caissier, c.compte.id, 5000)
+
+    assert deposer(db, c.caissier, c.compte.id, 100).nouveau_solde == 5100  # règle du 1er seul
+
+
+def test_le_minimum_ne_revient_pas_quand_le_solde_repasse_a_zero(db: Session) -> None:
+    """« Jamais mouvementé » se lit dans l'historique, pas dans le solde : un compte vidé puis
+    rechargé n'est plus un compte neuf."""
+    c = _cadre(db, "D4", depot_initial_minimum=5000)
+    deposer(db, c.caissier, c.compte.id, 5000)
+    retirer(db, c.caissier, c.compte.id, 5000)
+
+    assert deposer(db, c.caissier, c.compte.id, 100).nouveau_solde == 100
+
+
+def test_retrait_qui_franchit_le_plancher_refuse_avec_le_message_du_produit(db: Session) -> None:
+    c = _cadre(db, "PL1", min_balance=2000)
+    deposer(db, c.caissier, c.compte.id, 10000)
+    avant = _nb_mouvements_et_pieces(db, c.compte.id)
+
+    with pytest.raises(SoldeInsuffisantError) as erreur:
+        retirer(db, c.caissier, c.compte.id, 8001)  # laisserait 1 999 F < 2 000 F
+
+    assert str(erreur.value) == (
+        "Retrait refusé : le solde ne peut pas descendre sous 2 000 F sur ce produit."
+    )
+    assert _nb_mouvements_et_pieces(db, c.compte.id) == avant
+
+
+def test_retrait_qui_laisse_exactement_le_plancher_accepte(db: Session) -> None:
+    c = _cadre(db, "PL2", min_balance=2000)
+    deposer(db, c.caissier, c.compte.id, 10000)
+
+    assert retirer(db, c.caissier, c.compte.id, 8000).nouveau_solde == 2000
+
+
+def test_la_cloture_n_est_pas_soumise_au_plancher(db: Session) -> None:
+    c = _cadre(db, "PL3", min_balance=2000)
+    deposer(db, c.caissier, c.compte.id, 10000)
+
+    fermer_compte(db, c.caissier, c.compte.id, motif="départ du membre")
+
+    db.refresh(c.compte)
+    assert (c.compte.status, c.compte.balance) == ("cloture", 0)
+
+
+def test_produit_a_zero_zero_se_comporte_comme_avant(db: Session) -> None:
+    c = _cadre(db, "Z0")  # depot_initial_minimum = 0, min_balance = 0
+
+    assert deposer(db, c.caissier, c.compte.id, 1).nouveau_solde == 1  # 1 F suffit
+    assert retirer(db, c.caissier, c.compte.id, 1).nouveau_solde == 0  # jusqu'à zéro
+    with pytest.raises(SoldeInsuffisantError, match="Retrait impossible"):
+        retirer(db, c.caissier, c.compte.id, 1)

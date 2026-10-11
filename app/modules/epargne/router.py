@@ -31,6 +31,7 @@ from app.modules.epargne.guichet import (
     CompteIntrouvableError,
     MontantInvalideError,
     OperationGeleeError,
+    PremierDepotInsuffisantError,
     SoldeInsuffisantError,
     deposer,
     fermer_compte,
@@ -115,6 +116,8 @@ def _vers_detail(produit: Product) -> ProduitEpargneDetail:
         base_jours=produit.base_jours,
         regle_arrondi=produit.regle_arrondi,
         solde_minimum_remunere=produit.solde_minimum_remunere,
+        min_balance=produit.min_balance,
+        depot_initial_minimum=produit.depot_initial_minimum,
     )
 
 
@@ -233,6 +236,8 @@ def creer_produit_endpoint(
             base_jours=corps.base_jours,
             regle_arrondi=corps.regle_arrondi,
             solde_minimum_remunere=corps.solde_minimum_remunere,
+            min_balance=corps.min_balance,
+            depot_initial_minimum=corps.depot_initial_minimum,
             par=courant.user_id,
             contexte=_contexte(request),
         )
@@ -278,6 +283,8 @@ def modifier_produit_endpoint(
         base_jours=corps.base_jours,
         regle_arrondi=corps.regle_arrondi,
         solde_minimum_remunere=corps.solde_minimum_remunere,
+        min_balance=corps.min_balance,
+        depot_initial_minimum=corps.depot_initial_minimum,
         motif=corps.motif,
         par=courant.user_id,
         contexte=_contexte(request),
@@ -503,6 +510,7 @@ def deposer_endpoint(
         MontantInvalideError,
         OperationGeleeError,
         CompteClotureError,
+        PremierDepotInsuffisantError,
         AucuneSessionOuverteError,
         AucuneJourneeOuverteError,
     ) as erreur:
