@@ -11,10 +11,37 @@ n'est pas écrit explicitement ne sort pas.
 
 import uuid
 from datetime import date, datetime
-from decimal import Decimal
-from typing import ClassVar, Literal, Self
+from decimal import Decimal, InvalidOperation
+from typing import Annotated, ClassVar, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+
+# Règle projet : un montant est un ENTIER de francs, jamais de décimales.
+MESSAGE_CAPITAL_ENTIER = "Le capital social s'exprime en francs entiers, sans décimales."
+MESSAGE_CAPITAL_NEGATIF = "Le capital social ne peut pas être négatif."
+MESSAGE_CAPITAL_TROP_GRAND = "Le capital social est trop élevé."
+_MAX_BIGINT = 9_223_372_036_854_775_807
+
+
+def _en_francs_entiers(valeur: object) -> object:
+    """Accepte 1000000, "1000000" et "1000000.00" (valeur entière écrite avec décimales nulles) ;
+    refuse tout ce qui a de vraies décimales, avec un message que l'écran peut montrer tel quel."""
+    if valeur is None or (isinstance(valeur, str) and not valeur.strip()):
+        return None
+    try:
+        nombre = Decimal(str(valeur).strip())
+    except InvalidOperation:
+        raise ValueError(MESSAGE_CAPITAL_ENTIER) from None
+    if not nombre.is_finite() or nombre != nombre.to_integral_value():
+        raise ValueError(MESSAGE_CAPITAL_ENTIER)
+    if nombre < 0:
+        raise ValueError(MESSAGE_CAPITAL_NEGATIF)
+    if nombre > _MAX_BIGINT:
+        raise ValueError(MESSAGE_CAPITAL_TROP_GRAND)
+    return int(nombre)
+
+
+CapitalEnFrancs = Annotated[int | None, BeforeValidator(_en_francs_entiers)]
 
 Genre = Literal["M", "F"]
 EtatCivil = Literal["celibataire", "marie", "divorce", "veuf", "union_libre", "autre"]
@@ -61,7 +88,7 @@ class CreationPersonneMorale(_CommunEntree):
     rccm_number: str | None = Field(default=None, max_length=50)
     nif_number: str | None = Field(default=None, max_length=50)
     constitution_date: date
-    capital_amount: Decimal | None = None
+    capital_amount: CapitalEnFrancs = None
     capital_currency_id: uuid.UUID | None = None
     business_purpose: str | None = None
     headquarters_country_id: uuid.UUID
@@ -111,7 +138,7 @@ class PersonneMoraleDetail(BaseModel):
     rccm_number: str | None
     nif_number: str | None
     constitution_date: date
-    capital_amount: Decimal | None
+    capital_amount: int | None
     capital_currency_id: uuid.UUID | None
     business_purpose: str | None
     headquarters_country_id: uuid.UUID
@@ -572,7 +599,7 @@ class ModificationPersonneMorale(_ProfilModifiable):
     rccm_number: str | None = Field(default=None, max_length=50)
     nif_number: str | None = Field(default=None, max_length=50)
     constitution_date: date | None = None
-    capital_amount: Decimal | None = Field(default=None, ge=0)
+    capital_amount: CapitalEnFrancs = None
     capital_currency_id: uuid.UUID | None = None
     business_purpose: str | None = None
     headquarters_country_id: uuid.UUID | None = None

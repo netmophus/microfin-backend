@@ -985,6 +985,66 @@ def test_le_profil_d_une_pm_se_modifie_avec_audit(cadre: Cadre) -> None:
     assert trace[0].new_values["rccm_number"] == "NI-NIA-2020-B-0042"
 
 
+def test_le_capital_est_un_entier_de_francs(cadre: Cadre) -> None:
+    """Règle projet : un montant est un entier, jamais de décimales. Une valeur entière écrite
+    avec des décimales nulles (« 1000000.00 », ce que renvoyait l'ancienne colonne) reste acceptée ;
+    de vraies décimales sont refusées avec un message que l'écran peut montrer tel quel."""
+    societe = cadre.societe()
+    url = f"/tiers/{societe.id}/legal-entity"
+    message = "Le capital social s'exprime en francs entiers, sans décimales."
+
+    entier = cadre.client.patch(url, json={"capital_amount": 1000000}, headers=cadre.entete)
+    ecrit_en_texte = cadre.client.patch(
+        url, json={"capital_amount": "2000000.00"}, headers=cadre.entete
+    )
+    centimes = cadre.client.patch(url, json={"capital_amount": "1000000.50"}, headers=cadre.entete)
+    texte = cadre.client.patch(url, json={"capital_amount": "beaucoup"}, headers=cadre.entete)
+    negatif = cadre.client.patch(url, json={"capital_amount": -5}, headers=cadre.entete)
+    vide = cadre.client.patch(url, json={"capital_amount": ""}, headers=cadre.entete)
+
+    assert entier.status_code == 200, entier.text
+    assert entier.json()["personne_morale"]["capital_amount"] == 1000000  # un entier JSON
+    assert ecrit_en_texte.status_code == 200, ecrit_en_texte.text
+    assert ecrit_en_texte.json()["personne_morale"]["capital_amount"] == 2000000
+    assert centimes.status_code == 422
+    assert centimes.json()["detail"][0]["msg"] == f"Value error, {message}"
+    assert texte.status_code == 422
+    assert texte.json()["detail"][0]["msg"] == f"Value error, {message}"
+    assert negatif.status_code == 422
+    assert "négatif" in negatif.json()["detail"][0]["msg"]
+    assert vide.status_code == 200  # champ vidé : pas de capital renseigné
+    assert vide.json()["personne_morale"]["capital_amount"] is None
+    colonne = cadre.db.execute(
+        text(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = 'tiers' AND table_name = 'legal_entity_profiles' "
+            "AND column_name = 'capital_amount'"
+        )
+    ).scalar_one()
+    assert colonne == "bigint"
+
+
+def test_la_creation_refuse_aussi_un_capital_decimal(cadre: Cadre) -> None:
+    corps = {
+        "legal_name": "SARL DECIMALE",
+        "legal_form": "SARL",
+        "constitution_date": "2020-01-01",
+        "headquarters_country_id": str(_pays(cadre.db, "NE")),
+    }
+
+    refuse = cadre.client.post(
+        "/tiers/legal-entities", json={**corps, "capital_amount": "10.5"}, headers=cadre.entete
+    )
+    accepte = cadre.client.post(
+        "/tiers/legal-entities", json={**corps, "capital_amount": 5000000}, headers=cadre.entete
+    )
+
+    assert refuse.status_code == 422
+    assert "francs entiers" in refuse.json()["detail"][0]["msg"]
+    assert accepte.status_code == 201, accepte.text
+    assert accepte.json()["personne_morale"]["capital_amount"] == 5000000
+
+
 def test_un_profil_inchange_n_ecrit_aucune_trace(cadre: Cadre) -> None:
     societe = cadre.societe()
 

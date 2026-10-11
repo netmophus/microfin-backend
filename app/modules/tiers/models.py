@@ -196,7 +196,8 @@ class LegalEntityProfile(Tier):
     rccm_number: Mapped[str | None] = mapped_column(sa.String(50))
     nif_number: Mapped[str | None] = mapped_column(sa.String(50))
     constitution_date: Mapped[date] = mapped_column(sa.Date(), nullable=False)
-    capital_amount: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 2))
+    # Francs entiers (BIGINT), jamais de décimales — migration 0063.
+    capital_amount: Mapped[int | None] = mapped_column(sa.BigInteger())
     capital_currency_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("parameters.currencies.id")
     )
