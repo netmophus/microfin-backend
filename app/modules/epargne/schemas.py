@@ -120,6 +120,7 @@ class ApercuInterets(BaseModel):
     total: int  # total à verser, francs CFA entiers
     deja_traites: int  # comptes déjà versés pour cette période (anti-double)
     deja_verse_le: datetime | None  # quand, si la période a déjà été (au moins en partie) versée
+    en_erreur: list[str]  # comptes que le calcul ne peut pas traiter (anomalie de données)
     echantillon: list[ApercuLigneInterets]
 
 
@@ -130,6 +131,7 @@ class RapportInterets(BaseModel):
     credites: int
     ignores: int
     total: int
+    en_erreur: list[str]  # comptes signalés, non traités (anomalie de données)
 
 
 # --- Rattachements comptables (Bloc 5 du paramétrage comptable) --------------------------

@@ -358,8 +358,8 @@ mouvements. L'expert tranche par produit.
 Une méthode classique en zone franc est la **règle des quinzaines** : le mois est découpé en deux
 périodes de 15 jours, avec une **date de valeur** — un dépôt ne produit d'intérêt qu'à partir de la
 quinzaine suivante, un retrait fait perdre l'intérêt dès sa quinzaine. **Elle n'est PAS implémentée
-aujourd'hui** : les trois méthodes ci-dessus datent chaque mouvement à sa **date d'opération**
-(`movements.created_at`), et les mouvements **ne portent pas de date de valeur** distincte. Question
+aujourd'hui** : les trois méthodes ci-dessus datent chaque mouvement à sa **date comptable**
+(`journal_entries.entry_date` de sa pièce, voir l'entrée du 11/10/2026 ci-dessous), et les mouvements **ne portent pas de date de valeur** distincte. Question
 à trancher par l'expert : (a) quelle méthode est réglementairement attendue pour un SFD UEMOA
 (quinzaines, capitaux moyens, autre ?) ; (b) si quinzaines/date de valeur, la valeur est-elle
 **dérivée mécaniquement** de la date d'opération et du sens (implémentable comme une méthode de
@@ -368,14 +368,45 @@ mouvement (alors : ajouter une colonne `date_valeur` à `epargne.movements`, dé
 Ne pas deviner : c'est une valeur réglementaire.
 
 **Date de valeur EN PLACE, dormante (migration 0024).** La colonne `epargne.movements.date_valeur`
-(DATE) existe désormais, **égale par défaut à la date d'opération** (`created_at::date`, backfill
-des mouvements existants compris). **AUCUNE règle ne l'exploite encore** : le moteur d'intérêts date
-toujours sur `created_at`, donc **aucun calcul n'est modifié**. Elle est **figée à la création** et
+(DATE) existe désormais, **égale à la date comptable de la pièce** (`entry_date`, posée à
+l'insertion depuis la migration 0059 ; elle valait auparavant la date de saisie, `created_at::date`). **AUCUNE règle ne l'exploite encore** : le moteur d'intérêts date
+sur la date comptable de la pièce (`entry_date`), donc **aucun calcul n'est modifié par cette colonne**. Elle est **figée à la création** et
 immuable ensuite (même trigger que le mouvement). Fondation prête : quand l'expert aura confirmé la
 méthode (quinzaines ou autre), le service posera `date_valeur` À L'INSERTION selon la règle en
 vigueur, et le moteur lira `date_valeur` au lieu de `created_at` ; les mouvements passés gardent leur
 date de valeur d'origine (on ne réécrit pas le passé, le calcul reste rejouable). **À VALIDER : la
 méthode elle-même** (voir ci-dessus).
+
+**Datation des mouvements dans le calcul : la journée comptable (11/10/2026).** Le moteur datait
+chaque mouvement par `created_at::date`, c'est-à-dire par sa date de **saisie**. Il date désormais
+par `journal_entries.entry_date`, la journée comptable de la pièce liée (tri `entry_date,
+created_at, id`). Deux défauts corrigés : (1) un dépôt saisi après la fin de la période pour une
+journée **de** la période en était exclu (il perdait ses jours d'intérêts) ; (2) un intérêt posté à
+la fin de la période N (`entry_date = fin`) mais versé après comptait comme un point de N+1 et non
+dans le solde d'entrée de N+1. Impact, période du 01/03 au 31/03/2024 (31 jours), solde d'entrée
+100 000 F, dépôt de 50 000 F dû le vendredi 29/03 mais saisi après le 31/03, 3 % l'an, base 365 :
+
+| Méthode | Base avant (`created_at`) | Intérêt | Base après (`entry_date`) | Intérêt | Écart |
+|---------|---------------------------|---------|---------------------------|---------|-------|
+| `min_periode` | 100 000 | 255 F | 100 000 | 255 F | aucun (un dépôt ne baisse pas le minimum) |
+| `moyen_quotidien` | 100 000 | 255 F | 104 838 | 267 F | + 12 F |
+| `fin_periode` | 100 000 | 255 F | 150 000 | 382 F | + 127 F |
+
+Ce tableau suppose le solde d'entrée correctement daté. Si le solde d'entrée était lui aussi saisi
+après la période (cas des tests), l'ancien calcul trouvait une base de 0 et aucun intérêt.
+**Mouvement sans pièce comptable = impossible (migration 0059).** Aucun chemin du code n'en créait
+(tous les points d'écriture passent un `journal_entry_id`), et `epargne.movements.journal_entry_id`
+est désormais NOT NULL : la base le garantit. La garde reste dans le calcul en défense en
+profondeur : si une ligne sans date lui parvenait quand même, le calcul du compte est refusé avec « mouvement sans pièce comptable sur le compte X : calcul
+impossible » : l'aperçu et le versement le signalent dans `en_erreur`, les autres comptes sont
+traités. Aucune date n'est devinée. **Effet rétroactif : aucun.** Les périodes déjà versées sont
+archivées avec leur détail (`interet_calculs`) et ne sont pas recalculées ; seules les périodes à
+venir utilisent la nouvelle datation. **Date de valeur (migration 0059) :** son défaut `CURRENT_DATE` (date civile de saisie) est
+supprimé. Le service pose `date_valeur = entry_date` de la pièce à l'insertion, sur les cinq points
+d'écriture (guichet, clôture, intérêts, crédit et débit externes) ; une insertion qui l'oublie
+échoue. Aucun backfill : les mouvements existants gardent leur date de valeur (2 sur la base de
+développement, 0 sur la base MIZNAS ; la migration s'arrête s'il existe un mouvement sans pièce).
+Aucune règle de quinzaines ne l'exploite encore : le moteur lit `entry_date`, pas `date_valeur`.
 
 **Schéma d'écriture du versement (provisoire)** : `epargne.interet` = **D 602511** Intérêts sur
 comptes ordinaires créditeurs / **C 251111** Épargne à vue membres (journal OD). La charge de

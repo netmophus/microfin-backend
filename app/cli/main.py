@@ -369,6 +369,8 @@ def verser_interets_cmd(
         fg=typer.colors.GREEN,
         bold=True,
     )
+    for raison in rapport.en_erreur:
+        typer.secho(f"  Compte non traité : {raison}.", fg=typer.colors.RED)
     typer.echo("")
 
 

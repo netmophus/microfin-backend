@@ -37,6 +37,7 @@ GESTION, pas de guichet — pas concerné, ne passe pas par `_operer`.
 
 import uuid
 from dataclasses import dataclass
+from datetime import date
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -162,9 +163,10 @@ def _enregistrer_mouvement(
     balance_after: int,
     operation_type: str,
     journal_entry_id: uuid.UUID,
+    date_valeur: date,
     par: uuid.UUID | None,
 ) -> None:
-    """Écrit le mouvement append-only, relié à sa pièce comptable."""
+    """Écrit le mouvement append-only, relié à sa pièce comptable (dont il prend la date)."""
     db.add(
         SavingsMovement(
             account_id=compte.id,
@@ -173,6 +175,7 @@ def _enregistrer_mouvement(
             balance_after=balance_after,
             operation_type=operation_type,
             journal_entry_id=journal_entry_id,
+            date_valeur=date_valeur,
             created_by=par,
         )
     )
@@ -235,6 +238,7 @@ def _operer(
         balance_after=nouveau_solde,
         operation_type=code_operation.split(".")[-1],
         journal_entry_id=piece.id,
+        date_valeur=piece.entry_date,
         par=courant.user_id,
     )
     compte.balance = nouveau_solde

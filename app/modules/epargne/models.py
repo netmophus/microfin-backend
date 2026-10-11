@@ -177,19 +177,18 @@ class SavingsMovement(Base):
     amount: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     balance_after: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     operation_type: Mapped[str] = mapped_column(sa.String(20), nullable=False)
-    journal_entry_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID, sa.ForeignKey("comptabilite.journal_entries.id")
+    # Tout mouvement a sa pièce comptable (migration 0059) : c'est elle qui le date.
+    journal_entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID, sa.ForeignKey("comptabilite.journal_entries.id"), nullable=False
     )
     label: Mapped[str | None] = mapped_column(sa.String(300))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     # Date de VALEUR (migration 0024) : jour à partir duquel le mouvement compte pour les intérêts.
-    # Distincte de la date d'OPÉRATION (created_at). Par défaut = date d'opération (CURRENT_DATE),
-    # tant qu'aucune règle (quinzaines…) ne l'en écarte. FONDATION DORMANTE : aucun calcul ne la
-    # lit encore (le moteur date toujours sur created_at). Figée à la création (mouvement immuable).
-    date_valeur: Mapped[date] = mapped_column(
-        sa.Date, nullable=False, server_default=sa.text("CURRENT_DATE")
-    )
+    # Posée À L'INSERTION par le service = date comptable de la pièce (`entry_date`), sans défaut
+    # en base (0059) : une insertion qui l'oublie échoue au lieu de prendre la date de saisie.
+    # Aucune règle de quinzaines ne l'en écarte encore. Figée à la création (mouvement immuable).
+    date_valeur: Mapped[date] = mapped_column(sa.Date, nullable=False)
 
 
 class InteretCalcul(Base):

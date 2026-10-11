@@ -102,14 +102,30 @@ def _ouvrir(db: Session, agency_id: uuid.UUID, product_id: uuid.UUID, tier_id: u
     )
 
 
+def _piece_factice(db: Session) -> uuid.UUID:
+    """Une pièce minimale (brouillon, sans ligne) : un mouvement d'épargne en exige une
+    (migration 0059), et ces tests posent leurs mouvements en SQL brut."""
+    return db.execute(
+        text(
+            "INSERT INTO comptabilite.journal_entries "
+            "(journal_id, exercice_id, entry_date, description) "
+            "SELECT (SELECT id FROM comptabilite.journals ORDER BY code LIMIT 1), id, "
+            "date_debut, 'pièce de test' FROM comptabilite.exercices WHERE code = '2026' "
+            "RETURNING id"
+        )
+    ).scalar_one()
+
+
 def _crediter(db: Session, account_id: uuid.UUID, montant: int) -> None:
     db.execute(
         text(
             "INSERT INTO epargne.movements "
-            "(account_id, sens, amount, balance_after, operation_type) "
-            "VALUES (:a, 'credit', :m, :m, 'depot')"
+            "(account_id, sens, amount, balance_after, operation_type, journal_entry_id, "
+            " date_valeur) "
+            "SELECT :a, 'credit', :m, :m, 'depot', :p, entry_date "
+            "FROM comptabilite.journal_entries WHERE id = :p"
         ),
-        {"a": account_id, "m": montant},
+        {"a": account_id, "m": montant, "p": _piece_factice(db)},
     )
     db.execute(
         text("UPDATE epargne.accounts SET balance = :m WHERE id = :a"),

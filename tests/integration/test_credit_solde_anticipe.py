@@ -515,12 +515,14 @@ def test_api_apercu_refuse_proprement_sans_journee_ouverte(
     # SIENNE avant de clôturer, via le VRAI service (jamais une ligne SQL à la main). Motif
     # fourni d'office : l'écart (décaissement réel sorti du tiroir) dépasse le seuil de
     # tolérance, peu importe ici — ce n'est pas ce que ce test vérifie.
-    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
-    session_ouverte_id = db.execute(
-        select(CaisseSession.id).where(
-            CaisseSession.caissier_id == uid, CaisseSession.status == "ouverte"
+    # La session ouverte par `_credit_decaisse` désigne SON caissier : on ne re-devine pas
+    # l'utilisateur par `LIMIT 1` sans ORDER BY (l'ordre change dès que `_entete` ajoute un
+    # utilisateur, d'où un test instable).
+    session_ouverte_id, uid = db.execute(
+        select(CaisseSession.id, CaisseSession.caissier_id).where(
+            CaisseSession.status == "ouverte"
         )
-    ).scalar_one()
+    ).one()
     fermer_session(
         db,
         UtilisateurCourant(

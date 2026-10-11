@@ -19,6 +19,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
+from app.modules.comptabilite.models import JournalEntry
 from app.modules.epargne import numerotation
 from app.modules.epargne.models import SavingsAccount, SavingsMovement
 from app.modules.epargne.operations import TYPE_CLOTURE, poser_ecriture_operation
@@ -162,7 +163,7 @@ def verifier_coherence_solde(db: Session, account_id: uuid.UUID) -> CoherenceSol
 
 
 def _mouvement_restitution(
-    db: Session, compte: SavingsAccount, montant: int, piece_id: uuid.UUID, par: uuid.UUID | None
+    db: Session, compte: SavingsAccount, montant: int, piece: JournalEntry, par: uuid.UUID | None
 ) -> None:
     """Écrit le mouvement de restitution de clôture, relié à sa pièce (helper isolé, testable)."""
     db.add(
@@ -172,7 +173,8 @@ def _mouvement_restitution(
             amount=montant,
             balance_after=0,
             operation_type="cloture",
-            journal_entry_id=piece_id,
+            journal_entry_id=piece.id,
+            date_valeur=piece.entry_date,
             created_by=par,
         )
     )
@@ -207,7 +209,7 @@ def cloturer_compte(
         piece = poser_ecriture_operation(
             db, compte, TYPE_CLOTURE, compte.balance, par, contexte=contexte
         )
-        _mouvement_restitution(db, compte, compte.balance, piece.id, par)
+        _mouvement_restitution(db, compte, compte.balance, piece, par)
         compte.balance = 0
 
     compte.status = "cloture"

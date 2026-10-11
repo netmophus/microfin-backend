@@ -223,18 +223,21 @@ def test_versement_credite_pose_ecriture_et_archive(db: Session) -> None:
     assert _interet_calculs(db, c.compte.id) == [("2026", 10000)]
 
 
-def test_mouvement_porte_une_date_valeur_egale_a_la_date_operation(db: Session) -> None:
-    # FONDATION DORMANTE (migration 0024) : chaque mouvement porte une date de valeur, posée par
-    # défaut à la date d'opération tant qu'aucune règle (quinzaines…) ne l'en écarte.
+def test_mouvement_porte_une_date_valeur_egale_a_la_date_comptable_de_sa_piece(
+    db: Session,
+) -> None:
+    # Migration 0059 : la date de valeur est posée à l'insertion = journée comptable de la pièce
+    # (plus le défaut CURRENT_DATE, qui était la date civile de saisie).
     c = _cadre(db, "DV")  # le dépôt de _cadre crée un mouvement
-    op_date, date_valeur = db.execute(
+    entry_date, date_valeur = db.execute(
         text(
-            "SELECT created_at::date, date_valeur FROM epargne.movements "
-            "WHERE account_id = :a ORDER BY created_at LIMIT 1"
+            "SELECT je.entry_date, m.date_valeur FROM epargne.movements m "
+            "JOIN comptabilite.journal_entries je ON je.id = m.journal_entry_id "
+            "WHERE m.account_id = :a ORDER BY m.created_at LIMIT 1"
         ),
         {"a": c.compte.id},
     ).one()
-    assert date_valeur == op_date
+    assert date_valeur == entry_date
 
 
 def test_date_valeur_immuable_comme_le_mouvement(db: Session) -> None:

@@ -571,6 +571,7 @@ def previsualiser_interets_endpoint(
         total=apercu.total,
         deja_traites=apercu.deja_traites,
         deja_verse_le=apercu.deja_verse_le,
+        en_erreur=apercu.en_erreur,
         echantillon=[
             ApercuLigneInterets(
                 account_number=ligne.account_number,
@@ -608,6 +609,7 @@ def verser_interets_endpoint(
         credites=rapport.credites,
         ignores=rapport.ignores,
         total=rapport.total,
+        en_erreur=rapport.en_erreur,
     )
 
 

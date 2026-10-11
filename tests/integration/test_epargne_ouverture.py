@@ -128,16 +128,33 @@ def test_numeros_de_compte_sequentiels(db: Session, cadre: Cadre) -> None:
 # --- Cohérence du solde : le cache se vérifie ---------------------------------------
 
 
+def _piece_factice(db: Session) -> uuid.UUID:
+    """Une pièce minimale (brouillon, sans ligne) : un mouvement d'épargne en exige une
+    (migration 0059), et ces tests posent leurs mouvements en SQL brut."""
+    return db.execute(
+        text(
+            "INSERT INTO comptabilite.journal_entries "
+            "(journal_id, exercice_id, entry_date, description) "
+            "SELECT (SELECT id FROM comptabilite.journals ORDER BY code LIMIT 1), id, "
+            "date_debut, 'pièce de test' FROM comptabilite.exercices WHERE code = '2026' "
+            "RETURNING id"
+        )
+    ).scalar_one()
+
+
 def _mouvement_sql(
     db: Session, account_id: uuid.UUID, sens: str, amount: int, balance_after: int
 ) -> None:
+    piece = _piece_factice(db)
     db.execute(
         text(
             "INSERT INTO epargne.movements "
-            "(account_id, sens, amount, balance_after, operation_type) "
-            "VALUES (:a, :s, :m, :b, 'depot')"
+            "(account_id, sens, amount, balance_after, operation_type, journal_entry_id, "
+            " date_valeur) "
+            "SELECT :a, :s, :m, :b, 'depot', :p, entry_date "
+            "FROM comptabilite.journal_entries WHERE id = :p"
         ),
-        {"a": account_id, "s": sens, "m": amount, "b": balance_after},
+        {"a": account_id, "s": sens, "m": amount, "b": balance_after, "p": piece},
     )
 
 

@@ -40,12 +40,19 @@ class DejaVerseError(Exception):
     """Ce compte a déjà un calcul d'intérêts pour cette période : on ne verse pas deux fois."""
 
 
+class MouvementSansPieceError(Exception):
+    """Un mouvement du compte n'a pas de pièce comptable : sa date comptable est inconnue, le
+    calcul des intérêts serait faux. C'est une anomalie de données (aucun chemin du code n'en
+    crée) : on s'arrête sur CE compte, on ne devine pas une date."""
+
+
 @dataclass
 class RapportInterets:
     traites: int = 0  # comptes traités (calcul archivé)
     credites: int = 0  # comptes ayant reçu un intérêt > 0
     ignores: int = 0  # comptes déjà traités pour la période (idempotence)
     total: int = 0  # total des intérêts versés (XOF)
+    en_erreur: list[str] = field(default_factory=list)  # comptes non traités, avec la raison
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,7 @@ class ApercuInterets:
     total: int = 0
     deja_traites: int = 0
     deja_verse_le: datetime | None = None  # si la période a déjà été versée, quand
+    en_erreur: list[str] = field(default_factory=list)  # comptes que le calcul ne peut pas traiter
     echantillon: list[ApercuLigne] = field(default_factory=list)
 
 
@@ -140,20 +148,32 @@ def calculer_base_solde(
 
 
 def _trajectoire(
-    db: Session, account_id: uuid.UUID, debut: date, fin: date
+    db: Session, account_id: uuid.UUID, numero_compte: str, debut: date, fin: date
 ) -> tuple[int, list[tuple[date, int]]]:
-    """Rend (solde à l'entrée de la période, points [(jour, solde)] DANS la période)."""
+    """Rend (solde à l'entrée de la période, points [(jour, solde)] DANS la période).
+
+    Un mouvement est daté de la journée comptable de sa pièce (`journal_entries.entry_date`),
+    jamais de sa date de saisie : un dépôt saisi lundi pour la journée de vendredi compte dès
+    vendredi, et un intérêt posté à la fin de la période N mais versé en N+1 est déjà dans le
+    solde d'entrée de N+1. Un mouvement sans pièce lève `MouvementSansPieceError`.
+    """
     lignes = db.execute(
         text(
-            "SELECT created_at::date AS jour, balance_after FROM epargne.movements "
-            "WHERE account_id = :a AND created_at::date <= :fin "
-            "ORDER BY created_at, id"
+            "SELECT je.entry_date AS jour, m.balance_after FROM epargne.movements m "
+            "LEFT JOIN comptabilite.journal_entries je ON je.id = m.journal_entry_id "
+            "WHERE m.account_id = :a AND (je.entry_date IS NULL OR je.entry_date <= :fin) "
+            "ORDER BY je.entry_date, m.created_at, m.id"
         ),
         {"a": account_id, "fin": fin},
     ).all()
     solde_initial = 0
     points: list[tuple[date, int]] = []
     for jour, solde in lignes:
+        if jour is None:
+            raise MouvementSansPieceError(
+                f"mouvement sans pièce comptable sur le compte {numero_compte} : "
+                "calcul impossible"
+            )
         if jour < debut:
             solde_initial = solde
         else:
@@ -195,7 +215,7 @@ def _verser_un(
 
     produit = db.get(Product, compte.product_id)
     assert produit is not None
-    solde_initial, points = _trajectoire(db, account_id, debut, fin)
+    solde_initial, points = _trajectoire(db, account_id, compte.account_number, debut, fin)
     base_solde = calculer_base_solde(
         produit.methode_calcul_solde, solde_initial, points, debut, fin
     )
@@ -221,6 +241,7 @@ def _verser_un(
                 balance_after=compte.balance + montant,
                 operation_type="interet",
                 journal_entry_id=piece.id,
+                date_valeur=piece.entry_date,
                 created_by=par,
             )
         )
@@ -300,7 +321,11 @@ def previsualiser_interets(
         assert produit is not None
         if produit.taux_bp == 0:
             apercu.comptes_taux_zero += 1  # diagnostic : barème non encore fixé
-        solde_initial, points = _trajectoire(db, account_id, debut, fin)
+        try:
+            solde_initial, points = _trajectoire(db, account_id, compte.account_number, debut, fin)
+        except MouvementSansPieceError as erreur:
+            apercu.en_erreur.append(str(erreur))
+            continue
         base_solde = calculer_base_solde(
             produit.methode_calcul_solde, solde_initial, points, debut, fin
         )
@@ -338,7 +363,9 @@ def verser_interets(
     """Traitement de masse : verse les intérêts de la période à tous les comptes ACTIFS.
 
     Compte par compte, CHACUN committé séparément (ne bloque pas le système, reprend proprement).
-    Idempotent : un compte déjà traité pour la période est sauté (anti-double-versement).
+    Un compte dont un mouvement n'a pas de pièce comptable est SIGNALÉ (`en_erreur`), pas traité,
+    sans bloquer les autres. Idempotent : un compte déjà traité pour la période est sauté
+    (anti-double-versement).
     """
     ids = list(
         db.execute(
@@ -354,6 +381,10 @@ def verser_interets(
         except DejaVerseError:
             db.rollback()
             rapport.ignores += 1
+            continue
+        except MouvementSansPieceError as erreur:
+            db.rollback()  # ce compte est signalé ; les autres sont traités normalement
+            rapport.en_erreur.append(str(erreur))
             continue
         if montant is None:  # fermé entre-temps
             db.rollback()

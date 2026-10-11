@@ -106,6 +106,14 @@ def charger_compte_pour_credit_externe(
     return compte
 
 
+def _date_de_la_piece(db: Session, journal_entry_id: uuid.UUID) -> date:
+    """Date comptable de la pièce que l'appelant a posée : le mouvement la reprend comme date de
+    valeur (jamais la date de saisie)."""
+    return db.execute(
+        select(JournalEntry.entry_date).where(JournalEntry.id == journal_entry_id)
+    ).scalar_one()
+
+
 def enregistrer_credit_externe(
     db: Session,
     compte: SavingsAccount,
@@ -130,6 +138,7 @@ def enregistrer_credit_externe(
         operation_type=operation_type,
         label=label,
         journal_entry_id=journal_entry_id,
+        date_valeur=_date_de_la_piece(db, journal_entry_id),
         created_by=par,
     )
     db.add(mouvement)
@@ -165,6 +174,7 @@ def enregistrer_debit_externe(
         operation_type=operation_type,
         label=label,
         journal_entry_id=journal_entry_id,
+        date_valeur=_date_de_la_piece(db, journal_entry_id),
         created_by=par,
     )
     db.add(mouvement)
