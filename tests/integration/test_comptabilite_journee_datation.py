@@ -429,3 +429,57 @@ def test_historique_des_parts_expose_la_date_comptable_et_non_la_date_de_saisie(
     assert mouvement["saisi_le"][:10] == aujourdhui.isoformat()  # la saisie, elle, est réelle
     assert mouvement["saisi_le"][:10] != mouvement["date_comptable"]
     assert "created_at" not in mouvement
+
+
+def test_releve_epargne_expose_la_date_comptable_et_non_la_date_de_saisie(
+    client: TestClient, db: Session
+) -> None:
+    _ouvrir_journee_passee(db)
+    _exercice_couvrant(db, "J3RE")
+    agence = Agency(code="J3RE", name="Agence J3RE", compte_caisse_id=_cid(db, "101111"))
+    db.add(agence)
+    db.flush()
+    tier_id = _tier(db, agence, "RE")
+    produit = SavingsProduct(
+        code="J3RE", name="Épargne relevé", type="a_vue", compte_epargne_id=_cid(db, "251111")
+    )
+    db.add(produit)
+    db.flush()
+    compte = service.ouvrir_compte(
+        db, tier_id=tier_id, product_id=produit.id, agency_id=agence.id, par=None
+    )
+    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    _poste_assigne_et_session_ouverte(db, agence, uid)
+    courant = UtilisateurCourant(
+        user_id=uid, roles=("CAISSIER",), permissions=frozenset({"epargne.operation.deposit"}),
+        primary_agency_id=agence.id, agency_id=agence.id, voit_tout=False,
+    )
+    guichet.deposer(db, courant, compte.id, 10_000)
+
+    role = db.execute(select(Role).where(Role.code == "RESPONSABLE_AGENCE")).scalar_one()
+    s = uuid.uuid4().hex[:8]
+    lecteur = User(
+        matricule=f"MAT-{s}", email=f"{s}@ex.com", username=f"u{s}",
+        password_hash=hasher_mot_de_passe("Motdepasse!123"), last_name="T", first_name="A",
+        primary_agency_id=agence.id,
+    )
+    db.add(lecteur)
+    db.flush()
+    db.add(UserRole(user_id=lecteur.id, role_id=role.id))
+    db.flush()
+    entete = {
+        "Authorization": "Bearer "
+        + creer_access_token(
+            user_id=lecteur.id, roles=["RESPONSABLE_AGENCE"],
+            primary_agency_id=agence.id, agency_id=agence.id,
+        )
+    }
+
+    reponse = client.get(f"/epargne/comptes/{compte.id}", headers=entete)
+
+    assert reponse.status_code == 200
+    [mouvement] = reponse.json()["mouvements"]
+    assert mouvement["date_comptable"] == JOURNEE_DATE.isoformat()
+    aujourdhui = db.execute(text("SELECT CURRENT_DATE")).scalar_one()
+    assert mouvement["saisi_le"][:10] == aujourdhui.isoformat()
+    assert "created_at" not in mouvement

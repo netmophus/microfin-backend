@@ -101,10 +101,10 @@ def rechercher_comptes(db: Session, courant: UtilisateurCourant, q: str) -> Sequ
 
 
 def lister_mouvements(db: Session, compte_id: uuid.UUID) -> Sequence[Any]:
-    """Le relevé d'un compte : mouvements + n° de la pièce comptable liée."""
+    """Le relevé d'un compte : mouvements + n° et date (journée comptable) de la pièce liée."""
     return db.execute(
-        select(SavingsMovement, JournalEntry.entry_number)
+        select(SavingsMovement, JournalEntry.entry_number, JournalEntry.entry_date)
         .outerjoin(JournalEntry, JournalEntry.id == SavingsMovement.journal_entry_id)
         .where(SavingsMovement.account_id == compte_id)
-        .order_by(SavingsMovement.created_at, SavingsMovement.id)
+        .order_by(JournalEntry.entry_date, SavingsMovement.created_at, SavingsMovement.id)
     ).all()

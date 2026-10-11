@@ -40,7 +40,8 @@ class MouvementResume(BaseModel):
     balance_after: int
     operation_type: str  # depot, retrait, interet, cloture
     label: str | None
-    created_at: datetime
+    date_comptable: date | None  # date de la pièce (journée comptable) : celle que l'écran affiche
+    saisi_le: datetime  # horodatage de saisie, pour l'audit
     entry_number: str | None  # n° de la pièce comptable liée
 
 

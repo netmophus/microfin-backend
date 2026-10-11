@@ -384,10 +384,11 @@ def lire_compte_endpoint(
             balance_after=m.balance_after,
             operation_type=m.operation_type,
             label=m.label,
-            created_at=m.created_at,
+            date_comptable=date_comptable,
+            saisi_le=m.created_at,
             entry_number=entry_number,
         )
-        for m, entry_number in consultation.lister_mouvements(db, compte_id)
+        for m, entry_number, date_comptable in consultation.lister_mouvements(db, compte_id)
     ]
     base = _resume(compte, produit)
     return CompteEpargneDetail(
