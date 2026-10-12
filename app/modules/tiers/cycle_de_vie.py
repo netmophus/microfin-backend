@@ -126,6 +126,11 @@ class ConditionActivation:
 _C_PIECE_MANQUANTE = ConditionActivation(
     "PIECE_PRINCIPALE_MANQUANTE", "Enregistrez une pièce d'identité principale."
 )
+# PM et groupement : on ne justifie pas une « identité » mais l'existence légale (même code).
+_C_PIECE_MANQUANTE_PM = ConditionActivation(
+    "PIECE_PRINCIPALE_MANQUANTE",
+    "Enregistrez une pièce justificative principale (RCCM ou récépissé).",
+)
 _C_PIECE_NON_VERIFIEE = ConditionActivation(
     "PIECE_NON_VERIFIEE", "La pièce principale doit être vérifiée par un responsable."
 )
@@ -213,7 +218,9 @@ def conditions_dossier(
 
     piece = _piece_principale(db, tier.id)
     if piece is None:
-        manquantes.append(_C_PIECE_MANQUANTE)
+        manquantes.append(
+            _C_PIECE_MANQUANTE if isinstance(tier, IndividualProfile) else _C_PIECE_MANQUANTE_PM
+        )
     else:
         if not piece.is_verified:
             manquantes.append(_C_PIECE_NON_VERIFIEE)

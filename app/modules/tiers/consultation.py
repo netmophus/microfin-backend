@@ -59,8 +59,10 @@ class FiltresTiers:
 
 def _nom_affichage() -> ColumnElement[str]:
     """Nom lisible selon le type, en une expression SQL. tier_number en dernier recours."""
+    # nullif : concat_ws(' ', NULL, NULL) rend '' (pas NULL) pour une PM ou un groupement, et le
+    # coalesce s'arrêterait là, sans atteindre legal_name / group_name.
     return func.coalesce(
-        func.concat_ws(" ", _IND.c.last_name, _IND.c.first_name),
+        func.nullif(func.trim(func.concat_ws(" ", _IND.c.last_name, _IND.c.first_name)), ""),
         _LE.c.legal_name,
         _GP.c.group_name,
         _T.c.tier_number,

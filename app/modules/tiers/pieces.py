@@ -47,8 +47,9 @@ _AGENCE = _T.c.primary_agency_id
 
 def _nom_fiche() -> ColumnElement[str]:
     """Nom lisible de la fiche selon son type, tier_number en dernier recours."""
+    # nullif : voir consultation._nom_affichage (concat_ws de deux NULL rend '', pas NULL).
     return func.coalesce(
-        func.concat_ws(" ", _IND.c.last_name, _IND.c.first_name),
+        func.nullif(func.trim(func.concat_ws(" ", _IND.c.last_name, _IND.c.first_name)), ""),
         _LE.c.legal_name,
         _GP.c.group_name,
         _T.c.tier_number,

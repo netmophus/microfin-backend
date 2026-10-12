@@ -39,6 +39,7 @@ from app.modules.tiers.models import (
     GroupProfile,
     IndividualProfile,
     LegalEntityProfile,
+    Tier,
     TierRelatedPerson,
 )
 
@@ -1153,3 +1154,56 @@ def test_le_profil_exige_la_permission_et_le_perimetre(cadre: Cadre) -> None:
     assert hors_agence.status_code == 404
     assert anonyme.status_code == 401
     assert cadre.db.get(LegalEntityProfile, societe.id).legal_name == "SARL Exemple"
+
+
+# --- 8. noms affichés et libellé de la pièce principale selon le type de fiche ------------
+
+
+def test_la_liste_donne_la_raison_sociale_et_la_denomination(cadre: Cadre) -> None:
+    societe, groupement, personne = cadre.societe(), cadre.groupement(), cadre.personne("Boubacar")
+
+    reponse = cadre.client.get("/tiers", headers=cadre.entete)
+
+    assert reponse.status_code == 200, reponse.text
+    noms = {ligne["id"]: ligne["display_name"] for ligne in reponse.json()["lignes"]}
+    assert noms[str(societe.id)] == "SARL Exemple"
+    assert noms[str(groupement.id)] == "Groupement Exemple"
+    assert noms[str(personne.id)] == "BOUBACAR Idrissa"
+
+
+def test_la_recherche_de_pieces_nomme_aussi_les_pm_et_groupements(cadre: Cadre) -> None:
+    from app.modules.tiers.pieces import _nom_fiche
+
+    societe, groupement = cadre.societe(), cadre.groupement()
+
+    ind, pm, gp = (c.__table__ for c in (IndividualProfile, LegalEntityProfile, GroupProfile))
+    noms = dict(
+        cadre.db.execute(
+            select(Tier.id, _nom_fiche())
+            .select_from(Tier)
+            .outerjoin(ind, ind.c.tier_id == Tier.id)
+            .outerjoin(pm, pm.c.tier_id == Tier.id)
+            .outerjoin(gp, gp.c.tier_id == Tier.id)
+            .where(Tier.id.in_([societe.id, groupement.id]))
+        ).all()
+    )
+    assert noms == {societe.id: "SARL Exemple", groupement.id: "Groupement Exemple"}
+
+
+def _libelle_piece_manquante(cadre: Cadre, tier_id: uuid.UUID) -> str:
+    reponse = cadre.client.get(f"/tiers/{tier_id}/activation-conditions", headers=cadre.entete)
+    assert reponse.status_code == 200, reponse.text
+    conditions = reponse.json()["conditions"]
+    manquantes = [c for c in conditions if c["code"] == "PIECE_PRINCIPALE_MANQUANTE"]
+    assert len(manquantes) == 1, "le code de condition ne change pas selon le type"
+    return manquantes[0]["libelle"]
+
+
+def test_le_libelle_de_la_piece_principale_suit_le_type_de_fiche(cadre: Cadre) -> None:
+    societe, groupement, personne = cadre.societe(), cadre.groupement(), cadre.personne()
+
+    identite = "Enregistrez une pièce d'identité principale."
+    assert _libelle_piece_manquante(cadre, personne.id) == identite
+    justificative = "Enregistrez une pièce justificative principale (RCCM ou récépissé)."
+    assert _libelle_piece_manquante(cadre, societe.id) == justificative
+    assert _libelle_piece_manquante(cadre, groupement.id) == justificative
