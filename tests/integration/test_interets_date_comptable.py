@@ -27,6 +27,7 @@ from app.modules.epargne import interets, service
 from app.modules.epargne.guichet import deposer
 from app.modules.epargne.interets import (
     MouvementSansPieceError,
+    RapportInterets,
     _trajectoire,
     previsualiser_interets,
     verser_interets,
@@ -41,6 +42,13 @@ JOUR_SOLDE_INITIAL = date(2024, 2, 28)  # mercredi : le solde d'entrée de la p�
 JOUR_DEPOT = date(2024, 3, 29)  # vendredi : le dépôt dû, saisi bien après la période
 MARS = (date(2024, 3, 1), date(2024, 3, 31))  # 31 jours
 AVRIL = (date(2024, 4, 1), date(2024, 4, 30))
+
+
+@pytest.fixture(autouse=True)
+def _mars_et_avril_clos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Le versement ne porte que sur une période close : la journée de référence est fixée
+    après la période versée ici, sans dépendre de la date du jour."""
+    monkeypatch.setattr(interets, "journee_de_reference", lambda db: date(2024, 6, 15))
 
 
 @pytest.fixture
@@ -103,6 +111,7 @@ class Cadre:
             code=f"PD{code}", name="Épargne", type="a_vue",
             compte_epargne_id=_cid(db, "251111"), compte_charge_interet_id=_cid(db, "602511"),
             taux_bp=300, base_jours=365, methode_calcul_solde=methode,
+            periodicite="mensuelle",
         )
         db.add(produit)
         db.flush()
@@ -133,6 +142,22 @@ class Cadre:
             journee.cloturer_journee(db, None)
 
 
+def _verser(db: Session, c: Cadre, *, periode: str, debut: date, fin: date) -> RapportInterets:
+    """Verse la période à TOUS les produits du cadre (un produit par méthode de calcul) : les
+    intérêts se versent produit par produit, ce cumul garde les tests lisibles."""
+    total = RapportInterets()
+    for compte in c.comptes.values():
+        rapport = verser_interets(
+            db, produit_id=compte.product_id, periode=periode, debut=debut, fin=fin
+        )
+        total.traites += rapport.traites
+        total.ignores += rapport.ignores
+        total.credites += rapport.credites
+        total.total += rapport.total
+        total.en_erreur.extend(rapport.en_erreur)
+    return total
+
+
 def _archive(db: Session, compte: SavingsAccount, periode: str) -> tuple[int, int]:
     """(base_solde, montant) du calcul archivé pour ce compte et cette période."""
     return db.execute(
@@ -151,7 +176,7 @@ def test_depot_saisi_apres_la_periode_compte_depuis_sa_date_comptable(db: Sessio
     # Dépôt de 50 000 dû le vendredi 29/03 ; sa saisie (created_at) est en 2026, très après mars.
     c.journee_de_depots(db, JOUR_DEPOT, dict.fromkeys(methodes, 50_000), cloturer=False)
 
-    verser_interets(db, periode="2024-03", debut=MARS[0], fin=MARS[1])
+    _verser(db, c, periode="2024-03", debut=MARS[0], fin=MARS[1])
 
     assert _archive(db, c.comptes["min_periode"], "2024-03") == (100_000, 255)
     assert _archive(db, c.comptes["moyen_quotidien"], "2024-03") == (104_838, 267)
@@ -165,11 +190,11 @@ def test_interet_poste_a_la_fin_de_la_periode_est_compte_a_cette_date(db: Sessio
     compte = c.comptes["fin_periode"]
 
     # L'intérêt de mars est posté au 31/03 (entry_date) mais versé — saisi — bien après.
-    verser_interets(db, periode="2024-03", debut=MARS[0], fin=MARS[1])
+    _verser(db, c, periode="2024-03", debut=MARS[0], fin=MARS[1])
     interet_mars = _archive(db, compte, "2024-03")[1]
     assert interet_mars == 382
 
-    verser_interets(db, periode="2024-04", debut=AVRIL[0], fin=AVRIL[1])
+    _verser(db, c, periode="2024-04", debut=AVRIL[0], fin=AVRIL[1])
 
     # Avril part d'un solde qui CONTIENT déjà l'intérêt de mars (daté du 31/03), pas d'un solde
     # qui l'ignorerait parce que sa saisie tombe « après » la période.
@@ -222,14 +247,20 @@ def test_un_compte_en_anomalie_est_signale_sans_bloquer_les_autres(
 
     monkeypatch.setattr(interets, "_trajectoire", trajectoire)
 
-    apercu = previsualiser_interets(db, periode="2024-03", debut=MARS[0], fin=MARS[1])
-    rapport = verser_interets(db, periode="2024-03", debut=MARS[0], fin=MARS[1])
+    apercu_erreurs = [
+        erreur
+        for compte in c.comptes.values()
+        for erreur in previsualiser_interets(
+            db, produit_id=compte.product_id, periode="2024-03", debut=MARS[0], fin=MARS[1]
+        ).en_erreur
+    ]
+    rapport = _verser(db, c, periode="2024-03", debut=MARS[0], fin=MARS[1])
 
     message = (
         f"mouvement sans pièce comptable sur le compte {fautif.account_number} : "
         "calcul impossible"
     )
-    assert apercu.en_erreur == [message]
+    assert apercu_erreurs == [message]
     assert rapport.en_erreur == [message]
     assert rapport.traites == 1  # le compte sain a été traité
     nombre = db.execute(

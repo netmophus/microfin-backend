@@ -87,13 +87,36 @@ class ResultatOperation(BaseModel):
 class DemandeInterets(BaseModel):
     """Corps d'une prévisualisation ou d'un versement d'intérêts : la période et ses bornes.
 
-    `periode` est le libellé qui verrouille l'anti-double-versement (ex. « 2026-S1 ») : deux
+    Les intérêts se versent PRODUIT par produit, à la périodicité de ce produit. `periode` est le
+    libellé qui verrouille l'anti-double-versement (« 2026-03 », « 2026-T1 », « 2026 ») : deux
     versements sur la même période, même clé -> refusés en base. `debut`/`fin` bornent le calcul.
+    Le serveur refuse toute période qui n'est pas celle de la périodicité du produit ; l'écran
+    reprend la proposition de `GET /epargne/interets/periode`.
     """
 
+    product_id: uuid.UUID
     periode: str
     debut: date
     fin: date
+
+
+class ProduitInterets(BaseModel):
+    """Un produit dont on peut verser les intérêts, avec la périodicité qui fixe sa période."""
+
+    id: uuid.UUID
+    code: str
+    name: str
+    periodicite: str  # mensuelle | trimestrielle | annuelle
+
+
+class PeriodeInteretsProposee(BaseModel):
+    """Dernière période close du produit, d'après sa périodicité et la journée comptable."""
+
+    periodicite: str  # mensuelle | trimestrielle | annuelle
+    periode: str
+    debut: date
+    fin: date
+    journee_comptable: date  # la journée de référence d'après laquelle la période est proposée
 
 
 class ApercuLigneInterets(BaseModel):

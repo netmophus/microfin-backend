@@ -93,6 +93,13 @@ def db() -> Generator[Session, None, None]:
 
 
 @pytest.fixture(autouse=True)
+def _periode_2026_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Le versement ne porte que sur une période close : la journée de référence est fixée
+    après la période versée ici, sans dépendre de la date du jour."""
+    monkeypatch.setattr(interets, "journee_de_reference", lambda db: date(2027, 1, 15))
+
+
+@pytest.fixture(autouse=True)
 def _journee_ouverte(request: pytest.FixtureRequest) -> None:
     """Chantier P1bis lot 2 : `ouvrir_session` exige désormais une journée comptable ouverte
     — ouverte ici, via le VRAI service (jamais une ligne SQL à la main), pour les tests qui
@@ -136,14 +143,21 @@ def _caissier(db: Session, agency_id: uuid.UUID) -> UtilisateurCourant:
     )
 
 
-def _cadre(db: Session, suffixe: str, *, depot: int = 100000) -> Cadre:
+def _cadre(
+    db: Session, suffixe: str, *, depot: int = 100000, produit_existant: uuid.UUID | None = None
+) -> Cadre:
     agence = Agency(code=f"AGI-{suffixe}", name="Agence", compte_caisse_id=_cid(db, "101111"))
     # 10 % l'an, base 365 : un dépôt gardé toute l'année produit exactement depot x 10 %.
-    produit = Product(
-        code=f"PI{suffixe}", name="Épargne", type="a_vue",
-        compte_epargne_id=_cid(db, "251111"), compte_charge_interet_id=_cid(db, "602511"),
-        taux_bp=1000, base_jours=365, methode_calcul_solde="fin_periode",
+    produit = (
+        Product(
+            code=f"PI{suffixe}", name="Épargne", type="a_vue",
+            compte_epargne_id=_cid(db, "251111"), compte_charge_interet_id=_cid(db, "602511"),
+            taux_bp=1000, base_jours=365, methode_calcul_solde="fin_periode",
+        )
+        if produit_existant is None
+        else db.get(Product, produit_existant)
     )
+    assert produit is not None
     db.add_all([agence, produit])
     db.flush()
     tier_id = db.execute(
@@ -193,7 +207,7 @@ def _interet_calculs(db: Session, account_id: uuid.UUID) -> list[tuple[str, int]
 
 def test_versement_credite_pose_ecriture_et_archive(db: Session) -> None:
     c = _cadre(db, "V1")
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
 
     db.refresh(c.compte)
     assert c.compte.balance == 110000  # 100 000 + 10 000 d'intérêts
@@ -254,7 +268,7 @@ def test_date_valeur_immuable_comme_le_mouvement(db: Session) -> None:
 
 def test_previsualisation_calcule_le_detail_sans_rien_ecrire(db: Session) -> None:
     c = _cadre(db, "PV")
-    apercu = previsualiser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    apercu = previsualiser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
 
     # Le total ET le détail, pour vérifier « ça a l'air juste » avant de lancer.
     assert apercu.comptes_a_crediter >= 1
@@ -272,9 +286,9 @@ def test_previsualisation_calcule_le_detail_sans_rien_ecrire(db: Session) -> Non
 
 def test_previsualisation_signale_periode_deja_versee(db: Session) -> None:
     c = _cadre(db, "PVD")
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
 
-    apercu = previsualiser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    apercu = previsualiser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
     # La période est déjà versée : rien à re-verser, et on sait QUAND (pas d'échec silencieux).
     assert not any(x.account_number == c.compte.account_number for x in apercu.echantillon)
     assert apercu.deja_traites >= 1
@@ -283,12 +297,12 @@ def test_previsualisation_signale_periode_deja_versee(db: Session) -> None:
 
 def test_anti_double_versement_relance_ne_verse_rien(db: Session) -> None:
     c = _cadre(db, "AD")
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
     db.refresh(c.compte)
     assert c.compte.balance == 110000
 
     # RELANCE sur la même période : rien versé une seconde fois.
-    rapport = verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    rapport = verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
     db.refresh(c.compte)
     assert c.compte.balance == 110000  # inchangé
     assert rapport.credites == 0
@@ -319,8 +333,8 @@ def test_anti_double_au_niveau_base(db: Session) -> None:
 
 
 def test_rapprochement_concorde_apres_interets(db: Session) -> None:
-    _cadre(db, "RA")
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    c = _cadre(db, "RA")
+    verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
     resultat = rapprocher(db, _cid(db, "251111"))
     assert resultat.concordant is True
 
@@ -329,7 +343,7 @@ def test_compte_ferme_ne_produit_pas_dinteret(db: Session) -> None:
     c = _cadre(db, "CF")
     fermer_compte(db, c.caissier, c.compte.id)  # restitution -> solde 0, fermé
 
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
 
     assert _interet_calculs(db, c.compte.id) == []  # un compte fermé n'est pas traité
 
@@ -340,7 +354,7 @@ def test_membre_suspendu_est_credite(db: Session) -> None:
         text("UPDATE tiers.tiers SET status = 'suspendu_temporaire' WHERE id = :t"),
         {"t": c.compte.tier_id},
     )
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    verser_interets(db, produit_id=c.produit, periode="2026", debut=DEBUT, fin=FIN)
 
     db.refresh(c.compte)
     assert c.compte.balance == 110000  # c'est son argent : la rémunération lui revient
@@ -350,7 +364,7 @@ def test_reprise_apres_interruption_ne_verse_pas_en_double(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     c1 = _cadre(db, "RP1")
-    c2 = _cadre(db, "RP2")
+    c2 = _cadre(db, "RP2", produit_existant=c1.produit)
 
     original = interets._verser_un
     appels = {"n": 0}
@@ -361,13 +375,13 @@ def test_reprise_apres_interruption_ne_verse_pas_en_double(
             raise RuntimeError("interruption du batch")
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(interets, "_verser_un", interrompt)
-    with pytest.raises(RuntimeError):
-        verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
-    monkeypatch.undo()
+    # Contexte dédié : un `monkeypatch.undo()` global défairait aussi la journée de référence.
+    with monkeypatch.context() as panne, pytest.raises(RuntimeError):
+        panne.setattr(interets, "_verser_un", interrompt)
+        verser_interets(db, produit_id=c1.produit, periode="2026", debut=DEBUT, fin=FIN)
 
     # Reprise : le 1er compte est sauté (déjà traité), les autres traités. Aucun double.
-    verser_interets(db, periode="2026", debut=DEBUT, fin=FIN)
+    verser_interets(db, produit_id=c1.produit, periode="2026", debut=DEBUT, fin=FIN)
 
     assert _interet_calculs(db, c1.compte.id) == [("2026", 10000)]  # crédité UNE fois
     assert _interet_calculs(db, c2.compte.id) == [("2026", 10000)]

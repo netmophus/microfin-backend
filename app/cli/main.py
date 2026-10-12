@@ -369,22 +369,41 @@ def seed_conformite() -> None:
 
 @app.command("verser-interets")
 def verser_interets_cmd(
+    produit: Annotated[str, typer.Option(help="Code du produit d'épargne (ex. EPV).")],
     periode: Annotated[str, typer.Option(help="Libellé de période (clé anti-double).")],
     debut: Annotated[str, typer.Option(help="Début de période (AAAA-MM-JJ).")],
     fin: Annotated[str, typer.Option(help="Fin de période (AAAA-MM-JJ).")],
 ) -> None:
-    """Verse les intérêts de la période à tous les comptes actifs. Idempotente (anti-double).
+    """Verse les intérêts de la période aux comptes actifs d'UN produit. Idempotente (anti-double).
 
-    Relançable sans risque : un compte déjà traité pour la période est sauté (contrainte base).
+    La période doit être celle de la périodicité du produit (mois, trimestre ou année civile),
+    sinon la commande refuse. Relançable sans risque : un compte déjà traité est sauté.
     """
     from datetime import date
 
-    from app.modules.epargne.interets import verser_interets
+    from sqlalchemy import select
+
+    from app.modules.epargne.interets import PeriodeIncompatibleError, verser_interets
+    from app.modules.epargne.models import Product
 
     with SessionLocal() as db:
-        rapport = verser_interets(
-            db, periode=periode, debut=date.fromisoformat(debut), fin=date.fromisoformat(fin)
-        )
+        produit_id = db.execute(
+            select(Product.id).where(Product.code == produit)
+        ).scalar_one_or_none()
+        if produit_id is None:
+            typer.secho(f"  Produit introuvable : {produit}.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        try:
+            rapport = verser_interets(
+                db,
+                produit_id=produit_id,
+                periode=periode,
+                debut=date.fromisoformat(debut),
+                fin=date.fromisoformat(fin),
+            )
+        except PeriodeIncompatibleError as erreur:
+            typer.secho(f"  {erreur}", fg=typer.colors.RED)
+            raise typer.Exit(code=1) from None
     typer.echo("")
     typer.secho(
         f"  Intérêts période {periode} : {rapport.traites} comptes traités, "

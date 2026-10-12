@@ -8,6 +8,7 @@
 
 import uuid
 from collections.abc import Generator
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,8 @@ from app.main import app
 from app.modules.caisse.models import Poste, PosteAssignation
 from app.modules.caisse.service import ouvrir_session
 from app.modules.comptabilite import journee
-from app.modules.epargne import service
+from app.modules.epargne import interets, service
+from app.modules.epargne.interets import derniere_periode_close
 from app.modules.epargne.models import Product, SavingsAccount
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
@@ -373,6 +375,14 @@ def _compte_remunere(db: Session, agence: Agency) -> SavingsAccount:
     )
 
 
+@pytest.fixture
+def _periode_2026_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Le versement ne porte que sur une période close : la journée de référence est fixée
+    après la période versée ici, sans dépendre de la date du jour."""
+    monkeypatch.setattr(interets, "journee_de_reference", lambda db: date(2027, 1, 15))
+
+
+@pytest.mark.usefixtures("_periode_2026_close")
 def test_apercu_interets_montre_le_total_et_le_detail(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-I1")
     compte = _compte_remunere(db, agence)
@@ -383,7 +393,10 @@ def test_apercu_interets_montre_le_total_et_le_detail(client: TestClient, db: Se
 
     reponse = client.post(
         "/epargne/interets/apercu",
-        json={"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"},
+        json={
+            "product_id": str(compte.product_id), "periode": "2026",
+            "debut": "2026-01-01", "fin": "2026-12-31",
+        },
         headers=direction,
     )
     assert reponse.status_code == 200
@@ -403,6 +416,7 @@ def test_apercu_interets_montre_le_total_et_le_detail(client: TestClient, db: Se
     assert compte.balance == 100000
 
 
+@pytest.mark.usefixtures("_periode_2026_close")
 def test_versement_puis_apercu_dit_deja_verse(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-I2")
     compte = _compte_remunere(db, agence)
@@ -410,7 +424,10 @@ def test_versement_puis_apercu_dit_deja_verse(client: TestClient, db: Session) -
     _ouvrir_session_caisse(db, agence, caissier)
     client.post(f"/epargne/comptes/{compte.id}/depot", json={"montant": 100000}, headers=caissier)
     direction = _entete(db, agence, "DIRECTION_GENERALE")
-    bornes = {"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"}
+    bornes = {
+        "product_id": str(compte.product_id), "periode": "2026",
+        "debut": "2026-01-01", "fin": "2026-12-31",
+    }
 
     versement = client.post("/epargne/interets", json=bornes, headers=direction)
     assert versement.status_code == 200
@@ -427,13 +444,98 @@ def test_versement_puis_apercu_dit_deja_verse(client: TestClient, db: Session) -
 
 def test_interets_reserves_a_la_direction_403(client: TestClient, db: Session) -> None:
     agence = _agence(db, "AG-I3")
-    _compte_remunere(db, agence)
+    compte = _compte_remunere(db, agence)
     # Le responsable d'agence NE verse PAS les intérêts : c'est un acte d'institution.
     resp = _entete(db, agence, "RESPONSABLE_AGENCE")
-    bornes = {"periode": "2026", "debut": "2026-01-01", "fin": "2026-12-31"}
+    bornes = {
+        "product_id": str(compte.product_id), "periode": "2026",
+        "debut": "2026-01-01", "fin": "2026-12-31",
+    }
 
     assert client.post("/epargne/interets/apercu", json=bornes, headers=resp).status_code == 403
     assert client.post("/epargne/interets", json=bornes, headers=resp).status_code == 403
+
+
+def test_periode_proposee_suit_la_periodicite_et_la_journee_comptable(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "AG-P1")
+    compte = _compte_remunere(db, agence)
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+    reference = journee.date_comptable_courante(db)
+    assert reference is not None  # la journée ouverte par la fixture, pas la date du poste
+
+    for periodicite in ("mensuelle", "trimestrielle", "annuelle"):
+        db.execute(
+            text("UPDATE epargne.products SET periodicite = :p WHERE id = :i"),
+            {"p": periodicite, "i": compte.product_id},
+        )
+        reponse = client.get(
+            "/epargne/interets/periode", params={"product_id": str(compte.product_id)},
+            headers=direction,
+        )
+        assert reponse.status_code == 200
+        corps = reponse.json()
+        periode, debut, fin = derniere_periode_close(periodicite, reference)
+        assert corps == {
+            "periodicite": periodicite, "periode": periode, "debut": debut.isoformat(),
+            "fin": fin.isoformat(), "journee_comptable": reference.isoformat(),
+        }
+        assert fin < reference  # une période CLOSE, jamais celle en cours
+
+
+def test_produits_a_verser_avec_leur_periodicite_pour_la_direction(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "AG-P4")
+    compte = _compte_remunere(db, agence)
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    reponse = client.get("/epargne/interets/produits", headers=direction)
+
+    assert reponse.status_code == 200
+    mien = next(p for p in reponse.json() if p["id"] == str(compte.product_id))
+    assert mien["periodicite"] == "annuelle"
+    assert client.get("/epargne/interets/produits", headers=resp).status_code == 403
+
+
+def test_versement_refuse_une_periode_qui_n_est_pas_celle_du_produit_422(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "AG-P2")
+    compte = _compte_remunere(db, agence)
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+    # Produit annuel (défaut) : une période mensuelle est refusée, à l'aperçu comme au versement.
+    mensuelle = {
+        "product_id": str(compte.product_id), "periode": "2026-03",
+        "debut": "2026-03-01", "fin": "2026-03-31",
+    }
+
+    for route in ("/epargne/interets/apercu", "/epargne/interets"):
+        reponse = client.post(route, json=mensuelle, headers=direction)
+        assert reponse.status_code == 422
+        assert "chaque année" in reponse.json()["detail"]
+    nombre = db.execute(
+        text("SELECT count(*) FROM epargne.interet_calculs WHERE account_id = :a"),
+        {"a": compte.id},
+    ).scalar_one()
+    assert nombre == 0  # rien n'a été versé ni archivé
+
+
+def test_periode_proposee_reservee_a_la_direction_et_produit_inconnu_404(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "AG-P3")
+    compte = _compte_remunere(db, agence)
+    resp = _entete(db, agence, "RESPONSABLE_AGENCE")
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+    url = "/epargne/interets/periode"
+
+    refuse = client.get(url, params={"product_id": str(compte.product_id)}, headers=resp)
+    inconnu = client.get(url, params={"product_id": str(uuid.uuid4())}, headers=direction)
+    assert refuse.status_code == 403
+    assert inconnu.status_code == 404
 
 
 def test_rapprochement_concordant_apres_depot(client: TestClient, db: Session) -> None:
@@ -489,3 +591,25 @@ def test_refus_du_serveur_premier_depot_et_plancher_en_422_avec_message_humain(
     assert retrait.json()["detail"] == (
         "Retrait refusé : le solde ne peut pas descendre sous 2 000 F sur ce produit."
     )
+
+
+def test_versement_et_apercu_refuses_422_tant_que_la_periode_n_est_pas_close(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agence = _agence(db, "AG-P5")
+    compte = _compte_remunere(db, agence)
+    direction = _entete(db, agence, "DIRECTION_GENERALE")
+    # Produit annuel, journée au 15/06/2026 : l'année 2026 est en cours, donc pas close.
+    monkeypatch.setattr(interets, "journee_de_reference", lambda db: date(2026, 6, 15))
+    en_cours = {
+        "product_id": str(compte.product_id), "periode": "2026",
+        "debut": "2026-01-01", "fin": "2026-12-31",
+    }
+
+    for route in ("/epargne/interets/apercu", "/epargne/interets"):
+        reponse = client.post(route, json=en_cours, headers=direction)
+        assert reponse.status_code == 422
+        assert reponse.json()["detail"] == (
+            "Cette période n'est pas encore close : les intérêts ne se versent qu'après la fin "
+            "de la période."
+        )

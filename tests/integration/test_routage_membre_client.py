@@ -26,7 +26,7 @@ from app.core.database import engine
 from app.modules.caisse.models import CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.service import ouvrir_session
 from app.modules.comptabilite import journee
-from app.modules.epargne import service
+from app.modules.epargne import interets, service
 from app.modules.epargne.guichet import deposer
 from app.modules.epargne.interets import verser_interets
 from app.modules.epargne.models import Product
@@ -242,6 +242,14 @@ def test_rapprochement_concorde_par_groupe(db: Session) -> None:
     assert apres_c.concordant is True
 
 
+@pytest.fixture
+def _periode_2026_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Le versement ne porte que sur une période close : la journée de référence est fixée
+    après la période versée ici, sans dépendre de la date du jour."""
+    monkeypatch.setattr(interets, "journee_de_reference", lambda db: date(2027, 1, 15))
+
+
+@pytest.mark.usefixtures("_periode_2026_close")
 def test_les_interets_d_un_client_suivent_l_ancrage_251121(db: Session) -> None:
     # 10 % l'an base 365 : 100 000 déposés toute l'année -> 10 000 d'intérêts, crédités sur 251121.
     agence, produit = _cadre(db, "I1", taux_bp=1000)
@@ -249,7 +257,9 @@ def test_les_interets_d_un_client_suivent_l_ancrage_251121(db: Session) -> None:
     compte = _ouvrir(db, produit, agence, tier_id)
     deposer(db, _caissier(db, agence.id), compte.id, 100000)
 
-    verser_interets(db, periode="2026-RT", debut=date(2026, 1, 1), fin=date(2026, 12, 31))
+    verser_interets(
+        db, produit_id=produit.id, periode="2026", debut=date(2026, 1, 1), fin=date(2026, 12, 31)
+    )
 
     lignes = _lignes_epargne(db, compte.id)
     assert ("251121", "C", 10000) in lignes  # la dette envers le CLIENT monte sur SON collectif

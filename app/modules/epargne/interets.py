@@ -20,9 +20,10 @@ TRAITEMENT DE MASSE sans bloquer : compte par compte, CHACUN dans sa propre cour
 clôture) ; un membre SUSPENDU est crédité normalement (c'est son argent).
 """
 
+import calendar
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -30,10 +31,33 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete
+from app.modules.comptabilite.journee import journee_de_reference
 from app.modules.epargne.models import InteretCalcul, Product, SavingsAccount, SavingsMovement
 from app.modules.epargne.operations import TYPE_INTERET, poser_ecriture_operation
 
 METHODES = ("min_periode", "moyen_quotidien", "fin_periode")
+
+MOIS_PAR_TRIMESTRE = 3
+FORMAT_JOUR = "%d/%m/%Y"
+# « Ce produit verse ses intérêts <adverbe> » — le vocabulaire de l'agent, pas la valeur stockée.
+ADVERBE_PERIODICITE = {
+    "mensuelle": "chaque mois",
+    "trimestrielle": "chaque trimestre",
+    "annuelle": "chaque année",
+}
+MESSAGE_PERIODE_NON_CLOSE = (
+    "Cette période n'est pas encore close : les intérêts ne se versent qu'après la fin de la "
+    "période."
+)
+
+
+class PeriodeIncompatibleError(Exception):
+    """La période demandée est refusée : mauvaise forme pour la périodicité du produit (longueur
+    ou bornes), ou période pas encore close."""
+
+
+class ProduitInconnuError(Exception):
+    """Le produit dont on veut verser les intérêts n'existe pas."""
 
 
 class DejaVerseError(Exception):
@@ -84,6 +108,80 @@ class ApercuInterets:
     deja_verse_le: datetime | None = None  # si la période a déjà été versée, quand
     en_erreur: list[str] = field(default_factory=list)  # comptes que le calcul ne peut pas traiter
     echantillon: list[ApercuLigne] = field(default_factory=list)
+
+
+# --- La période, PURE : dérivée de la périodicité du produit -------------------------
+
+
+def periode_attendue(periodicite: str, date_reference: date) -> tuple[str, date, date]:
+    """Période CALENDAIRE (mois, trimestre ou année civile) qui contient `date_reference`.
+
+    Rend (libellé, début, fin). Le libellé est la clé anti-double-versement : « 2026-03 »
+    (mensuelle), « 2026-T1 » (trimestrielle), « 2026 » (annuelle). Pure : l'appelant fournit la
+    date (la journée comptable), jamais l'horloge du poste.
+    """
+    annee, mois = date_reference.year, date_reference.month
+    if periodicite == "mensuelle":
+        premier, dernier = mois, mois
+        libelle = f"{annee}-{mois:02d}"
+    elif periodicite == "trimestrielle":
+        trimestre = (mois - 1) // MOIS_PAR_TRIMESTRE
+        premier = trimestre * MOIS_PAR_TRIMESTRE + 1
+        dernier = premier + MOIS_PAR_TRIMESTRE - 1
+        libelle = f"{annee}-T{trimestre + 1}"
+    elif periodicite == "annuelle":
+        premier, dernier = 1, 12
+        libelle = f"{annee}"
+    else:
+        raise ValueError(f"périodicité inconnue : {periodicite}")
+    fin = date(annee, dernier, calendar.monthrange(annee, dernier)[1])
+    return libelle, date(annee, premier, 1), fin
+
+
+def derniere_periode_close(periodicite: str, journee: date) -> tuple[str, date, date]:
+    """Dernière période ENTIÈREMENT écoulée à la journée comptable `journee` : la période qui
+    précède celle où se trouve la journée (la période en cours n'est pas close)."""
+    _, debut_courante, _ = periode_attendue(periodicite, journee)
+    return periode_attendue(periodicite, debut_courante - timedelta(days=1))
+
+
+def verifier_periode(periodicite: str, periode: str, debut: date, fin: date) -> None:
+    """Refuse une période qui n'est pas EXACTEMENT celle de la périodicité du produit : même
+    longueur ET mêmes bornes (un produit annuel ne se verse pas au mois ; 01/03 au 15/03 n'est pas
+    un mois). Le libellé doit aussi être le libellé attendu : deux libellés pour les mêmes bornes
+    contourneraient l'anti-double-versement (UNIQUE compte + libellé)."""
+    attendue = periode_attendue(periodicite, debut)
+    if (periode, debut, fin) == attendue:
+        return
+    libelle, debut_attendu, fin_attendue = attendue
+    raise PeriodeIncompatibleError(
+        f"Ce produit verse ses intérêts {ADVERBE_PERIODICITE[periodicite]} : la période "
+        f"« {libelle} » va du {debut_attendu.strftime(FORMAT_JOUR)} au "
+        f"{fin_attendue.strftime(FORMAT_JOUR)}. La période demandée ({periode}, du "
+        f"{debut.strftime(FORMAT_JOUR)} au {fin.strftime(FORMAT_JOUR)}) ne correspond pas."
+    )
+
+
+def verifier_periode_close(periodicite: str, debut: date, journee: date) -> None:
+    """Refuse une période qui n'est pas ENTIÈREMENT écoulée à la journée comptable `journee`.
+
+    Toute période postérieure à `derniere_periode_close` (dont la période en cours) est refusée.
+    Une période antérieure passe ici : si elle a déjà été versée, l'anti-double-versement
+    (UNIQUE compte + période) la bloque ; sinon c'est un rattrapage légitime."""
+    _, debut_derniere_close, _ = derniere_periode_close(periodicite, journee)
+    if debut > debut_derniere_close:
+        raise PeriodeIncompatibleError(MESSAGE_PERIODE_NON_CLOSE)
+
+
+def _produit_et_periode(
+    db: Session, produit_id: uuid.UUID, periode: str, debut: date, fin: date
+) -> Product:
+    produit = db.get(Product, produit_id)
+    if produit is None:
+        raise ProduitInconnuError("Ce produit d'épargne n'existe pas.")
+    verifier_periode(produit.periodicite, periode, debut, fin)
+    verifier_periode_close(produit.periodicite, debut, journee_de_reference(db))
+    return produit
 
 
 # --- Le calcul, PUR (aucune base de données) ----------------------------------------
@@ -279,6 +377,7 @@ def _verser_un(
 def previsualiser_interets(
     db: Session,
     *,
+    produit_id: uuid.UUID,
     periode: str,
     debut: date,
     fin: date,
@@ -294,9 +393,12 @@ def previsualiser_interets(
     Anti-double : les comptes DÉJÀ traités pour la période sont comptés à part (`deja_traites`,
     `deja_verse_le`) et EXCLUS du total à verser — l'aperçu ne montre que ce qui reste à faire.
     """
+    _produit_et_periode(db, produit_id, periode, debut, fin)
     ids = list(
         db.execute(
-            select(SavingsAccount.id).where(SavingsAccount.status == "actif")
+            select(SavingsAccount.id).where(
+                SavingsAccount.status == "actif", SavingsAccount.product_id == produit_id
+            )
         ).scalars()
     )
     jours = (fin - debut).days + 1
@@ -354,22 +456,28 @@ def previsualiser_interets(
 def verser_interets(
     db: Session,
     *,
+    produit_id: uuid.UUID,
     periode: str,
     debut: date,
     fin: date,
     par: uuid.UUID | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> RapportInterets:
-    """Traitement de masse : verse les intérêts de la période à tous les comptes ACTIFS.
+    """Traitement de masse : verse les intérêts de la période aux comptes ACTIFS d'UN produit.
+
+    La période doit être celle de la périodicité du produit (`verifier_periode`), sinon refus.
 
     Compte par compte, CHACUN committé séparément (ne bloque pas le système, reprend proprement).
     Un compte dont un mouvement n'a pas de pièce comptable est SIGNALÉ (`en_erreur`), pas traité,
     sans bloquer les autres. Idempotent : un compte déjà traité pour la période est sauté
     (anti-double-versement).
     """
+    _produit_et_periode(db, produit_id, periode, debut, fin)
     ids = list(
         db.execute(
-            select(SavingsAccount.id).where(SavingsAccount.status == "actif")
+            select(SavingsAccount.id).where(
+                SavingsAccount.status == "actif", SavingsAccount.product_id == produit_id
+            )
         ).scalars()
     )
     rapport = RapportInterets()

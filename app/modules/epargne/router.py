@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
-from app.modules.comptabilite.journee import AucuneJourneeOuverteError
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError, journee_de_reference
 from app.modules.comptabilite.models import Account
 from app.modules.epargne import consultation, gestion_produits, rattachements
 from app.modules.epargne.gestion_produits import CodeDejaUtiliseError, ComptesNonRattachesError
@@ -37,7 +37,13 @@ from app.modules.epargne.guichet import (
     fermer_compte,
     retirer,
 )
-from app.modules.epargne.interets import previsualiser_interets, verser_interets
+from app.modules.epargne.interets import (
+    PeriodeIncompatibleError,
+    ProduitInconnuError,
+    derniere_periode_close,
+    previsualiser_interets,
+    verser_interets,
+)
 from app.modules.epargne.models import Product
 from app.modules.epargne.rapprochement import rapprocher_tout
 from app.modules.epargne.schemas import (
@@ -56,8 +62,10 @@ from app.modules.epargne.schemas import (
     MouvementResume,
     OperationGuichet,
     OuvertureCompte,
+    PeriodeInteretsProposee,
     ProduitEpargne,
     ProduitEpargneDetail,
+    ProduitInterets,
     RapportInterets,
     RattachementsProduit,
     ResultatOperation,
@@ -548,6 +556,45 @@ def fermer_compte_endpoint(
 # --- Intérêts (F4) : prévisualiser, puis verser. Acte d'INSTITUTION, réservé à la direction ----
 
 
+@router.get("/epargne/interets/produits", response_model=list[ProduitInterets])
+def produits_interets_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.interet.executer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ProduitInterets]:
+    """Les produits actifs dont la direction peut verser les intérêts. Sous la permission du
+    versement elle-même : la direction n'a pas `epargne.product.read`, et le choix du produit
+    fait partie de l'acte de versement."""
+    return [
+        ProduitInterets(id=p.id, code=p.code, name=p.name, periodicite=p.periodicite)
+        for p in consultation.lister_produits(db)
+    ]
+
+
+@router.get("/epargne/interets/periode", response_model=PeriodeInteretsProposee)
+def periode_interets_endpoint(
+    product_id: Annotated[uuid.UUID, Query()],
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.interet.executer"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> PeriodeInteretsProposee:
+    """Période PROPOSÉE pour verser les intérêts d'un produit : la dernière période close de sa
+    périodicité, d'après la journée comptable (jamais l'horloge du poste). L'écran la verrouille ;
+    le versement la revérifie de toute façon côté serveur."""
+    produit = db.get(Product, product_id)
+    if produit is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ce produit d'épargne n'existe pas."
+        )
+    reference = journee_de_reference(db)
+    periode, debut, fin = derniere_periode_close(produit.periodicite, reference)
+    return PeriodeInteretsProposee(
+        periodicite=produit.periodicite,
+        periode=periode,
+        debut=debut,
+        fin=fin,
+        journee_comptable=reference,
+    )
+
+
 @router.post("/epargne/interets/apercu", response_model=ApercuInterets)
 def previsualiser_interets_endpoint(
     corps: DemandeInterets,
@@ -557,9 +604,20 @@ def previsualiser_interets_endpoint(
     """Prévisualisation obligatoire : CALCULE sans rien verser (dry-run). Renvoie le total ET un
     échantillon détaillé (taux, méthode, base, montant par compte) pour vérifier « ça a l'air
     juste » avant de créer de l'argent. Dit si la période est déjà (partiellement) versée."""
-    apercu = previsualiser_interets(
-        db, periode=corps.periode.strip(), debut=corps.debut, fin=corps.fin
-    )
+    try:
+        apercu = previsualiser_interets(
+            db,
+            produit_id=corps.product_id,
+            periode=corps.periode.strip(),
+            debut=corps.debut,
+            fin=corps.fin,
+        )
+    except ProduitInconnuError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ce produit d'épargne n'existe pas."
+        ) from None
+    except PeriodeIncompatibleError as erreur:
+        raise _422(erreur) from None
     return ApercuInterets(
         periode=apercu.periode,
         debut=apercu.debut,
@@ -596,14 +654,22 @@ def verser_interets_endpoint(
     """Versement effectif : crédite les comptes, pose les écritures (D 603 / C 3111). Idempotent —
     une période déjà versée ressort en `ignores`, l'écran le dira (« déjà versés »). Le moteur
     committe compte par compte."""
-    rapport = verser_interets(
-        db,
-        periode=corps.periode.strip(),
-        debut=corps.debut,
-        fin=corps.fin,
-        par=courant.user_id,
-        contexte=_contexte(request),
-    )
+    try:
+        rapport = verser_interets(
+            db,
+            produit_id=corps.product_id,
+            periode=corps.periode.strip(),
+            debut=corps.debut,
+            fin=corps.fin,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+    except ProduitInconnuError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ce produit d'épargne n'existe pas."
+        ) from None
+    except PeriodeIncompatibleError as erreur:
+        raise _422(erreur) from None
     return RapportInterets(
         traites=rapport.traites,
         credites=rapport.credites,
