@@ -147,7 +147,7 @@ class IndividualProfile(Tier):
         sa.Integer(), nullable=False, server_default=sa.text("0")
     )
     profession: Mapped[str | None] = mapped_column(sa.String(200))
-    monthly_income_estimate: Mapped[Decimal | None] = mapped_column(sa.Numeric(18, 2))
+    monthly_income_estimate: Mapped[int | None] = mapped_column(sa.BigInteger)
     is_literate: Mapped[bool] = mapped_column(
         sa.Boolean(), nullable=False, server_default=sa.true()
     )

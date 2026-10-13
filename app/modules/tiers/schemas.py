@@ -10,6 +10,7 @@ n'est pas écrit explicitement ne sort pas.
 """
 
 import uuid
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, ClassVar, Literal, Self
@@ -20,28 +21,52 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_valida
 MESSAGE_CAPITAL_ENTIER = "Le capital social s'exprime en francs entiers, sans décimales."
 MESSAGE_CAPITAL_NEGATIF = "Le capital social ne peut pas être négatif."
 MESSAGE_CAPITAL_TROP_GRAND = "Le capital social est trop élevé."
+MESSAGE_REVENU_ENTIER = "Le revenu mensuel s'exprime en francs entiers, sans décimales."
+MESSAGE_REVENU_NEGATIF = "Le revenu mensuel ne peut pas être négatif."
+MESSAGE_REVENU_TROP_GRAND = "Le revenu mensuel est trop élevé."
 _MAX_BIGINT = 9_223_372_036_854_775_807
 
 
-def _en_francs_entiers(valeur: object) -> object:
+def _validateur_francs_entiers(
+    message_entier: str, message_negatif: str, message_trop_grand: str
+) -> Callable[[object], object]:
     """Accepte 1000000, "1000000" et "1000000.00" (valeur entière écrite avec décimales nulles) ;
     refuse tout ce qui a de vraies décimales, avec un message que l'écran peut montrer tel quel."""
-    if valeur is None or (isinstance(valeur, str) and not valeur.strip()):
-        return None
-    try:
-        nombre = Decimal(str(valeur).strip())
-    except InvalidOperation:
-        raise ValueError(MESSAGE_CAPITAL_ENTIER) from None
-    if not nombre.is_finite() or nombre != nombre.to_integral_value():
-        raise ValueError(MESSAGE_CAPITAL_ENTIER)
-    if nombre < 0:
-        raise ValueError(MESSAGE_CAPITAL_NEGATIF)
-    if nombre > _MAX_BIGINT:
-        raise ValueError(MESSAGE_CAPITAL_TROP_GRAND)
-    return int(nombre)
+
+    def valider(valeur: object) -> object:
+        if valeur is None or (isinstance(valeur, str) and not valeur.strip()):
+            return None
+        try:
+            nombre = Decimal(str(valeur).strip())
+        except InvalidOperation:
+            raise ValueError(message_entier) from None
+        if not nombre.is_finite() or nombre != nombre.to_integral_value():
+            raise ValueError(message_entier)
+        if nombre < 0:
+            raise ValueError(message_negatif)
+        if nombre > _MAX_BIGINT:
+            raise ValueError(message_trop_grand)
+        return int(nombre)
+
+    return valider
 
 
-CapitalEnFrancs = Annotated[int | None, BeforeValidator(_en_francs_entiers)]
+CapitalEnFrancs = Annotated[
+    int | None,
+    BeforeValidator(
+        _validateur_francs_entiers(
+            MESSAGE_CAPITAL_ENTIER, MESSAGE_CAPITAL_NEGATIF, MESSAGE_CAPITAL_TROP_GRAND
+        )
+    ),
+]
+RevenuEnFrancs = Annotated[
+    int | None,
+    BeforeValidator(
+        _validateur_francs_entiers(
+            MESSAGE_REVENU_ENTIER, MESSAGE_REVENU_NEGATIF, MESSAGE_REVENU_TROP_GRAND
+        )
+    ),
+]
 
 Genre = Literal["M", "F"]
 EtatCivil = Literal["celibataire", "marie", "divorce", "veuf", "union_libre", "autre"]
@@ -77,7 +102,7 @@ class CreationIndividu(_CommunEntree):
     marital_status: EtatCivil | None = None
     dependents_count: int = Field(default=0, ge=0)
     profession: str | None = Field(default=None, max_length=200)
-    monthly_income_estimate: Decimal | None = None
+    monthly_income_estimate: RevenuEnFrancs = None
     is_literate: bool = True
 
 
@@ -120,7 +145,7 @@ class IndividuDetail(BaseModel):
     marital_status: str | None
     dependents_count: int
     profession: str | None
-    monthly_income_estimate: Decimal | None
+    monthly_income_estimate: int | None
     is_literate: bool
     # Données KYC (T3c) — pour pré-remplir le formulaire de l'onglet KYC.
     origine_fonds: str | None

@@ -111,7 +111,7 @@ def _creer_individu(client: TestClient, db: Session, createur: User) -> str:
             "gender": "M",
             "nationality_id": _pays(db, "SN"),
             "profession": "Commerçante",
-            "monthly_income_estimate": "150000.00",
+            "monthly_income_estimate": 150000,
         },
         headers=_entete(createur, "CHARGE_CLIENTELE"),
     )
@@ -168,7 +168,57 @@ def test_un_lecteur_complet_obtient_bien_les_champs_sensibles(
     assert reponse.status_code == 200, reponse.text
     corps = reponse.json()
     assert corps["individu"]["profession"] == "Commerçante"
-    assert corps["individu"]["monthly_income_estimate"] == "150000.00"
+    assert corps["individu"]["monthly_income_estimate"] == 150000
+
+
+def test_le_revenu_mensuel_est_un_entier_de_francs(db: Session, client: TestClient) -> None:
+    from sqlalchemy import text
+
+    agence = _agence(db, "Agence Centre")
+    createur = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    tid = _creer_individu(client, db, createur)
+
+    # Colonne BIGINT, et la valeur revient en entier JSON (pas la chaîne « 150000.00 »).
+    type_colonne = db.execute(
+        text(
+            "SELECT data_type FROM information_schema.columns WHERE table_schema = 'tiers' "
+            "AND table_name = 'individual_profiles' AND column_name = 'monthly_income_estimate'"
+        )
+    ).scalar_one()
+    assert type_colonne == "bigint"
+    corps = client.get(f"/tiers/{tid}", headers=_entete(createur, "CHARGE_CLIENTELE")).json()
+    revenu = corps["individu"]["monthly_income_estimate"]
+    assert revenu == 150000
+    assert isinstance(revenu, int)
+
+
+def test_un_revenu_mensuel_avec_decimales_ou_negatif_est_refuse(
+    db: Session, client: TestClient
+) -> None:
+    agence = _agence(db, "Agence Centre")
+    createur = _utilisateur(db, "CHARGE_CLIENTELE", agence)
+    base = {
+        "last_name": "Diallo", "first_name": "Amadou", "birth_date": "1990-05-12",
+        "gender": "M", "nationality_id": _pays(db, "SN"),
+    }
+
+    for valeur, message in (
+        ("150000.50", "Le revenu mensuel s'exprime en francs entiers, sans décimales."),
+        (-1, "Le revenu mensuel ne peut pas être négatif."),
+    ):
+        reponse = client.post(
+            "/tiers/individuals", json={**base, "monthly_income_estimate": valeur},
+            headers=_entete(createur, "CHARGE_CLIENTELE"),
+        )
+        assert reponse.status_code == 422, valeur
+        assert message in reponse.text
+
+    # « 150000.00 » (décimales nulles) reste accepté et devient l'entier 150000.
+    reponse = client.post(
+        "/tiers/individuals", json={**base, "monthly_income_estimate": "150000.00"},
+        headers=_entete(createur, "CHARGE_CLIENTELE"),
+    )
+    assert reponse.status_code == 201, reponse.text
 
 
 # --- 2. cloisonnement en lecture : 404, jamais 403 -------------------------------------

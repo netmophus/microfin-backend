@@ -26,7 +26,6 @@ sans la grille ni le code de l'époque. `is_provisional` de la grille y est GEL�
 import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -109,7 +108,7 @@ class EntreeRisque:
     ppe_relation: str | None = None
     ppe_fonction: str | None = None
     mode_entree_relation: str | None = None
-    revenus_estimes: Decimal | None = None
+    revenus_estimes: int | None = None
     sanctions_match: bool = False  # T6 : sans données de sanctions, toujours False
 
 
