@@ -52,6 +52,11 @@ class CompteDebiteurError(FermetureError):
     """Le compte est débiteur (solde < 0) : on régularise avant de fermer, pas en fermant."""
 
 
+class DepotATermeBloqueError(FermetureError):
+    """Un dépôt à terme ne se ferme pas comme un compte ordinaire : il se solde par le dénouement
+    à l'échéance ou par le retrait anticipé (avec pénalité)."""
+
+
 class CompteDejaClotureError(FermetureError):
     """Le compte est déjà clôturé."""
 
@@ -245,6 +250,11 @@ def cloturer_compte(
     Le passage en 'cloture' est DÉFINITIF (trigger 0022 : non réouvrable)."""
     if compte.status == "cloture":
         raise CompteDejaClotureError("Ce compte est déjà fermé.")
+    if compte.maturity_date is not None:
+        raise DepotATermeBloqueError(
+            "Ce compte est un dépôt à terme : il se solde par le dénouement à l'échéance ou par "
+            "le retrait anticipé, pas par une clôture."
+        )
     if compte.balance < 0:
         # Message en langage humain (règle : un client peut lire l'écran). Débit -> montant positif.
         du = f"{-compte.balance:,} F".replace(",", " ")

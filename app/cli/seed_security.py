@@ -251,6 +251,15 @@ PERMISSIONS: tuple[Permission, ...] = (
     # Opérations de guichet (E3) : dépôt et retrait. Réservées au caissier (et au responsable).
     Permission("epargne.operation.deposit", "epargne", "Enregistrer un dépôt au guichet"),
     Permission("epargne.operation.withdraw", "epargne", "Enregistrer un retrait au guichet"),
+    # Dépôt à terme : le retrait ANTICIPÉ coûte de l'argent au client (pénalité sur les intérêts
+    # courus) — acte de responsable, jamais du simple caissier (même logique que
+    # tiers.shares.refund). Le dénouement à l'échéance, lui, est un acte de caisse normal et
+    # réutilise epargne.operation.withdraw.
+    Permission(
+        "epargne.dat.retrait_anticipe",
+        "epargne",
+        "Solder un dépôt à terme avant son échéance (pénalité sur les intérêts courus)",
+    ),
     # Intérêts (F4). executer = lancer le versement des intérêts d'une période. Acte
     # d'INSTITUTION (le taux, le moment, la périodicité engagent toute l'IMF), pas une opération
     # d'agence : réservé à la direction, jamais au responsable d'agence cloisonné — sinon chaque
@@ -528,6 +537,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.pay",
             "tiers.shares.read",
             "tiers.shares.refund",
+            "epargne.dat.retrait_anticipe",
             "credit.product.read",
             "credit.demande.read",
             "credit.decaissement.create",

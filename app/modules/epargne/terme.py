@@ -101,6 +101,66 @@ def penalite_sur_interets(interets_courus: int, penalite_bp: int) -> int:
     return min(int(brut.quantize(Decimal(1), rounding=ROUND_HALF_UP)), interets_courus)
 
 
+MODE_ECHEANCE = "echeance"
+MODE_ANTICIPE = "anticipe"
+
+
+@dataclass(frozen=True)
+class DecompositionDenouement:
+    """Ce que le client reçoit en soldant son dépôt à terme `journee`, et pourquoi."""
+
+    mode: str  # MODE_ECHEANCE (journée >= échéance) | MODE_ANTICIPE
+    jours: int
+    capital: int
+    interets_courus: int
+    penalite: int  # toujours 0 à l'échéance
+    interets_nets: int  # courus moins pénalité : ce qui est réellement versé
+    total_paye: int
+    message: str
+
+
+def _francs(montant: int) -> str:
+    return f"{montant:,} F".replace(",", " ")
+
+
+def decomposer_denouement(
+    *,
+    principal: int,
+    debut: date,
+    echeance: date,
+    taux_bp: int,
+    penalite_bp: int,
+    base_jours: int,
+    arrondi: str,
+    journee: date,
+) -> DecompositionDenouement:
+    """Décompose le solde d'un DAT à la journée comptable `journee`, avec les paramètres FIGÉS
+    au contrat. À l'échéance (ou après) : intérêts de toute la durée, sans pénalité, et rien de
+    plus passé l'échéance. Avant : intérêts courus au prorata, diminués de la pénalité (jamais
+    plus que les intérêts : le capital reste intact)."""
+    mode = MODE_ECHEANCE if journee >= echeance else MODE_ANTICIPE
+    jours = jours_courus(debut, journee, echeance)
+    courus = interets_du_terme(principal, taux_bp, jours, base_jours, arrondi)
+    penalite = penalite_sur_interets(courus, penalite_bp) if mode == MODE_ANTICIPE else 0
+    nets = courus - penalite
+    total = principal + nets
+    if mode == MODE_ECHEANCE:
+        message = (
+            f"Dénouement à l'échéance : capital {_francs(principal)} + intérêts "
+            f"{_francs(nets)} = {_francs(total)}."
+        )
+    else:
+        retenue = f", moins la pénalité de {_francs(penalite)}" if penalite else ""
+        message = (
+            f"Retrait anticipé : capital {_francs(principal)} + intérêts courus "
+            f"{_francs(courus)}{retenue} = {_francs(total)}."
+        )
+    return DecompositionDenouement(
+        mode=mode, jours=jours, capital=principal, interets_courus=courus, penalite=penalite,
+        interets_nets=nets, total_paye=total, message=message,
+    )
+
+
 def conditions_du_contrat(
     db: Session, product_id: uuid.UUID, term_months: int, montant: int
 ) -> tuple[Product, ConditionsTerme]:

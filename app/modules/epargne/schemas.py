@@ -80,6 +80,31 @@ class SimulationDepotATerme(BaseModel):
     duree_max_mois: int
 
 
+class ApercuDenouement(BaseModel):
+    """Ce que recevrait le client en soldant son dépôt à terme maintenant."""
+
+    mode: str  # 'echeance' | 'anticipe'
+    jours: int
+    capital: int
+    interets_courus: int
+    penalite: int  # toujours 0 à l'échéance
+    interets_nets: int
+    total_paye: int
+    message: str
+
+
+class ResultatDenouement(BaseModel):
+    account_number: str
+    mode: str
+    capital: int
+    interets_courus: int
+    penalite: int
+    interets_nets: int
+    total_paye: int
+    entry_number: str | None
+    message: str
+
+
 class ResultatOuvertureDepotATerme(BaseModel):
     compte: CompteEpargneResume
     entry_number: str | None  # pièce du versement du capital

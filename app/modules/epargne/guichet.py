@@ -39,15 +39,30 @@ import uuid
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
 from app.modules.caisse.service import resoudre_session_active
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.epargne import service
-from app.modules.epargne.models import Product, SavingsAccount, SavingsMovement
-from app.modules.epargne.operations import TYPE_DEPOT, TYPE_RETRAIT, poser_ecriture_operation
-from app.modules.epargne.terme import ConditionsTerme, conditions_du_contrat
+from app.modules.epargne.models import InteretCalcul, Product, SavingsAccount, SavingsMovement
+from app.modules.epargne.operations import (
+    TYPE_DENOUEMENT,
+    TYPE_DEPOT,
+    TYPE_INTERET,
+    TYPE_RETRAIT,
+    TYPE_RETRAIT_ANTICIPE,
+    poser_ecriture_operation,
+)
+from app.modules.epargne.terme import (
+    MODE_ANTICIPE,
+    MODE_ECHEANCE,
+    ConditionsTerme,
+    DecompositionDenouement,
+    conditions_du_contrat,
+    decomposer_denouement,
+)
 from app.modules.security.autorisation import UtilisateurCourant
 
 
@@ -88,9 +103,19 @@ class CompteATermeError(OperationError):
     """Dépôt ou retrait ordinaire sur un dépôt à terme : il est bloqué jusqu'à l'échéance."""
 
 
+class EcheanceNonAtteinteError(OperationError):
+    """Dénouement demandé avant l'échéance : seul le retrait anticipé est possible."""
+
+
+class EcheanceAtteinteError(OperationError):
+    """Retrait anticipé demandé à partir de l'échéance : le dénouement est sans pénalité."""
+
+
 class ActionsAudit:
     DEPOT = "epargne.depot"
     RETRAIT = "epargne.retrait"
+    DAT_DENOUEMENT = "epargne.dat.denouement"
+    DAT_RETRAIT_ANTICIPE = "epargne.dat.retrait_anticipe"
 
 
 @dataclass(frozen=True)
@@ -170,8 +195,14 @@ def _enregistrer_mouvement(
     journal_entry_id: uuid.UUID,
     date_valeur: date,
     par: uuid.UUID | None,
+    horodatage_reel: bool = False,
 ) -> None:
-    """Écrit le mouvement append-only, relié à sa pièce comptable (dont il prend la date)."""
+    """Écrit le mouvement append-only, relié à sa pièce comptable (dont il prend la date).
+
+    `horodatage_reel` : deux mouvements d'une même transaction (intérêts puis sortie d'un dépôt à
+    terme) auraient le même `created_at` (NOW() est l'heure de la transaction), donc un ordre
+    d'affichage au hasard de l'UUID. `clock_timestamp()` donne l'instant réel de l'insertion."""
+    horodatage = {"created_at": func.clock_timestamp()} if horodatage_reel else {}
     db.add(
         SavingsMovement(
             account_id=compte.id,
@@ -182,6 +213,7 @@ def _enregistrer_mouvement(
             journal_entry_id=journal_entry_id,
             date_valeur=date_valeur,
             created_by=par,
+            **horodatage,
         )
     )
     db.flush()
@@ -339,6 +371,225 @@ def ouvrir_depot_a_terme(
     )
     db.commit()
     return ResultatOuvertureDepotATerme(compte, versement, conditions)
+
+
+# --- Dépôt à terme : dénouement à l'échéance et retrait anticipé -----------------------
+
+# Clé d'unicité (compte, période) : un dépôt à terme ne se solde qu'une fois.
+PERIODE_DENOUEMENT = "DENOUEMENT"
+METHODE_TERME = "terme"
+
+
+@dataclass(frozen=True)
+class ResultatDenouement:
+    """Reçu de dénouement ou de retrait anticipé."""
+
+    account_number: str
+    mode: str
+    capital: int
+    interets_courus: int
+    penalite: int
+    interets_nets: int
+    total_paye: int
+    entry_number: str | None
+    message: str
+
+
+def _decomposer(compte: SavingsAccount, journee: date) -> DecompositionDenouement:
+    """Décompose le solde d'un DAT avec les paramètres FIGÉS au contrat du compte."""
+    assert compte.principal is not None  # un compte à terme porte ses conditions (trigger 0065)
+    assert compte.term_start_date is not None and compte.maturity_date is not None
+    assert compte.taux_bp_contrat is not None and compte.penalite_bp_contrat is not None
+    assert compte.base_jours_contrat is not None and compte.regle_arrondi_contrat is not None
+    return decomposer_denouement(
+        principal=compte.principal,
+        debut=compte.term_start_date,
+        echeance=compte.maturity_date,
+        taux_bp=compte.taux_bp_contrat,
+        penalite_bp=compte.penalite_bp_contrat,
+        base_jours=compte.base_jours_contrat,
+        arrondi=compte.regle_arrondi_contrat,
+        journee=journee,
+    )
+
+
+def apercu_denouement(
+    db: Session, courant: UtilisateurCourant, compte_id: uuid.UUID
+) -> DecompositionDenouement:
+    """Ce que recevrait le client si son dépôt à terme était soldé à la journée comptable en cours
+    (échéance ou anticipé, selon la journée). Lecture seule, sans verrou ; même calcul que
+    l'exécution. Un compte hors périmètre -> `CompteIntrouvableError` (404)."""
+    compte = db.execute(
+        select(SavingsAccount).where(
+            SavingsAccount.id == compte_id,
+            courant.condition_perimetre(SavingsAccount.agency_id),
+        )
+    ).scalar_one_or_none()
+    if compte is None:
+        raise CompteIntrouvableError()
+    if compte.status != "actif":
+        raise CompteClotureError("Ce compte est fermé : aucune opération possible.")
+    if compte.maturity_date is None:
+        raise CompteATermeError("Ce compte n'est pas un dépôt à terme.")
+    return _decomposer(compte, date_comptable_obligatoire(db))
+
+
+def _solder_depot_a_terme(
+    db: Session,
+    courant: UtilisateurCourant,
+    compte_id: uuid.UUID,
+    *,
+    mode_demande: str,
+    contexte: ContexteRequete,
+) -> ResultatDenouement:
+    """Solde un dépôt à terme en UNE transaction : intérêts (D 60252 / C 252xxx) si > 0, puis
+    sortie de caisse du total (D 252xxx / C caisse), mouvements, archivage rejouable, clôture
+    définitive du compte, audit. Même discipline que `_operer_sans_commit` : verrou, contrôles,
+    pièce + mouvement ensemble, un seul commit. Le mode demandé doit correspondre à la journée
+    comptable (à l'échéance ou avant) : on ne dénoue pas en avance, on ne paie pas de pénalité
+    à l'échéance."""
+    compte_caisse_id = resoudre_session_active(db, courant.user_id).compte_caisse_id
+    compte = _charger_compte_verrou(db, courant, compte_id)
+    _controler(db, compte, compte.balance)
+    if compte.maturity_date is None:
+        raise CompteATermeError("Ce compte n'est pas un dépôt à terme.")
+
+    journee = date_comptable_obligatoire(db)
+    d = _decomposer(compte, journee)
+    echeance = compte.maturity_date.strftime("%d/%m/%Y")
+    if mode_demande == MODE_ECHEANCE and d.mode == MODE_ANTICIPE:
+        raise EcheanceNonAtteinteError(
+            f"Ce dépôt à terme n'arrive à échéance que le {echeance}. Avant cette date, seul le "
+            "retrait anticipé (avec pénalité) est possible."
+        )
+    if mode_demande == MODE_ANTICIPE and d.mode == MODE_ECHEANCE:
+        raise EcheanceAtteinteError(
+            f"L'échéance de ce dépôt à terme ({echeance}) est atteinte : utilisez le dénouement "
+            "à l'échéance, sans pénalité."
+        )
+
+    piece_interets = None
+    if d.interets_nets > 0:
+        piece_interets = poser_ecriture_operation(
+            db, compte, TYPE_INTERET, d.interets_nets, courant.user_id, contexte=contexte
+        )
+        _enregistrer_mouvement(
+            db, compte, sens="credit", montant=d.interets_nets,
+            balance_after=compte.balance + d.interets_nets, operation_type="interet",
+            journal_entry_id=piece_interets.id, date_valeur=piece_interets.entry_date,
+            par=courant.user_id, horodatage_reel=True,
+        )
+        compte.balance += d.interets_nets
+
+    code_operation = TYPE_DENOUEMENT if d.mode == MODE_ECHEANCE else TYPE_RETRAIT_ANTICIPE
+    piece = poser_ecriture_operation(
+        db, compte, code_operation, d.total_paye, courant.user_id,
+        compte_caisse_id=compte_caisse_id, contexte=contexte,
+    )
+    _enregistrer_mouvement(
+        db, compte, sens="debit", montant=d.total_paye, balance_after=0,
+        operation_type=code_operation.split(".")[-1], journal_entry_id=piece.id,
+        date_valeur=piece.entry_date, par=courant.user_id, horodatage_reel=True,
+    )
+    compte.balance = 0
+
+    db.add(
+        InteretCalcul(
+            account_id=compte.id,
+            periode=PERIODE_DENOUEMENT,
+            base_solde=d.capital,
+            methode=METHODE_TERME,
+            taux_bp=compte.taux_bp_contrat,
+            base_jours=compte.base_jours_contrat,
+            jours=d.jours,
+            montant=d.interets_nets,
+            detail={
+                "mode": d.mode,
+                "debut": compte.term_start_date.isoformat() if compte.term_start_date else None,
+                "echeance": compte.maturity_date.isoformat(),
+                "journee": journee.isoformat(),
+                "arrondi": compte.regle_arrondi_contrat,
+                "interets_courus": d.interets_courus,
+                "penalite_bp": compte.penalite_bp_contrat,
+                "penalite": d.penalite,
+                "interets_nets": d.interets_nets,
+            },
+            journal_entry_id=piece_interets.id if piece_interets else None,
+            computed_by=courant.user_id,
+        )
+    )
+    compte.status = "cloture"
+    compte.closed_by = courant.user_id
+    compte.closure_reason = (
+        "Dénouement à l'échéance" if d.mode == MODE_ECHEANCE else "Retrait anticipé"
+    )
+    compte.updated_by = courant.user_id
+    compte.closed_at = db.execute(text("SELECT NOW()")).scalar_one()
+    db.flush()
+
+    ecrire_audit(
+        db,
+        action=(
+            ActionsAudit.DAT_DENOUEMENT
+            if d.mode == MODE_ECHEANCE
+            else ActionsAudit.DAT_RETRAIT_ANTICIPE
+        ),
+        contexte=contexte,
+        acteur_id=courant.user_id,
+        resource_type="epargne.account",
+        resource_id=compte.id,
+        agency_id=compte.agency_id,
+        old_values={"status": "actif"},
+        new_values={
+            "status": "cloture",
+            "account_number": compte.account_number,
+            "capital": d.capital,
+            "interets_courus": d.interets_courus,
+            "penalite": d.penalite,
+            "total_paye": d.total_paye,
+            "piece": piece.entry_number,
+        },
+    )
+    db.commit()
+    return ResultatDenouement(
+        account_number=compte.account_number,
+        mode=d.mode,
+        capital=d.capital,
+        interets_courus=d.interets_courus,
+        penalite=d.penalite,
+        interets_nets=d.interets_nets,
+        total_paye=d.total_paye,
+        entry_number=piece.entry_number,
+        message=d.message,
+    )
+
+
+def denouer_depot_a_terme(
+    db: Session,
+    courant: UtilisateurCourant,
+    compte_id: uuid.UUID,
+    *,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatDenouement:
+    """Dénouement à l'échéance : capital + intérêts de toute la durée, en espèces. Acte de caisse
+    normal. Refusé avant l'échéance (la journée comptable fait foi, jamais l'horloge)."""
+    return _solder_depot_a_terme(
+        db, courant, compte_id, mode_demande=MODE_ECHEANCE, contexte=contexte
+    )
+
+
+def retirer_par_anticipation(
+    db: Session,
+    courant: UtilisateurCourant,
+    compte_id: uuid.UUID,
+    *,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatDenouement:
+    """Retrait anticipé : capital + intérêts courus au prorata, diminués de la pénalité figée au
+    contrat. Le capital n'est jamais entamé. Refusé à partir de l'échéance."""
+    return _solder_depot_a_terme(
+        db, courant, compte_id, mode_demande=MODE_ANTICIPE, contexte=contexte
+    )
 
 
 def deposer(

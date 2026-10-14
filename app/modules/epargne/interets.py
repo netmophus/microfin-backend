@@ -179,6 +179,11 @@ def _produit_et_periode(
     produit = db.get(Product, produit_id)
     if produit is None:
         raise ProduitInconnuError("Ce produit d'épargne n'existe pas.")
+    if produit.type == "terme":
+        raise PeriodeIncompatibleError(
+            "Les intérêts d'un dépôt à terme ne se versent pas par période : ils sont payés à "
+            "son échéance, au dénouement."
+        )
     verifier_periode(produit.periodicite, periode, debut, fin)
     verifier_periode_close(produit.periodicite, debut, journee_de_reference(db))
     return produit

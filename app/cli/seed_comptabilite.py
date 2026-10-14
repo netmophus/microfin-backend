@@ -79,6 +79,17 @@ MODELES: tuple[ModeleEcriture, ...] = (
         "epargne.cloture", "Clôture d'épargne (restitution)", "CA",
         (("EPARGNE", "D"), ("CAISSE", "C")),
     ),
+    # Dépôt à terme : le solde (capital + intérêts) sort en espèces. Mêmes D/C qu'un retrait,
+    # étiquetés à part : un dénouement à l'échéance et un retrait anticipé (avec pénalité) ne se
+    # confondent ni avec un retrait courant ni entre eux dans le grand livre.
+    ModeleEcriture(
+        "epargne.denouement", "Dénouement d'un dépôt à terme (échéance)", "CA",
+        (("EPARGNE", "D"), ("CAISSE", "C")),
+    ),
+    ModeleEcriture(
+        "epargne.retrait_anticipe", "Retrait anticipé d'un dépôt à terme", "CA",
+        (("EPARGNE", "D"), ("CAISSE", "C")),
+    ),
     # Intérêts : la charge de l'IMF monte (D 603), la dette envers le membre monte (C 3111).
     # Journal des opérations diverses (pas de mouvement de caisse).
     ModeleEcriture(

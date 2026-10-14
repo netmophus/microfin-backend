@@ -411,3 +411,123 @@ def test_un_depot_a_terme_refuse_depot_et_retrait_ordinaires(
         )
         assert reponse.status_code == 422, route
         assert "dépôt à terme, bloqué jusqu'au" in reponse.json()["detail"]
+
+
+# --- Dénouement et retrait anticipé : routes et autorisation --------------------------------
+
+
+def _placer(client: TestClient, c: Cadre) -> str:
+    reponse = c.ouvrir(client)
+    assert reponse.status_code == 201, reponse.text
+    return str(reponse.json()["compte"]["id"])
+
+
+def test_le_caissier_ne_peut_pas_solder_avant_l_echeance_avec_penalite(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-R1")
+    compte_id = _placer(client, c)
+    caissier = _entete(db, c.agence, "CAISSIER")  # pas epargne.dat.retrait_anticipe
+
+    reponse = client.post(f"/epargne/comptes/{compte_id}/retrait-anticipe", headers=caissier)
+
+    assert reponse.status_code == 403
+    solde = db.execute(
+        text("SELECT balance FROM epargne.accounts WHERE id = :i"), {"i": compte_id}
+    ).scalar_one()
+    assert solde == MONTANT
+
+
+def test_le_responsable_solde_par_anticipation_et_le_message_dit_le_detail(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-R2")
+    compte_id = _placer(client, c)
+
+    apercu = client.get(f"/epargne/comptes/{compte_id}/denouement/apercu", headers=c.responsable)
+    assert apercu.status_code == 200, apercu.text
+    assert apercu.json()["mode"] == "anticipe"
+
+    reponse = client.post(f"/epargne/comptes/{compte_id}/retrait-anticipe", headers=c.responsable)
+
+    assert reponse.status_code == 200, reponse.text
+    corps = reponse.json()
+    assert corps["mode"] == "anticipe"
+    assert corps["total_paye"] == MONTANT  # le jour même : aucun intérêt couru
+    assert corps["message"] == apercu.json()["message"]
+    assert corps["message"].startswith("Retrait anticipé : capital 1 000 000 F")
+    statut = db.execute(
+        text("SELECT status, balance FROM epargne.accounts WHERE id = :i"), {"i": compte_id}
+    ).one()
+    assert tuple(statut) == ("cloture", 0)
+
+
+def test_le_denouement_avant_l_echeance_est_refuse_en_422(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-R3")
+    compte_id = _placer(client, c)
+
+    reponse = client.post(f"/epargne/comptes/{compte_id}/denouement", headers=c.responsable)
+
+    assert reponse.status_code == 422
+    assert "n'arrive à échéance que le" in reponse.json()["detail"]
+
+
+def test_un_compte_hors_perimetre_est_introuvable_pour_le_denouement(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-R4")
+    compte_id = _placer(client, c)
+    agence_autre = _agence(db, "DT-R4B")
+    autre = _entete(db, agence_autre, "RESPONSABLE_AGENCE")
+    _ouvrir_session_caisse(db, agence_autre, autre)  # la session précède le contrôle de périmètre
+
+    assert client.get(
+        f"/epargne/comptes/{compte_id}/denouement/apercu", headers=autre
+    ).status_code == 404
+    assert client.post(
+        f"/epargne/comptes/{compte_id}/retrait-anticipe", headers=autre
+    ).status_code == 404
+
+
+def test_la_fermeture_ordinaire_est_refusee_sur_un_depot_a_terme(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-R5")
+    compte_id = _placer(client, c)
+
+    reponse = client.post(f"/epargne/comptes/{compte_id}/fermeture", headers=c.responsable)
+
+    assert reponse.status_code == 422
+    assert "dénouement à l'échéance" in reponse.json()["detail"]
+
+
+def test_la_recherche_du_guichet_signale_l_echeance(client: TestClient, db: Session) -> None:
+    c = Cadre(db, "DT-R6")
+    compte_id = _placer(client, c)
+    numero = db.execute(
+        text("SELECT account_number FROM epargne.accounts WHERE id = :i"), {"i": compte_id}
+    ).scalar_one()
+
+    reponse = client.get(
+        "/epargne/recherche-comptes", params={"q": numero}, headers=c.responsable
+    )
+
+    assert reponse.status_code == 200
+    ligne = reponse.json()[0]
+    assert ligne["product_type"] == "terme"
+    assert ligne["maturity_date"] == ajouter_mois(c.journee, 12).isoformat()
+    assert ligne["principal"] == MONTANT
+
+
+def test_l_ecran_de_versement_des_interets_ne_propose_pas_les_produits_a_terme(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-R7")
+    direction = _entete(db, c.agence, "DIRECTION_GENERALE")
+
+    reponse = client.get("/epargne/interets/produits", headers=direction)
+
+    assert reponse.status_code == 200
+    assert str(c.produit.id) not in [p["id"] for p in reponse.json()]

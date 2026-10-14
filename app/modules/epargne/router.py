@@ -35,10 +35,13 @@ from app.modules.epargne.guichet import (
     OperationGeleeError,
     PremierDepotInsuffisantError,
     SoldeInsuffisantError,
+    apercu_denouement,
+    denouer_depot_a_terme,
     deposer,
     fermer_compte,
     ouvrir_depot_a_terme,
     retirer,
+    retirer_par_anticipation,
 )
 from app.modules.epargne.interets import (
     PeriodeIncompatibleError,
@@ -51,6 +54,7 @@ from app.modules.epargne.models import Product
 from app.modules.epargne.rapprochement import rapprocher_tout
 from app.modules.epargne.schemas import (
     ActivationProduit,
+    ApercuDenouement,
     ApercuInterets,
     ApercuLigneInterets,
     CompteEpargneDetail,
@@ -72,6 +76,7 @@ from app.modules.epargne.schemas import (
     ProduitInterets,
     RapportInterets,
     RattachementsProduit,
+    ResultatDenouement,
     ResultatOperation,
     ResultatOuvertureDepotATerme,
     SimulationDepotATerme,
@@ -80,6 +85,7 @@ from app.modules.epargne.schemas import (
 from app.modules.epargne.service import (
     CompteDebiteurError,
     CompteDejaClotureError,
+    DepotATermeBloqueError,
     DepotATermeRequisError,
     MembreNonActifError,
     ProduitIntrouvableError,
@@ -630,6 +636,67 @@ def deposer_endpoint(
     )
 
 
+@router.get("/epargne/comptes/{compte_id}/denouement/apercu", response_model=ApercuDenouement)
+def apercu_denouement_endpoint(
+    compte_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.operation.withdraw"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ApercuDenouement:
+    """Ce que recevrait le client en soldant son dépôt à terme à la journée comptable en cours :
+    à l'échéance, ou avec pénalité avant. Lecture seule ; à montrer avant toute confirmation."""
+    try:
+        d = apercu_denouement(db, courant, compte_id)
+    except CompteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        ) from None
+    except (OperationError, AucuneJourneeOuverteError) as erreur:
+        raise _422(erreur) from None
+    return ApercuDenouement(**vars(d))
+
+
+@router.post("/epargne/comptes/{compte_id}/denouement", response_model=ResultatDenouement)
+def denouer_endpoint(
+    compte_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.operation.withdraw"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatDenouement:
+    """Dénouement à l'échéance d'un dépôt à terme : capital + intérêts en espèces, compte clos.
+    Acte de caisse normal ; exige une session de caisse ouverte. Refusé avant l'échéance."""
+    try:
+        resultat = denouer_depot_a_terme(db, courant, compte_id, contexte=_contexte(request))
+    except CompteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        ) from None
+    except (OperationError, AucuneSessionOuverteError, AucuneJourneeOuverteError) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    return ResultatDenouement(**vars(resultat))
+
+
+@router.post("/epargne/comptes/{compte_id}/retrait-anticipe", response_model=ResultatDenouement)
+def retirer_par_anticipation_endpoint(
+    compte_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.dat.retrait_anticipe"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatDenouement:
+    """Retrait anticipé d'un dépôt à terme (responsable) : capital + intérêts courus moins la
+    pénalité du contrat. Refusé à partir de l'échéance (le dénouement est sans pénalité)."""
+    try:
+        resultat = retirer_par_anticipation(db, courant, compte_id, contexte=_contexte(request))
+    except CompteIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
+        ) from None
+    except (OperationError, AucuneSessionOuverteError, AucuneJourneeOuverteError) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    return ResultatDenouement(**vars(resultat))
+
+
 @router.post("/epargne/comptes/{compte_id}/fermeture", response_model=CompteEpargneResume)
 def fermer_compte_endpoint(
     compte_id: uuid.UUID,
@@ -644,7 +711,7 @@ def fermer_compte_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_COMPTE_INTROUVABLE
         ) from None
-    except (CompteDebiteurError, CompteDejaClotureError) as erreur:
+    except (CompteDebiteurError, CompteDejaClotureError, DepotATermeBloqueError) as erreur:
         raise _422(erreur) from None
     produit = next(
         p for p in consultation.lister_produits(db) if p.id == compte.product_id
@@ -666,6 +733,7 @@ def produits_interets_endpoint(
     return [
         ProduitInterets(id=p.id, code=p.code, name=p.name, periodicite=p.periodicite)
         for p in consultation.lister_produits(db)
+        if p.type != "terme"  # un dépôt à terme paie ses intérêts à l'échéance, pas par période
     ]
 
 

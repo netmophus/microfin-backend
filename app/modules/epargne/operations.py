@@ -40,6 +40,8 @@ TYPE_DEPOT = "epargne.depot"
 TYPE_RETRAIT = "epargne.retrait"
 TYPE_CLOTURE = "epargne.cloture"
 TYPE_INTERET = "epargne.interet"
+TYPE_DENOUEMENT = "epargne.denouement"
+TYPE_RETRAIT_ANTICIPE = "epargne.retrait_anticipe"
 
 
 class RattachementManquantError(Exception):
