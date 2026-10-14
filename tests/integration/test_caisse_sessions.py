@@ -755,8 +755,8 @@ def test_endpoint_session_courante_reflete_un_mouvement_en_direct(
 def test_la_session_expose_la_journee_comptable_ouverte(client: TestClient, db: Session) -> None:
     """Le caissier opère dans la JOURNÉE COMPTABLE, pas à l'heure de son poste : la réponse porte
     la date de la journée ouverte (champ dérivé, sans migration), à côté de `opened_at` qui reste
-    l'horodatage réel d'audit. Une session fermée n'a plus de journée : celle d'aujourd'hui n'est
-    plus la sienne."""
+    l'horodatage réel d'audit. Une session fermée garde la journée dans laquelle elle a opéré (celle
+    qui était ouverte à sa fermeture)."""
     agence = _agence(db, "CXB6")
     caissier_user = _utilisateur(db, agence, "25")
     entete = _entete(caissier_user, agence)
@@ -781,7 +781,51 @@ def test_la_session_expose_la_journee_comptable_ouverte(client: TestClient, db: 
         json={"montant_reel": 10_000},
         headers=entete,
     )
-    assert fermeture.json()["journee_comptable"] is None
+    # Fermée : c'est toujours la journée dans laquelle la session a opéré (ici encore ouverte).
+    assert fermeture.json()["journee_comptable"] == ouverte.isoformat()
+
+
+def test_la_journee_d_une_session_fermee_est_celle_ouverte_a_sa_fermeture(db: Session) -> None:
+    """Une session fermée la veille garde la journée dans laquelle elle a opéré, même quand une
+    autre journée est ouverte depuis : la lettre d'explication date le manquant de SA journée.
+    Horodatages posés à la main : dans une seule transaction de test, NOW() est identique."""
+    from datetime import UTC, date, datetime
+
+    from app.modules.caisse.router import _journee_de_la_session
+    from app.modules.comptabilite.models import JourneeComptable
+
+    agence = _agence(db, "CXB7")
+    caissier = _utilisateur(db, agence, "26")
+    poste_id = _poste_id_assigne(db, agence, caissier)
+    jeudi, vendredi = date(2024, 3, 7), date(2024, 3, 8)
+    db.add_all(
+        [
+            JourneeComptable(
+                date_comptable=jeudi, status="cloturee",
+                opened_at=datetime(2024, 3, 7, 7, 0, tzinfo=UTC),
+                closed_at=datetime(2024, 3, 7, 18, 0, tzinfo=UTC),
+            ),
+            JourneeComptable(
+                date_comptable=vendredi, status="cloturee",
+                opened_at=datetime(2024, 3, 8, 7, 0, tzinfo=UTC),
+                closed_at=datetime(2024, 3, 8, 18, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    session = CaisseSession(
+        agency_id=agence.id, caissier_id=caissier.id, poste_id=poste_id,
+        compte_caisse_id=_cid(db, "101111"), fonds_initial=0, status="fermee",
+        closed_at=datetime(2024, 3, 7, 16, 30, tzinfo=UTC), montant_reel_cloture=0,
+        solde_theorique_cloture=0, ecart=0,
+    )
+    db.add(session)
+    db.flush()
+
+    assert _journee_de_la_session(db, session) == jeudi  # pas vendredi, pas la journée du jour
+    session.closed_at = datetime(2024, 3, 8, 9, 0, tzinfo=UTC)
+    assert _journee_de_la_session(db, session) == vendredi
+    session.closed_at = datetime(2024, 3, 9, 9, 0, tzinfo=UTC)  # aucune journée ne la couvre
+    assert _journee_de_la_session(db, session) is None
 
 
 # --- Lecture élargie (lettre de demande d'explication) : la sienne toujours, une autre --------
