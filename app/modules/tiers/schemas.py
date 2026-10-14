@@ -17,6 +17,8 @@ from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
+from app.modules.documents.schemas import DocumentRef
+
 # Règle projet : un montant est un ENTIER de francs, jamais de décimales.
 MESSAGE_CAPITAL_ENTIER = "Le capital social s'exprime en francs entiers, sans décimales."
 MESSAGE_CAPITAL_NEGATIF = "Le capital social ne peut pas être négatif."
@@ -439,6 +441,8 @@ class ResultatParts(BaseModel):
     shares_non_liberees: int
     entry_number: str | None
     date_comptable: date  # journée comptable de la pièce (jamais l'horloge)
+    # Reçu archivé (opérations d'espèces) ; absent pour une souscription sans paiement.
+    document: DocumentRef | None = None
 
 
 class EvenementTimeline(BaseModel):

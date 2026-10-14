@@ -1,0 +1,38 @@
+{% extends "base.html.j2" %}
+{# Lettre de demande d'explication (manquant de caisse) : un seul exemplaire, remis au caissier.
+   Les montants et les noms viennent du contexte construit par lettres.py. #}
+{% block corps scoped %}
+<p><strong>{{ libelles.lettre_objet }}</strong></p>
+<table class="lignes">
+  <tr><td>{{ libelles.lettre_caissier }}</td><td class="valeur">{{ caissier }}</td></tr>
+  <tr><td>{{ libelles.lettre_agence }}</td><td class="valeur">{{ agence_session }}</td></tr>
+  <tr><td>{{ libelles.lettre_compte }}</td><td class="valeur"><span class="nombre">{{ compte_caisse }}</span></td></tr>
+</table>
+<p class="exemplaire-nom">{{ libelles.lettre_calcul }}</p>
+<table class="lignes">
+  <tr><td>{{ libelles.lettre_fonds_initial }}</td><td class="valeur"><span class="nombre">{{ fonds_initial_affiche }}</span></td></tr>
+  <tr><td>{{ libelles.lettre_solde_theorique }}</td><td class="valeur"><span class="nombre">{{ solde_theorique_affiche }}</span></td></tr>
+  <tr><td>{{ libelles.lettre_montant_compte }}</td><td class="valeur"><span class="nombre">{{ montant_compte_affiche }}</span></td></tr>
+  <tr class="total"><td>{{ libelles.lettre_ecart }}</td><td class="valeur"><span class="nombre">{{ manquant_affiche }}</span></td></tr>
+</table>
+<p>{{ texte_formel }}</p>
+<p class="exemplaire-nom">{{ libelles.lettre_reponse }}</p>
+<div class="cadre-reponse"></div>
+{% endblock %}
+{% block signatures scoped %}
+<table class="duo signatures">
+  <tr>
+    <td class="zone">
+      <p>{{ libelles.signature_caissier }}</p>
+      <div class="ligne"></div>
+      <p class="mention">{{ libelles.lettre_date_signature }}</p>
+    </td>
+    <td class="espace"></td>
+    <td class="zone">
+      <p>{{ libelles.lettre_signature_responsable }}</p>
+      <div class="ligne"></div>
+      <p class="mention">{{ libelles.lettre_date_signature }}</p>
+    </td>
+  </tr>
+</table>
+{% endblock %}

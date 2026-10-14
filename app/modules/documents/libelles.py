@@ -67,3 +67,45 @@ LIBELLES = {
 }
 
 EXEMPLAIRES = ("Exemplaire client", "Exemplaire souche")
+
+# --- Reçus de parts sociales (lot 3) -------------------------------------------------------------
+LIBELLES.update(
+    {
+        "titre_parts_souscription": "Reçu de souscription de parts sociales",
+        "titre_parts_liberation": "Reçu de libération de parts sociales",
+        "titre_parts_remboursement": "Reçu de remboursement de parts sociales",
+        "parts_nombre": "Nombre de parts",
+        "parts_valeur_unitaire": "Valeur d'une part",
+        "parts_liberees_apres": "Parts libérées après l'opération",
+        "parts_non_liberees_apres": "Parts souscrites non libérées après l'opération",
+        "montant_souscrit": "Montant encaissé",
+        "montant_libere": "Montant libéré",
+        "montant_rembourse": "Total remis au client",
+    }
+)
+
+# --- Lettre de demande d'explication d'un écart de caisse (lot 3) --------------------------------
+LIBELLES.update(
+    {
+        "titre_lettre": "Lettre de demande d'explication",
+        "numero_lettre": "Session {numero}",
+        "lettre_objet": "Objet : demande d'explication — écart de caisse",
+        "lettre_caissier": "Caissier concerné",
+        "lettre_agence": "Agence",
+        "lettre_compte": "Compte de caisse",
+        "lettre_calcul": "Calcul de l'écart",
+        "lettre_fonds_initial": "Fonds initial",
+        "lettre_solde_theorique": "Solde théorique de clôture",
+        "lettre_montant_compte": "Montant compté",
+        "lettre_ecart": "Écart (manquant)",
+        # Le délai (48 heures) est un PLACEHOLDER ajustable, pas une règle validée.
+        "lettre_texte_formel": (
+            "Un manquant de {montant} a été constaté à la fermeture de votre session de caisse "
+            "du {date}. Nous vous demandons de bien vouloir fournir une explication écrite dans "
+            "un délai de 48 heures à compter de la remise de la présente lettre."
+        ),
+        "lettre_reponse": "Réponse du caissier",
+        "lettre_signature_responsable": "Signature et cachet du responsable",
+        "lettre_date_signature": "Date",
+    }
+)

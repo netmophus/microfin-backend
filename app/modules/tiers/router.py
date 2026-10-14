@@ -27,6 +27,14 @@ from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account
+from app.modules.documents.models import Archive
+from app.modules.documents.recus import reference_de
+from app.modules.documents.recus_parts import (
+    LIBERATION,
+    REMBOURSEMENT,
+    SOUSCRIPTION_COMPTANT,
+    archiver_recu_parts,
+)
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 from app.modules.tiers.consultation import (
@@ -545,13 +553,14 @@ def lire_parts_endpoint(
     )
 
 
-def _resultat_parts(resultat: object) -> ResultatParts:
+def _resultat_parts(resultat: object, document: Archive | None = None) -> ResultatParts:
     return ResultatParts(
         is_member=resultat.is_member,
         shares_liberees=resultat.shares_liberees,
         shares_non_liberees=resultat.shares_non_liberees,
         entry_number=resultat.entry_number,
         date_comptable=resultat.date_comptable,
+        document=reference_de(document),
     )
 
 
@@ -607,7 +616,12 @@ def souscrire_comptant_endpoint(
         AucuneJourneeOuverteError,
     ) as erreur:
         raise _parts_erreur(erreur) from None
-    return _resultat_parts(resultat)
+    # APRÈS le commit : le reçu est généré et archivé, l'opération est déjà acquise.
+    recu = archiver_recu_parts(
+        db, courant, tier_id, resultat, operation=SOUSCRIPTION_COMPTANT,
+        contexte_requete=_contexte(request),
+    )
+    return _resultat_parts(resultat, recu)
 
 
 @router.post("/{tier_id}/parts/liberation", response_model=ResultatParts)
@@ -635,7 +649,11 @@ def liberer_parts_endpoint(
         AucuneJourneeOuverteError,
     ) as erreur:
         raise _parts_erreur(erreur) from None
-    return _resultat_parts(resultat)
+    # APRÈS le commit : le reçu est généré et archivé, l'opération est déjà acquise.
+    recu = archiver_recu_parts(
+        db, courant, tier_id, resultat, operation=LIBERATION, contexte_requete=_contexte(request)
+    )
+    return _resultat_parts(resultat, recu)
 
 
 @router.post("/{tier_id}/parts/remboursement", response_model=ResultatParts)
@@ -663,7 +681,11 @@ def rembourser_parts_endpoint(
         AucuneJourneeOuverteError,
     ) as erreur:
         raise _parts_erreur(erreur) from None
-    return _resultat_parts(resultat)
+    # APRÈS le commit : le reçu est généré et archivé, l'opération est déjà acquise.
+    recu = archiver_recu_parts(
+        db, courant, tier_id, resultat, operation=REMBOURSEMENT, contexte_requete=_contexte(request)
+    )
+    return _resultat_parts(resultat, recu)
 
 
 @router.post("/{tier_id}/parts/annulation", response_model=ResultatParts)

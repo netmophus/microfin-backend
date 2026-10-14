@@ -6,7 +6,9 @@
 <table class="lignes">
   <tr><td>{{ libelles.caissier }}</td><td class="valeur">{{ caissier }}</td></tr>
   <tr><td>{{ libelles.membre }}</td><td class="valeur">{{ membre }}</td></tr>
+  {% if compte %}
   <tr><td>{{ libelles.compte }}</td><td class="valeur">{{ compte }}</td></tr>
+  {% endif %}
   {% for ligne in lignes %}
   <tr><td>{{ ligne.libelle }}</td><td class="valeur">{{ ligne.valeur }}</td></tr>
   {% endfor %}

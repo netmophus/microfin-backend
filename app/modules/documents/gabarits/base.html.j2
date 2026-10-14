@@ -36,10 +36,11 @@
       <td class="droite reference">{{ reference }}</td>
     </tr>
   </table>
-  <p class="exemplaire-nom">{{ exemplaire }}{% if duplicata %} — {{ libelles.duplicata }}{% endif %}</p>
+  {% if exemplaire %}<p class="exemplaire-nom">{{ exemplaire }}{% if duplicata %} — {{ libelles.duplicata }}{% endif %}</p>{% endif %}
 
   {% block corps scoped %}{% endblock %}
 
+  {% block signatures scoped %}
   <table class="duo signatures">
     <tr>
       <td class="zone">
@@ -53,6 +54,7 @@
       </td>
     </tr>
   </table>
+  {% endblock %}
 </section>
 {% endfor %}
 </body>

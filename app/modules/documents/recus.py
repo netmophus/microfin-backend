@@ -61,7 +61,7 @@ def pourcentage(points_de_base: int) -> str:
     return f"{valeur}{ESPACE_INSECABLE}%"
 
 
-def _nom_acteur(db: Session, user_id: uuid.UUID) -> str:
+def nom_acteur(db: Session, user_id: uuid.UUID) -> str:
     """« Nom Prénom » (ordre unifié du produit), l'identifiant à défaut."""
     user = db.get(User, user_id)
     if user is None:
@@ -96,7 +96,7 @@ def _demande_recu(
         "titre": titre,
         "reference": LIBELLES["numero_recu"].format(numero=piece_affichee),
         "signature_client_requise": signature_requise,
-        "caissier": _nom_acteur(db, courant.user_id),
+        "caissier": nom_acteur(db, courant.user_id),
         "membre": consultation.nom_du_membre(db, compte.tier_id),
         "compte": compte.account_number,
         "lignes": lignes,
@@ -225,7 +225,7 @@ def _demande_bon(
         "titre": LIBELLES["titre_bon"],
         "reference": LIBELLES["numero_bon"].format(numero=compte.account_number),
         "signature_client_requise": True,
-        "caissier": _nom_acteur(db, courant.user_id),
+        "caissier": nom_acteur(db, courant.user_id),
         "membre": consultation.nom_du_membre(db, compte.tier_id),
         "compte": compte.account_number,
         "lignes": [

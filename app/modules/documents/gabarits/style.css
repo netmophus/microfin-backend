@@ -185,3 +185,10 @@ table.signatures td.zone p {
 table.signatures .ligne {
   border-top: 0.3mm solid #1a1d21;
 }
+
+/* Lettre d'explication : cadre laissé libre pour la réponse manuscrite du caissier. */
+.cadre-reponse {
+  height: 45mm;
+  border: 0.3mm solid #b8c0ca;
+  margin: 0 0 3mm 0;
+}

@@ -129,6 +129,9 @@ from app.modules.caisse.service import (
 from app.modules.comptabilite.comptes import CompteHorsCaisseError, CompteInvalideRattachementError
 from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account
+from app.modules.documents import lettres
+from app.modules.documents.schemas import DocumentRef
+from app.modules.documents.service import nom_de_fichier
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
 from app.modules.security.models import User
@@ -137,6 +140,9 @@ from app.modules.security.router import _contexte
 router = APIRouter(tags=["caisse"])
 
 MESSAGE_SESSION_INTROUVABLE = "Session de caisse introuvable."
+MESSAGE_SANS_MANQUANT = (
+    "Cette session n'a pas de manquant : aucune lettre de demande d'explication ne s'applique."
+)
 MESSAGE_MANQUANT_SEUL = "Seul manquant=true est pris en charge pour l'instant."
 MESSAGE_POSTE_INTROUVABLE = "Poste de caisse introuvable."
 MESSAGE_AGENCE_INTROUVABLE = "Agence introuvable."
@@ -341,6 +347,37 @@ def lire_session_endpoint(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_SESSION_INTROUVABLE
         ) from None
     return _vers_schema(db, session)
+
+
+@router.post("/caisse/sessions/{session_id}/lettre-explication", response_model=DocumentRef)
+def lettre_explication_endpoint(
+    session_id: uuid.UUID,
+    request: Request,
+    courant: Annotated[
+        UtilisateurCourant,
+        Depends(exige_une_de("caisse.session.read", "caisse.session.read.autres")),
+    ],
+    _lecture_documents: Annotated[UtilisateurCourant, Depends(exige("documents.read"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentRef:
+    """Lettre de demande d'explication (manquant) en PDF archivé : générée à la première demande,
+    puis RENDUE telle quelle aux suivantes. Même périmètre de lecture que la session (objet, pas
+    seulement la route) ; 422 pour une session sans manquant."""
+    try:
+        session = lire_session(db, courant, session_id)
+    except SessionIntrouvableError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_SESSION_INTROUVABLE
+        ) from None
+    try:
+        archive = lettres.archiver_lettre(
+            db, _vers_schema(db, session), contexte_requete=_contexte(request)
+        )
+    except lettres.SessionSansManquantError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=MESSAGE_SANS_MANQUANT
+        ) from None
+    return DocumentRef(id=archive.id, nom=nom_de_fichier(archive), statut=archive.statut)
 
 
 @router.post("/caisse/sessions/{session_id}/fermeture", response_model=SessionCaisse)
