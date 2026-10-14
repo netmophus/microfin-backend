@@ -36,7 +36,7 @@ sa responsabilité est de rôle (RESPONSABLE_AGENCE), pas nominative — voir
 `app/modules/caisse/transferts.py::_verifier_responsable_coffre`."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
@@ -178,6 +178,10 @@ class CaisseSession(Base):
     fonds_initial: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     opened_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     closed_at: Mapped[datetime | None] = mapped_column(TS)
+    # Journée comptable dans laquelle la session opère : fixée à l'OUVERTURE (la journée ouverte),
+    # IMMUABLE (trigger, migration 0066). Valeur autoritative : jamais reconstruite depuis des
+    # horodatages civils. `opened_at`/`closed_at` restent les heures réelles, pour l'audit.
+    journee_comptable: Mapped[date] = mapped_column(sa.Date, nullable=False)
     montant_reel_cloture: Mapped[int | None] = mapped_column(sa.BigInteger)
     solde_theorique_cloture: Mapped[int | None] = mapped_column(sa.BigInteger)
     ecart: Mapped[int | None] = mapped_column(sa.BigInteger)

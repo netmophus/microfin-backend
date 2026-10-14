@@ -438,9 +438,9 @@ def test_le_garde_fou_mord_meme_en_base_index_unique_partiel(db: Session) -> Non
         db.execute(
             text(
                 "INSERT INTO caisse.sessions (agency_id, caissier_id, poste_id, "
-                "compte_caisse_id, fonds_initial, status) "
+                "compte_caisse_id, fonds_initial, status, journee_comptable) "
                 "SELECT agency_id, caissier_id, poste_id, compte_caisse_id, fonds_initial, "
-                "status FROM caisse.sessions WHERE caissier_id = :c LIMIT 1"
+                "status, journee_comptable FROM caisse.sessions WHERE caissier_id = :c LIMIT 1"
             ),
             {"c": caissier_user.id},
         )
@@ -781,51 +781,96 @@ def test_la_session_expose_la_journee_comptable_ouverte(client: TestClient, db: 
         json={"montant_reel": 10_000},
         headers=entete,
     )
-    # Fermée : c'est toujours la journée dans laquelle la session a opéré (ici encore ouverte).
+    # Fermée : la journée STOCKÉE à l'ouverture reste celle de la session.
     assert fermeture.json()["journee_comptable"] == ouverte.isoformat()
 
 
-def test_la_journee_d_une_session_fermee_est_celle_ouverte_a_sa_fermeture(db: Session) -> None:
-    """Une session fermée la veille garde la journée dans laquelle elle a opéré, même quand une
-    autre journée est ouverte depuis : la lettre d'explication date le manquant de SA journée.
-    Horodatages posés à la main : dans une seule transaction de test, NOW() est identique."""
-    from datetime import UTC, date, datetime
-
-    from app.modules.caisse.router import _journee_de_la_session
-    from app.modules.comptabilite.models import JourneeComptable
-
+def test_la_journee_est_fixee_a_l_ouverture_de_la_session(db: Session) -> None:
+    """Valeur STOCKÉE, autoritative : la journée ouverte à l'instant de l'ouverture, lue en base,
+    pas reconstruite depuis des horodatages."""
     agence = _agence(db, "CXB7")
-    caissier = _utilisateur(db, agence, "26")
-    poste_id = _poste_id_assigne(db, agence, caissier)
-    jeudi, vendredi = date(2024, 3, 7), date(2024, 3, 8)
-    db.add_all(
-        [
-            JourneeComptable(
-                date_comptable=jeudi, status="cloturee",
-                opened_at=datetime(2024, 3, 7, 7, 0, tzinfo=UTC),
-                closed_at=datetime(2024, 3, 7, 18, 0, tzinfo=UTC),
-            ),
-            JourneeComptable(
-                date_comptable=vendredi, status="cloturee",
-                opened_at=datetime(2024, 3, 8, 7, 0, tzinfo=UTC),
-                closed_at=datetime(2024, 3, 8, 18, 0, tzinfo=UTC),
-            ),
-        ]
-    )
-    session = CaisseSession(
-        agency_id=agence.id, caissier_id=caissier.id, poste_id=poste_id,
-        compte_caisse_id=_cid(db, "101111"), fonds_initial=0, status="fermee",
-        closed_at=datetime(2024, 3, 7, 16, 30, tzinfo=UTC), montant_reel_cloture=0,
-        solde_theorique_cloture=0, ecart=0,
-    )
-    db.add(session)
+    caissier = _courant(_utilisateur(db, agence, "26"), agence)
+    ouverte = journee.date_comptable_courante(db)
+    assert ouverte is not None
+
+    session = _ouvrir(db, caissier, agence, fonds_initial=5_000)
     db.flush()
 
-    assert _journee_de_la_session(db, session) == jeudi  # pas vendredi, pas la journée du jour
-    session.closed_at = datetime(2024, 3, 8, 9, 0, tzinfo=UTC)
-    assert _journee_de_la_session(db, session) == vendredi
-    session.closed_at = datetime(2024, 3, 9, 9, 0, tzinfo=UTC)  # aucune journée ne la couvre
-    assert _journee_de_la_session(db, session) is None
+    stockee = db.execute(
+        text("SELECT journee_comptable FROM caisse.sessions WHERE id = :i"), {"i": session.id}
+    ).scalar_one()
+    assert stockee == ouverte
+    assert session.journee_comptable == ouverte
+
+
+def test_une_session_ouverte_en_j_garde_j_meme_fermee_apres_l_ouverture_de_j_plus_1(
+    client: TestClient, db: Session
+) -> None:
+    """La règle métier interdit de clôturer une journée avec une session ouverte ; ce test la
+    CONTOURNE à la main (SQL) pour prouver que la valeur est bien stockée : si elle était
+    dérivée de la journée courante ou d'intervalles d'horodatages, elle suivrait J+1."""
+    from datetime import UTC, date, datetime, timedelta
+
+    agence = _agence(db, "CXB8")
+    caissier_user = _utilisateur(db, agence, "27")
+    entete = _entete(caissier_user, agence)
+    poste_id = _poste_id_assigne(db, agence, caissier_user)
+    jour_j = journee.date_comptable_courante(db)
+    assert jour_j is not None
+    ouverture = client.post(
+        "/caisse/sessions",
+        json={"fonds_initial": 10_000, "poste_id": str(poste_id)},
+        headers=entete,
+    )
+    assert ouverture.status_code == 201
+    assert ouverture.json()["journee_comptable"] == jour_j.isoformat()
+
+    # J est clôturée de force, J+1 ouverte, la session de J restant ouverte.
+    db.execute(
+        text(
+            "UPDATE comptabilite.journees_comptables SET status = 'cloturee', closed_at = :f "
+            "WHERE date_comptable = :j"
+        ),
+        {"f": datetime.now(UTC), "j": jour_j},
+    )
+    jour_suivant: date = jour_j + timedelta(days=1)
+    db.execute(
+        text(
+            "INSERT INTO comptabilite.journees_comptables (date_comptable, status) "
+            "VALUES (:j, 'ouverte')"
+        ),
+        {"j": jour_suivant},
+    )
+    assert journee.date_comptable_courante(db) == jour_suivant
+
+    fermeture = client.post(
+        f"/caisse/sessions/{ouverture.json()['id']}/fermeture",
+        json={"montant_reel": 10_000},
+        headers=entete,
+    )
+
+    assert fermeture.status_code == 200, fermeture.text
+    assert fermeture.json()["journee_comptable"] == jour_j.isoformat()  # J, pas J+1
+    relue = client.get(f"/caisse/sessions/{ouverture.json()['id']}", headers=entete)
+    assert relue.json()["journee_comptable"] == jour_j.isoformat()
+
+
+def test_la_journee_d_une_session_ne_peut_plus_etre_modifiee(db: Session) -> None:
+    """Dernier rempart en base : la journée stockée est immuable (trigger, migration 0066)."""
+    from datetime import date
+
+    from sqlalchemy.exc import DBAPIError
+
+    agence = _agence(db, "CXB9")
+    caissier = _courant(_utilisateur(db, agence, "28"), agence)
+    session = _ouvrir(db, caissier, agence, fonds_initial=5_000)
+    db.flush()
+
+    with pytest.raises(DBAPIError, match="immuable"):
+        db.execute(
+            text("UPDATE caisse.sessions SET journee_comptable = :j WHERE id = :i"),
+            {"j": date(2020, 1, 1), "i": session.id},
+        )
 
 
 # --- Lecture élargie (lettre de demande d'explication) : la sienne toujours, une autre --------

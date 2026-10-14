@@ -50,10 +50,9 @@ class SessionCaisse(BaseModel):
     fonds_initial: int
     opened_at: datetime  # heure RÉELLE d'ouverture (audit), pas la date métier des opérations
     closed_at: datetime | None
-    # Journée comptable dans laquelle le caissier opère (session ouverte : la journée ouverte) ou
-    # a opéré (session fermée : la journée ouverte à l'instant de la fermeture). Dérivé, jamais
-    # stocké ; None seulement si aucune journée ne correspond.
-    journee_comptable: date | None
+    # Journée comptable de la session : STOCKÉE à l'ouverture (la journée ouverte), immuable. C'est
+    # elle, et non `opened_at` (heure réelle), qui date les opérations et la lettre d'explication.
+    journee_comptable: date
     solde_theorique_actuel: int | None
     montant_reel_cloture: int | None
     solde_theorique_cloture: int | None

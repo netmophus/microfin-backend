@@ -53,11 +53,10 @@ transferts.py). Hors périmètre -> 404 (IDOR), jamais 403. Désigner exige un u
 """
 
 import uuid
-from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from app.core.database import get_db
@@ -128,8 +127,8 @@ from app.modules.caisse.service import (
     valider_ecart,
 )
 from app.modules.comptabilite.comptes import CompteHorsCaisseError, CompteInvalideRattachementError
-from app.modules.comptabilite.journee import AucuneJourneeOuverteError, journee_ouverte
-from app.modules.comptabilite.models import Account, JourneeComptable
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError
+from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
 from app.modules.security.models import User
@@ -142,34 +141,6 @@ MESSAGE_MANQUANT_SEUL = "Seul manquant=true est pris en charge pour l'instant."
 MESSAGE_POSTE_INTROUVABLE = "Poste de caisse introuvable."
 MESSAGE_AGENCE_INTROUVABLE = "Agence introuvable."
 MESSAGE_TRANSFERT_INTROUVABLE = "Transfert introuvable."
-
-
-def _journee_de_la_session(db: Session, session: CaisseSession) -> date | None:
-    """La journée comptable dans laquelle la session opère / a opéré — dérivée, jamais stockée.
-
-    Session OUVERTE : la journée actuellement ouverte (la clôture de journée exige les sessions
-    fermées, donc une session ouverte vit forcément dans la journée ouverte). Session FERMÉE : la
-    journée qui était ouverte à l'instant de la fermeture, c'est-à-dire celle dont l'intervalle
-    [ouverture, clôture] contient `closed_at` (jamais deux journées ouvertes à la fois, et une
-    journée ne se clôture qu'une fois toutes les sessions fermées). `None` si aucune ne
-    correspond."""
-    if session.status == "ouverte":
-        ouverte = journee_ouverte(db)
-        return ouverte.date_comptable if ouverte is not None else None
-    if session.closed_at is None:
-        return None
-    return db.execute(
-        select(JourneeComptable.date_comptable)
-        .where(
-            JourneeComptable.opened_at <= session.closed_at,
-            or_(
-                JourneeComptable.closed_at.is_(None),
-                JourneeComptable.closed_at >= session.closed_at,
-            ),
-        )
-        .order_by(JourneeComptable.opened_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
 
 
 def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
@@ -192,7 +163,6 @@ def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
     # None une fois fermée — le chiffre figé est solde_theorique_cloture, pas la peine de le
     # répéter sous un second nom.
     actuel = calculer_solde_theorique(db, session) if session.status == "ouverte" else None
-    journee_session = _journee_de_la_session(db, session)
     seuil = seuil_tolerance(db)
     return SessionCaisse(
         id=session.id,
@@ -204,7 +174,7 @@ def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
         fonds_initial=session.fonds_initial,
         opened_at=session.opened_at,
         closed_at=session.closed_at,
-        journee_comptable=journee_session,
+        journee_comptable=session.journee_comptable,
         solde_theorique_actuel=actuel,
         montant_reel_cloture=session.montant_reel_cloture,
         solde_theorique_cloture=session.solde_theorique_cloture,

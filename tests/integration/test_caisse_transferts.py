@@ -215,6 +215,7 @@ def _session_ouverte(db: Session, poste: Poste, caissier: User) -> CaisseSession
         poste_id=poste.id,
         compte_caisse_id=poste.compte_caisse_id,
         fonds_initial=0,
+        journee_comptable=journee.date_comptable_courante(db),
     )
     db.add(session)
     db.flush()

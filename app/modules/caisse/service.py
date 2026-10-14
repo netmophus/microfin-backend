@@ -154,7 +154,8 @@ def ouvrir_session(
     journée comptable n'est ouverte (`JourneeFermeeError`) — une caisse ne s'ouvre jamais hors
     d'une journée. `fermer_session` n'a PAS cette précondition, volontairement : une caisse doit
     toujours pouvoir se fermer, journée ouverte ou non."""
-    if journee.journee_ouverte(db) is None:
+    journee_du_jour = journee.journee_ouverte(db)
+    if journee_du_jour is None:
         raise JourneeFermeeError(
             "Aucune journée comptable n'est ouverte. Demandez l'ouverture de la journée avant "
             "d'ouvrir une caisse."
@@ -194,6 +195,8 @@ def ouvrir_session(
         poste_id=poste.id,
         compte_caisse_id=poste.compte_caisse_id,
         fonds_initial=fonds_initial,
+        # FIGÉE ici, jamais recalculée : c'est la journée dans laquelle cette session opère.
+        journee_comptable=journee_du_jour.date_comptable,
         created_by=courant.user_id,
         updated_by=courant.user_id,
     )

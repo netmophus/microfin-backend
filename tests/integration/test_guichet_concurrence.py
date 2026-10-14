@@ -92,8 +92,8 @@ def donnees() -> Generator[dict[str, uuid.UUID], None, None]:
     session_caisse = s.execute(
         text(
             "INSERT INTO caisse.sessions "
-            "(agency_id, caissier_id, poste_id, compte_caisse_id, fonds_initial) "
-            "VALUES (:a, :u, :p, :c, 0) RETURNING id"
+            "(agency_id, caissier_id, poste_id, compte_caisse_id, fonds_initial, "
+            "journee_comptable) VALUES (:a, :u, :p, :c, 0, DATE '2024-01-02') RETURNING id"
         ),
         {"a": ag, "u": uid, "p": poste, "c": caisse},
     ).scalar_one()
