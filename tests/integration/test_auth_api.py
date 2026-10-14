@@ -421,50 +421,6 @@ def test_me_renvoie_l_identite_et_les_permissions(
     assert corps["must_change_password"] is False
 
 
-def test_me_expose_le_bloc_institution_vide_par_defaut(
-    client: TestClient, utilisateur: User, mot_de_passe: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Non configurée, l'institution est rendue en chaînes vides : le front affiche alors le
-    bandeau « provisoire » sur les documents, il n'invente jamais un nom. Hermétique : le .env
-    du poste peut très bien renseigner l'institution."""
-    from app.core.config import settings
-
-    for nom in ("IMF_NOM", "IMF_ADRESSE", "IMF_TELEPHONE", "IMF_NUMERO_AGREMENT"):
-        monkeypatch.setattr(settings, nom, "")
-    jetons = _login(client, utilisateur.username, mot_de_passe).json()
-
-    corps = client.get(
-        "/auth/me", headers={"Authorization": f"Bearer {jetons['access_token']}"}
-    ).json()
-
-    assert corps["institution"] == {
-        "nom": "", "adresse": "", "telephone": "", "numero_agrement": "",
-    }
-
-
-def test_me_expose_l_institution_configuree(
-    client: TestClient, utilisateur: User, mot_de_passe: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.core.config import settings
-
-    monkeypatch.setattr(settings, "IMF_NOM", "IMCEC Test")
-    monkeypatch.setattr(settings, "IMF_ADRESSE", "Rue de la Caisse, Niamey")
-    monkeypatch.setattr(settings, "IMF_TELEPHONE", "+227 20 00 00 00")
-    monkeypatch.setattr(settings, "IMF_NUMERO_AGREMENT", "AGR-001")
-    jetons = _login(client, utilisateur.username, mot_de_passe).json()
-
-    corps = client.get(
-        "/auth/me", headers={"Authorization": f"Bearer {jetons['access_token']}"}
-    ).json()
-
-    assert corps["institution"] == {
-        "nom": "IMCEC Test",
-        "adresse": "Rue de la Caisse, Niamey",
-        "telephone": "+227 20 00 00 00",
-        "numero_agrement": "AGR-001",
-    }
-
-
 def test_me_expose_les_permissions_resolues(
     client: TestClient, db: Session, mot_de_passe: str
 ) -> None:

@@ -1,12 +1,8 @@
-"""Montant en lettres (documents serveur) : MÊME table de cas que la version TypeScript.
-
-`src/lib/montantEnLettres.test.ts` (frontend) est la référence des cas ; cette table en est la
-copie, et `test_la_table_est_celle_du_frontend` les compare tant que le dépôt frontend est présent
-à côté — une divergence entre les deux implémentations ne passera donc pas inaperçue.
+"""Montant en lettres (documents serveur) : le serveur est la seule implémentation (le frontend ne
+fabrique plus de document). Table de cas de référence en français correct (traits d'union, « et »,
+pluriels de « vingt » et « cent »).
 """
 
-import re
-from pathlib import Path
 
 import pytest
 
@@ -62,13 +58,6 @@ CAS: list[tuple[int, str]] = [
     ),
 ]
 
-TEST_TYPESCRIPT = (
-    Path(__file__).resolve().parents[3]
-    / "microfinance-frontend"
-    / "src"
-    / "lib"
-    / "montantEnLettres.test.ts"
-)
 
 
 @pytest.mark.parametrize(("montant", "lettres"), CAS)
@@ -80,15 +69,3 @@ def test_montant_en_lettres(montant: int, lettres: str) -> None:
 def test_refuse_ce_qu_un_recu_ne_doit_jamais_approximer(invalide: object) -> None:
     with pytest.raises(ValueError):
         montant_en_lettres(invalide)  # type: ignore[arg-type]
-
-
-@pytest.mark.skipif(not TEST_TYPESCRIPT.is_file(), reason="dépôt frontend absent")
-def test_la_table_est_celle_du_frontend() -> None:
-    """Relit les cas du test TypeScript (`[montant, 'lettres'],`, chaînes parfois sur plusieurs
-    lignes) et exige qu'ils soient EXACTEMENT ceux de la table Python."""
-    source = TEST_TYPESCRIPT.read_text(encoding="utf-8")
-    cas_ts: dict[int, str] = {}
-    for brut, lettres in re.findall(r"\[\s*([\d_]+),\s*'([^']*)',?\s*\]", source):
-        cas_ts[int(brut.replace("_", ""))] = lettres
-    assert cas_ts, "aucun cas extrait du test TypeScript : le format a changé"
-    assert cas_ts == dict(CAS)

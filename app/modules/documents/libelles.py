@@ -1,6 +1,5 @@
 """Libellés français des documents générés par le serveur — SOURCE UNIQUE (le frontend n'en
-garde aucun pour ces documents). Mêmes mentions provisoires que les anciens documents navigateur :
-placeholders à valider avant déploiement."""
+garde aucun pour ces documents). Mentions provisoires : placeholders à valider avant déploiement."""
 
 LIBELLES = {
     "decouper_ici": "✂ découper ici",

@@ -1,8 +1,7 @@
 """Montant en francs CFA entiers écrit en toutes lettres, pour les pièces justificatives.
 
-Port FIDÈLE de `src/lib/montantEnLettres.ts` (frontend) : mêmes règles, mêmes cas — les tests des
-deux côtés partagent la même table, et un test d'équivalence relit la table TypeScript quand le
-dépôt frontend est présent. Fonction pure, sans dépendance.
+Seule implémentation du produit (le frontend ne fabrique plus de document) : fonction pure, sans
+dépendance. Les cas de référence sont dans `tests/unit/test_documents_montant_en_lettres.py`.
 """
 
 UNITES = (
