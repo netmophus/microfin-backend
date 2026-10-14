@@ -10,6 +10,9 @@ venv/
 .env.*
 !.env.example
 
+# Archive des documents générés en dev (pièces légales en production : jamais dans le dépôt)
+archives_documents/
+
 # Python
 __pycache__/
 *.pyc

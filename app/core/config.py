@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # app/core/config.py -> app/core -> app -> microfinance-backend/
@@ -77,6 +77,37 @@ class Settings(BaseSettings):
     IMF_ADRESSE: str = ""
     IMF_TELEPHONE: str = ""
     IMF_NUMERO_AGREMENT: str = ""
+
+    # ARCHIVE des documents générés par le serveur (reçus, bons, états : PDF/A, jamais supprimés).
+    # Chemin ABSOLU. Obligatoire hors dev : un dossier par défaut en production laisserait des
+    # pièces légales dans l'arbre de l'application, hors sauvegarde. En dev, repli sur un dossier
+    # ignoré par git (`archives_documents/`). Il doit être dans le périmètre des sauvegardes.
+    DOCUMENTS_REPERTOIRE: str | None = None
+
+    @field_validator("DOCUMENTS_REPERTOIRE", mode="before")
+    @classmethod
+    def _repertoire_vide_est_absent(cls, valeur: object) -> object:
+        # `.env.example` déclare la variable SANS valeur : une chaîne vide vaut « non renseigné ».
+        return valeur or None
+
+    @model_validator(mode="after")
+    def _repertoire_documents_valide(self) -> "Settings":
+        if self.DOCUMENTS_REPERTOIRE is None:
+            if self.ENV != "dev":
+                raise ValueError(
+                    "DOCUMENTS_REPERTOIRE est obligatoire hors dev : chemin absolu du dossier "
+                    "d'archivage des documents (voir docs/runbook-documents.md)."
+                )
+        elif not Path(self.DOCUMENTS_REPERTOIRE).is_absolute():
+            raise ValueError("DOCUMENTS_REPERTOIRE doit être un chemin absolu.")
+        return self
+
+    @property
+    def repertoire_documents(self) -> Path:
+        """Dossier de base de l'archive : la config, ou le dossier de dev ignoré par git."""
+        if self.DOCUMENTS_REPERTOIRE is not None:
+            return Path(self.DOCUMENTS_REPERTOIRE)
+        return BASE_DIR / "archives_documents"
 
 
 @lru_cache

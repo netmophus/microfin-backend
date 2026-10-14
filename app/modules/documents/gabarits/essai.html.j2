@@ -1,0 +1,14 @@
+{% extends "base.html.j2" %}
+{# Corps d'ESSAI du lot 1 : prouve le socle (rendu, PDF/A, archivage) avant que les vrais
+   documents ne soient câblés aux opérations (lot 2). #}
+{% block corps %}
+<table class="lignes">
+  <tr><th>{{ libelles.libelle }}</th><th class="valeur">{{ libelles.valeur }}</th></tr>
+  {% for ligne in lignes %}
+  <tr><td>{{ ligne.libelle }}</td><td class="valeur">{{ ligne.valeur }}</td></tr>
+  {% endfor %}
+  <tr class="total"><td>{{ libelle_montant }}</td><td class="valeur"><span class="nombre">{{ montant_affiche }}</span></td></tr>
+</table>
+<p>{{ libelles.arrete_a }} {{ montant | montant_en_lettres }}.</p>
+<p class="mention">{{ libelles.mention }}</p>
+{% endblock %}

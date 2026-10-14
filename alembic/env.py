@@ -18,6 +18,7 @@ from app.modules.caisse import models as caisse_models
 from app.modules.comptabilite import models as comptabilite_models
 from app.modules.conformite import models as conformite_models
 from app.modules.credit import models as credit_models
+from app.modules.documents import models as documents_models
 from app.modules.epargne import models as epargne_models
 from app.modules.parameters import models as parameters_models
 from app.modules.security import models as security_models

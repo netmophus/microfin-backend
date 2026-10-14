@@ -171,6 +171,8 @@ TABLES_ATTENDUES = frozenset(
         "epargne.numbering_sequences",
         # Épargne E5 — intérêts : calculs archivés (migration 0023).
         "epargne.interet_calculs",
+        # Documents — index immuable des documents archivés par le serveur (migration 0067).
+        "documents.archives",
         # Tiers PS1 — parts sociales : config, solde, registre append-only (migration 0026).
         "tiers.share_parameters",
         "tiers.member_shares",

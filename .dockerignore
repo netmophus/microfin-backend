@@ -1,0 +1,15 @@
+# Ne jamais embarquer dans l'image : secrets, environnement local, données et caches.
+.git
+.venv
+venv
+.env
+.env.*
+!.env.example
+archives_documents/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+uvicorn.out.log
+start-miznas.bat

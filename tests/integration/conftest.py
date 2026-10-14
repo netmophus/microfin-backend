@@ -43,6 +43,7 @@ from app.modules.comptabilite import models as comptabilite_models
 from app.modules.comptabilite.plan import importer
 from app.modules.conformite import models as conformite_models
 from app.modules.credit import models as credit_models
+from app.modules.documents import models as documents_models
 from app.modules.epargne import models as epargne_models
 from app.modules.parameters import models as parameters_models
 from app.modules.parameters.models import Agency
@@ -56,6 +57,7 @@ _MODELES = (
     comptabilite_models,
     conformite_models,
     credit_models,
+    documents_models,
     epargne_models,
     parameters_models,
     security_models,

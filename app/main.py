@@ -1,11 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, status
+from fastapi.responses import JSONResponse
 
+from app.core.config import settings
 from app.modules.audit.router import router as audit_router
 from app.modules.caisse.router import router as caisse_router
 from app.modules.comptabilite.router import router as comptabilite_router
 from app.modules.conformite.router import router as conformite_router
 from app.modules.credit.engagements import enregistrer as enregistrer_engagements_credit
 from app.modules.credit.router import router as credit_router
+from app.modules.documents.router import router as documents_router
+from app.modules.documents.stockage import verifier_repertoire_pret
 from app.modules.epargne.engagements import enregistrer as enregistrer_engagements_epargne
 from app.modules.epargne.router import router as epargne_router
 from app.modules.parameters.router import router as agences_router
@@ -48,8 +52,24 @@ app.include_router(comptabilite_router)
 app.include_router(credit_router)
 app.include_router(caisse_router)
 app.include_router(conformite_router)
+app.include_router(documents_router)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Vivant : le processus répond. N'implique pas qu'il soit PRÊT (voir /health/ready)."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready() -> JSONResponse:
+    """Prêt : l'application peut servir ses fonctions, dont l'archivage des documents (dossier
+    d'archive existant et inscriptible). 503 sinon, avec la raison — un orchestrateur ne doit pas
+    router de trafic vers une instance qui ne peut pas archiver une pièce légale."""
+    raison = verifier_repertoire_pret(settings.repertoire_documents)
+    if raison is not None:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "indisponible", "documents": raison},
+        )
+    return JSONResponse(content={"status": "ok", "documents": "ok"})

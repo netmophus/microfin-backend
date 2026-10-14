@@ -424,12 +424,21 @@ def test_sans_reseau_ni_agence_on_ne_voit_rien(
 # route est ouverte.
 #
 #   /health            : sonde d'infrastructure, aucune donnée métier.
+#   /health/ready      : sonde « prêt » ; ne dit que oui ou non et la nature du manque, JAMAIS
+#                        le chemin du serveur (journalisé côté serveur).
 #   /auth/login        : la porte d'entrée — exiger une permission pour se connecter
 #                        serait circulaire.
 #   /auth/refresh      : porte son autorisation en lui-même (le refresh token du cookie).
 #   /auth/logout(-all) : idem, et se déconnecter ne doit jamais être refusé.
 ROUTES_PUBLIQUES = frozenset(
-    {"/health", "/auth/login", "/auth/refresh", "/auth/logout", "/auth/logout-all"}
+    {
+        "/health",
+        "/health/ready",
+        "/auth/login",
+        "/auth/refresh",
+        "/auth/logout",
+        "/auth/logout-all",
+    }
 )
 
 

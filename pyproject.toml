@@ -38,7 +38,7 @@ warn_unreachable = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["dramatiq.*"]
+module = ["dramatiq.*", "weasyprint.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>{{ titre }} — {{ reference }}</title>
+{# Dates du document = JOURNÉE COMPTABLE : jamais l'horloge (le moteur y mettrait l'heure du poste). #}
+<meta name="dcterms.created" content="{{ journee_iso }}">
+<meta name="dcterms.modified" content="{{ journee_iso }}">
+<style>{{ css | safe }}</style>
+</head>
+<body>
+{% for exemplaire in exemplaires %}
+{% if not loop.first %}<div class="trait">{{ libelles.decouper_ici }}</div>{% endif %}
+<section class="exemplaire">
+  <div class="entete">
+    {% if institution.provisoire %}<p class="bandeau-provisoire">{{ libelles.bandeau_provisoire }}</p>{% endif %}
+    <div class="institution">
+      <h1>{{ institution.nom or libelles.institution_absente }}</h1>
+      {% if institution.adresse %}<p>{{ institution.adresse }}</p>{% endif %}
+      {% if institution.telephone %}<p>{{ libelles.telephone }} {{ institution.telephone }}</p>{% endif %}
+      {% if institution.numero_agrement %}<p>{{ libelles.agrement }} {{ institution.numero_agrement }}</p>{% endif %}
+    </div>
+    <div class="agence-date">
+      <p>{{ libelles.agence }} {{ agence.nom }} ({{ agence.code }})</p>
+      <p><strong>{{ libelles.journee_comptable }} {{ journee_affichee }}</strong></p>
+    </div>
+  </div>
+
+  <h2>{{ titre }}<span class="reference">{{ reference }}</span></h2>
+  <p class="exemplaire-nom">{{ exemplaire }}{% if duplicata %} — {{ libelles.duplicata }}{% endif %}</p>
+
+  {% block corps scoped %}{% endblock %}
+
+  <div class="signatures">
+    <div class="zone">
+      <p>{{ libelles.signature_client_obligatoire if signature_client_requise else libelles.signature_client_facultative }}</p>
+      <div class="ligne"></div>
+    </div>
+    <div class="zone">
+      <p>{{ libelles.signature_caissier }}</p>
+      <div class="ligne"></div>
+    </div>
+  </div>
+</section>
+{% endfor %}
+</body>
+</html>

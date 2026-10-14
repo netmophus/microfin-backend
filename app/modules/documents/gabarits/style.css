@@ -1,0 +1,181 @@
+/* Feuille de style des documents PDF (WeasyPrint). TOUT est explicite : aucune police générique,
+   aucune valeur laissée à la feuille de style par défaut du moteur (le spike a montré des
+   divergences entre moteurs sinon : polices à chasse fixe, alignement des <th>...). Les polices
+   sont des fichiers LIBRES embarqués dans le dépôt (DejaVu, voir polices/LICENSE-DejaVu.txt). */
+
+@font-face {
+  font-family: "DejaVuSans";
+  src: url("../polices/DejaVuSans.ttf");
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: "DejaVuSans";
+  src: url("../polices/DejaVuSans-Bold.ttf");
+  font-weight: 700;
+  font-style: normal;
+}
+@font-face {
+  font-family: "DejaVuMono";
+  src: url("../polices/DejaVuSansMono.ttf");
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: "DejaVuMono";
+  src: url("../polices/DejaVuSansMono-Bold.ttf");
+  font-weight: 700;
+  font-style: normal;
+}
+
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+html {
+  font-family: "DejaVuSans";
+  font-size: 9.5pt;
+  line-height: 1.3;
+  color: #1a1d21;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "DejaVuSans";
+  font-weight: 400;
+}
+
+/* Un exemplaire = un peu moins de la moitié de la hauteur imprimable : deux exemplaires et le
+   trait de découpe tiennent sur UNE A4, sans saut de page forcé. */
+.exemplaire {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  margin: 0;
+  padding: 0;
+}
+
+.trait {
+  border-top: 0.3mm dashed #1a1d21;
+  margin: 4mm 0;
+  padding: 1mm 0 0 0;
+  text-align: center;
+  font-family: "DejaVuSans";
+  font-size: 8.5pt;
+}
+
+.bandeau-provisoire {
+  border: 0.3mm dashed #1a1d21;
+  padding: 0.8mm 2mm;
+  margin: 0 0 1.5mm 0;
+  font-size: 8pt;
+  font-weight: 700;
+}
+
+.entete {
+  display: block;
+  overflow: hidden;
+  border-bottom: 0.3mm solid #b8c0ca;
+  padding-bottom: 1.5mm;
+  margin-bottom: 2mm;
+}
+.entete .institution {
+  float: left;
+  width: 60%;
+}
+.entete .agence-date {
+  float: right;
+  width: 38%;
+  text-align: right;
+}
+.entete h1 {
+  margin: 0;
+  font-size: 12.5pt;
+  font-weight: 700;
+}
+.entete p {
+  margin: 0;
+  font-size: 8.5pt;
+}
+
+h2 {
+  margin: 0 0 1mm 0;
+  font-size: 11pt;
+  font-weight: 700;
+  overflow: hidden;
+}
+h2 .reference {
+  float: right;
+  font-family: "DejaVuMono";
+  font-size: 9.5pt;
+  font-weight: 700;
+}
+
+.exemplaire-nom {
+  margin: 0 0 1.5mm 0;
+  font-size: 8.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.2mm;
+}
+
+table.lignes {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 1.5mm 0;
+}
+table.lignes th {
+  text-align: left;
+  font-weight: 700;
+  padding: 0.8mm 0;
+  border-bottom: 0.3mm solid #b8c0ca;
+}
+table.lignes td {
+  text-align: left;
+  padding: 0.8mm 0;
+  border-bottom: 0.2mm solid #dfe3e8;
+}
+table.lignes th.valeur,
+table.lignes td.valeur {
+  text-align: right;
+}
+table.lignes td.valeur {
+  font-weight: 700;
+}
+table.lignes tr.total td {
+  font-size: 10.5pt;
+  font-weight: 700;
+  border-top: 0.3mm solid #1a1d21;
+}
+.nombre {
+  font-family: "DejaVuMono";
+  font-weight: 400;
+}
+
+p {
+  margin: 0 0 1.5mm 0;
+}
+p.mention {
+  font-size: 8pt;
+}
+
+.signatures {
+  display: block;
+  overflow: hidden;
+  margin-top: 5mm;
+}
+.signatures .zone {
+  float: left;
+  width: 46%;
+  margin-right: 8%;
+}
+.signatures .zone:last-child {
+  margin-right: 0;
+}
+.signatures .zone p {
+  margin: 0 0 7mm 0;
+}
+.signatures .zone .ligne {
+  border-top: 0.3mm solid #1a1d21;
+}

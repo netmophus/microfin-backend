@@ -406,6 +406,7 @@ def test_me_renvoie_l_identite_et_les_permissions(
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
             "epargne.dat.open",  # ouverture d'un dépôt à terme AU GUICHET (pas account.open)
+            "documents.read",
             "tiers.read.basic",
             "tiers.shares.pay",
             "tiers.shares.read",
@@ -421,10 +422,15 @@ def test_me_renvoie_l_identite_et_les_permissions(
 
 
 def test_me_expose_le_bloc_institution_vide_par_defaut(
-    client: TestClient, utilisateur: User, mot_de_passe: str
+    client: TestClient, utilisateur: User, mot_de_passe: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Non configurée, l'institution est rendue en chaînes vides : le front affiche alors le
-    bandeau « provisoire » sur les documents, il n'invente jamais un nom."""
+    bandeau « provisoire » sur les documents, il n'invente jamais un nom. Hermétique : le .env
+    du poste peut très bien renseigner l'institution."""
+    from app.core.config import settings
+
+    for nom in ("IMF_NOM", "IMF_ADRESSE", "IMF_TELEPHONE", "IMF_NUMERO_AGREMENT"):
+        monkeypatch.setattr(settings, nom, "")
     jetons = _login(client, utilisateur.username, mot_de_passe).json()
 
     corps = client.get(

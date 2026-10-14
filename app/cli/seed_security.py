@@ -249,6 +249,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     Permission("epargne.account.open", "epargne", "Ouvrir un compte d'épargne (membre actif)"),
     Permission("epargne.account.close", "epargne", "Clôturer un compte d'épargne"),
     # Opérations de guichet (E3) : dépôt et retrait. Réservées au caissier (et au responsable).
+    # Documents archivés par le serveur (reçus, bons, états : PDF/A). Retrouver et télécharger un
+    # document est un acte de CONSULTATION d'une pièce légale : tracé (audit) et cloisonné à
+    # l'agence. Pas de permission d'écriture : les documents ne se créent que par les opérations
+    # qui les produisent, et ne se modifient ni ne se suppriment jamais.
+    Permission("documents.read", "documents", "Retrouver et télécharger les documents archivés"),
     Permission("epargne.operation.deposit", "epargne", "Enregistrer un dépôt au guichet"),
     Permission("epargne.operation.withdraw", "epargne", "Enregistrer un retrait au guichet"),
     # Dépôt à terme : le retrait ANTICIPÉ coûte de l'argent au client (pénalité sur les intérêts
@@ -446,6 +451,7 @@ MATRICE: dict[str, frozenset[str]] = {
     # Le caissier tient le guichet : dépôts et retraits (E3), et voit les comptes/produits.
     "CAISSIER": frozenset(
         {
+            "documents.read",
             "tiers.read.basic",
             "epargne.account.read",
             "epargne.product.read",
@@ -495,6 +501,7 @@ MATRICE: dict[str, frozenset[str]] = {
     # validation + contre-passation) et exercices. Les états/balance/clôture viendront plus tard.
     "COMPTABLE": frozenset(
         {
+            "documents.read",
             "compta.plan.read",
             "compta.plan.manage",
             "compta.ecriture.read",
@@ -524,6 +531,7 @@ MATRICE: dict[str, frozenset[str]] = {
     # validate (validation KYC de l'activation).
     "RESPONSABLE_AGENCE": frozenset(
         {
+            "documents.read",
             "users.read",
             "users.unlock",
             "sessions.read",
@@ -579,6 +587,7 @@ MATRICE: dict[str, frozenset[str]] = {
     # fiches tiers (contrôle sur tout le réseau).
     "AUDITEUR_INTERNE": frozenset(
         {
+            "documents.read",
             "users.read",
             "roles.read",
             "sessions.read",
@@ -612,6 +621,7 @@ MATRICE: dict[str, frozenset[str]] = {
     ),
     "DIRECTION_GENERALE": frozenset(
         {
+            "documents.read",
             "users.read",
             "roles.read",
             "sessions.read",

@@ -1,3 +1,10 @@
+# Dépendances figées. Ajouts du socle d'archivage des documents (CLAUDE §20, justification) :
+#   weasyprint  : rendu HTML/CSS -> PDF/A côté serveur, source unique des reçus et états archivés
+#                 (le navigateur ne fait plus qu'afficher/télécharger ce même fichier). Dépendances
+#                 transitives : pydyf, tinycss2, tinyhtml5, cssselect2, fonttools, brotli, zopfli,
+#                 pyphen, pillow, webencodings. Exige Pango (voir docs/runbook-documents.md).
+#   jinja2      : gabarits des documents (une mise en page, plusieurs types de documents).
+#   pypdf       : TESTS seulement — vérifier qu'un PDF est valide, PDF/A, extraire son texte.
 alembic==1.18.5
 annotated-doc==0.0.4
 annotated-types==0.7.0
@@ -5,13 +12,16 @@ anyio==4.14.2
 argon2-cffi==25.1.0
 argon2-cffi-bindings==25.1.0
 ast_serialize==0.6.0
+brotli==1.2.0
 certifi==2026.6.17
 cffi==2.1.0
 click==8.4.2
 colorama==0.4.6
 coverage==7.15.1
+cssselect2==0.10.1
 dramatiq==2.2.0
 fastapi==0.139.0
+fonttools==4.67.0
 greenlet==3.5.3
 h11==0.16.0
 httpcore==1.0.9
@@ -19,6 +29,7 @@ httptools==0.8.0
 httpx==0.28.1
 idna==3.18
 iniconfig==2.3.0
+Jinja2==3.1.6
 librt==0.13.0
 Mako==1.3.12
 markdown-it-py==4.2.0
@@ -29,6 +40,7 @@ mypy_extensions==1.1.0
 packaging==26.2
 pathspec==1.1.1
 phonenumbers==9.0.34
+pillow==12.3.0
 pluggy==1.6.0
 psycopg==3.3.4
 psycopg-binary==3.3.4
@@ -36,8 +48,11 @@ pycparser==3.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
+pydyf==0.13.0
 Pygments==2.20.0
 PyJWT==2.13.0
+pypdf==6.20.1
+pyphen==0.18.1
 pytest==9.1.1
 pytest-cov==7.1.0
 python-dotenv==1.2.2
@@ -49,10 +64,15 @@ ruff==0.15.21
 shellingham==1.5.4
 SQLAlchemy==2.0.51
 starlette==1.3.1
+tinycss2==1.5.1
+tinyhtml5==2.1.0
 typer==0.26.8
 typing-inspection==0.4.2
 typing_extensions==4.16.0
 tzdata==2026.3
 uvicorn==0.51.0
 watchfiles==1.2.0
+weasyprint==70.0
+webencodings==0.6.1
 websockets==16.1
+zopfli==0.4.3
