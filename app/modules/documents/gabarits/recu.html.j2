@@ -1,0 +1,20 @@
+{% extends "base.html.j2" %}
+{# Reçu de caisse : UN gabarit pour tous les reçus (versement, retrait, placement, dénouement,
+   retrait anticipé). Les lignes, le libellé du montant et la règle de signature viennent du
+   contexte construit par recus.py : aucune règle métier dans le gabarit. #}
+{% block corps %}
+<table class="lignes">
+  <tr><td>{{ libelles.caissier }}</td><td class="valeur">{{ caissier }}</td></tr>
+  <tr><td>{{ libelles.membre }}</td><td class="valeur">{{ membre }}</td></tr>
+  <tr><td>{{ libelles.compte }}</td><td class="valeur">{{ compte }}</td></tr>
+  {% for ligne in lignes %}
+  <tr><td>{{ ligne.libelle }}</td><td class="valeur">{{ ligne.valeur }}</td></tr>
+  {% endfor %}
+  <tr class="total"><td>{{ libelle_montant }}</td><td class="valeur"><span class="nombre">{{ montant_affiche }}</span></td></tr>
+  {% if solde_affiche %}
+  <tr><td>{{ libelles.solde_apres }}</td><td class="valeur"><span class="nombre">{{ solde_affiche }}</span></td></tr>
+  {% endif %}
+</table>
+<p>{{ libelles.arrete_a }} {{ montant | montant_en_lettres }}.</p>
+<p class="mention">{{ libelles.mention }}</p>
+{% endblock %}

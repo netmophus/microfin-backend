@@ -34,6 +34,19 @@ def _nom_membre() -> Any:
     )
 
 
+def nom_du_membre(db: Session, tier_id: uuid.UUID) -> str:
+    """Nom lisible d'un tiers (même règle que le guichet), pour les pièces justificatives."""
+    nom = db.execute(
+        select(_nom_membre())
+        .select_from(_T)
+        .outerjoin(_IND, _IND.c.tier_id == _T.c.id)
+        .outerjoin(_LE, _LE.c.tier_id == _T.c.id)
+        .outerjoin(_GP, _GP.c.tier_id == _T.c.id)
+        .where(_T.c.id == tier_id)
+    ).scalar_one_or_none()
+    return str(nom) if nom is not None else ""
+
+
 def lister_produits(db: Session) -> Sequence[Product]:
     """Les produits d'épargne actifs (pour le choix à l'ouverture)."""
     return db.execute(

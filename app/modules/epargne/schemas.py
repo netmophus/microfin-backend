@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.documents.schemas import DocumentRef
+
 
 class ProduitEpargne(BaseModel):
     id: uuid.UUID
@@ -111,6 +113,7 @@ class ResultatDenouement(BaseModel):
     entry_number: str | None
     message: str
     date_comptable: date  # journée comptable de la pièce de sortie de caisse
+    document: DocumentRef | None = None  # le reçu archivé (voir documents.recus)
 
 
 class ResultatOuvertureDepotATerme(BaseModel):
@@ -118,6 +121,8 @@ class ResultatOuvertureDepotATerme(BaseModel):
     entry_number: str | None  # pièce du versement du capital
     date_comptable: date  # journée comptable de cette pièce
     interets_a_l_echeance: int
+    document: DocumentRef | None = None  # le reçu du capital encaissé
+    bon: DocumentRef | None = None  # le bon (contrat) de dépôt à terme
 
 
 class CompteGuichet(BaseModel):
@@ -148,6 +153,7 @@ class ResultatOperation(BaseModel):
     nouveau_solde: int
     entry_number: str | None
     date_comptable: date  # journée comptable de la pièce (jamais l'horloge du poste)
+    document: DocumentRef | None = None  # le reçu archivé (voir documents.recus)
 
 
 # --- Intérêts (F4) : prévisualisation obligatoire, puis versement -------------------

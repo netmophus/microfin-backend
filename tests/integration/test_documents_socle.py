@@ -356,7 +356,7 @@ def test_un_echec_de_generation_ne_defait_pas_l_operation_et_la_regeneration_rat
     db: Session, client: TestClient, archive: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agence = _agence(db, "DOC11")
-    _, entete = _utilisateur(db, agence, "CAISSIER")
+    _, entete = _utilisateur(db, agence, "RESPONSABLE_AGENCE")
     # L'OPÉRATION MÉTIER (ici : un compte créé) est validée AVANT la génération.
     operation = _agence(db, "DOC11-OPERATION")
     db.commit()
@@ -385,7 +385,7 @@ def test_un_echec_de_generation_ne_defait_pas_l_operation_et_la_regeneration_rat
 
 def test_seul_un_document_en_echec_se_regenere(db: Session, client: TestClient) -> None:
     agence = _agence(db, "DOC12")
-    _, entete = _utilisateur(db, agence, "CAISSIER")
+    _, entete = _utilisateur(db, agence, "RESPONSABLE_AGENCE")
     document = service.archiver(db, _demande(agence))
     db.flush()
 
@@ -424,7 +424,7 @@ def test_le_telechargement_rend_le_fichier_archive_et_il_est_audite(
 ) -> None:
     agence = _agence(db, "DOC15")
     utilisateur, entete = _utilisateur(db, agence, "CAISSIER")
-    document = service.archiver(db, _demande(agence))
+    document = service.archiver(db, _demande(agence, acteur=utilisateur.id))
     db.flush()
 
     reponse = client.get(f"/documents/{document.id}/fichier", headers=entete)
@@ -447,8 +447,8 @@ def test_un_fichier_altere_est_detecte_et_refuse(
     db: Session, client: TestClient, archive: Path
 ) -> None:
     agence = _agence(db, "DOC16")
-    _, entete = _utilisateur(db, agence, "CAISSIER")
-    document = service.archiver(db, _demande(agence))
+    utilisateur, entete = _utilisateur(db, agence, "CAISSIER")
+    document = service.archiver(db, _demande(agence, acteur=utilisateur.id))
     db.flush()
     fichier = archive / document.chemin_relatif
     os.chmod(fichier, 0o666)
@@ -462,7 +462,7 @@ def test_un_fichier_altere_est_detecte_et_refuse(
 
 def test_la_liste_se_filtre_et_se_pagine_cote_serveur(db: Session, client: TestClient) -> None:
     agence = _agence(db, "DOC17")
-    _, entete = _utilisateur(db, agence, "CAISSIER")
+    _, entete = _utilisateur(db, agence, "RESPONSABLE_AGENCE")
     for rang in range(3):
         service.archiver(db, _demande(agence, cle=f"liste-{rang}"))
     service.archiver(db, _demande(agence, cle="autre-jour", journee=date(2024, 3, 6)))

@@ -35,8 +35,8 @@
 
 html {
   font-family: "DejaVuSans";
-  font-size: 9.5pt;
-  line-height: 1.3;
+  font-size: 9pt;
+  line-height: 1.22;
   color: #1a1d21;
 }
 
@@ -58,8 +58,8 @@ body {
 
 .trait {
   border-top: 0.3mm dashed #1a1d21;
-  margin: 4mm 0;
-  padding: 1mm 0 0 0;
+  margin: 3mm 0;
+  padding: 0.8mm 0 0 0;
   text-align: center;
   font-family: "DejaVuSans";
   font-size: 8.5pt;
@@ -73,40 +73,50 @@ body {
   font-weight: 700;
 }
 
-.entete {
-  display: block;
-  overflow: hidden;
-  border-bottom: 0.3mm solid #b8c0ca;
-  padding-bottom: 1.5mm;
-  margin-bottom: 2mm;
+/* Mises en page en deux colonnes : TABLEAUX, jamais de flottants (voir base.html.j2). */
+table.duo {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  margin: 0;
 }
-.entete .institution {
-  float: left;
-  width: 60%;
+table.duo td {
+  padding: 0;
+  vertical-align: top;
+  border: none;
 }
-.entete .agence-date {
-  float: right;
-  width: 38%;
+table.duo td.gauche {
+  text-align: left;
+}
+table.duo td.droite {
   text-align: right;
 }
-.entete h1 {
+table.entete {
+  border-bottom: 0.3mm solid #b8c0ca;
+  margin-bottom: 2mm;
+}
+table.entete td {
+  padding-bottom: 1.5mm;
+}
+table.entete h1 {
   margin: 0;
   font-size: 12.5pt;
   font-weight: 700;
 }
-.entete p {
+table.entete p {
   margin: 0;
   font-size: 8.5pt;
 }
 
-h2 {
+table.titre {
   margin: 0 0 1mm 0;
+}
+table.titre h2 {
+  margin: 0;
   font-size: 11pt;
   font-weight: 700;
-  overflow: hidden;
 }
-h2 .reference {
-  float: right;
+table.titre td.reference {
   font-family: "DejaVuMono";
   font-size: 9.5pt;
   font-weight: 700;
@@ -128,12 +138,12 @@ table.lignes {
 table.lignes th {
   text-align: left;
   font-weight: 700;
-  padding: 0.8mm 0;
+  padding: 0.4mm 0;
   border-bottom: 0.3mm solid #b8c0ca;
 }
 table.lignes td {
   text-align: left;
-  padding: 0.8mm 0;
+  padding: 0.5mm 0;
   border-bottom: 0.2mm solid #dfe3e8;
 }
 table.lignes th.valeur,
@@ -154,28 +164,24 @@ table.lignes tr.total td {
 }
 
 p {
-  margin: 0 0 1.5mm 0;
+  margin: 0 0 1.2mm 0;
 }
 p.mention {
-  font-size: 8pt;
+  font-size: 7.5pt;
 }
 
-.signatures {
-  display: block;
-  overflow: hidden;
-  margin-top: 5mm;
+table.signatures {
+  margin-top: 3mm;
 }
-.signatures .zone {
-  float: left;
+table.signatures td.zone {
   width: 46%;
-  margin-right: 8%;
 }
-.signatures .zone:last-child {
-  margin-right: 0;
+table.signatures td.espace {
+  width: 8%;
 }
-.signatures .zone p {
-  margin: 0 0 7mm 0;
+table.signatures td.zone p {
+  margin: 0 0 6mm 0;
 }
-.signatures .zone .ligne {
+table.signatures .ligne {
   border-top: 0.3mm solid #1a1d21;
 }

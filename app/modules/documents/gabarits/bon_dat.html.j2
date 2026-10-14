@@ -1,0 +1,18 @@
+{% extends "base.html.j2" %}
+{# Bon (certificat) de dépôt à terme : le CONTRAT remis au client. Toutes les valeurs sont celles
+   figées au contrat du compte (jamais celles, modifiables, du produit), calculées par recus.py. #}
+{% block corps %}
+<table class="lignes">
+  <tr><td>{{ libelles.caissier }}</td><td class="valeur">{{ caissier }}</td></tr>
+  <tr><td>{{ libelles.titulaire }}</td><td class="valeur">{{ membre }}</td></tr>
+  <tr><td>{{ libelles.compte }}</td><td class="valeur">{{ compte }}</td></tr>
+  {% for ligne in lignes %}
+  <tr><td>{{ ligne.libelle }}</td><td class="valeur">{{ ligne.valeur }}</td></tr>
+  {% endfor %}
+  <tr class="total"><td>{{ libelles.capital_place }}</td><td class="valeur"><span class="nombre">{{ montant_affiche }}</span></td></tr>
+</table>
+<p>{{ libelles.arrete_a }} {{ montant | montant_en_lettres }}.</p>
+<p class="mention">{{ clause_echeance }}</p>
+<p class="mention">{{ clause_retrait_anticipe }}</p>
+<p class="mention">{{ libelles.mention_bon }}</p>
+{% endblock %}

@@ -94,6 +94,31 @@ des polices du serveur.
 | Téléchargement en 409 « empreinte » | Fichier modifié sur le disque | Restaurer le fichier depuis la sauvegarde ; l'altération est auditée (`documents.archive.alteree`) |
 | Fichier présent sans ligne d'index | Arrêt entre l'écriture et l'indexation | Rien : la génération suivante **adopte** le fichier tel quel, sans l'écraser |
 
+## Accès
+
+- `documents.read` ouvre l'écran des documents. SEUL (le caissier), il restreint à **ses propres
+  documents** (`acteur_id`), dans son agence.
+- `documents.read.agence` (RESPONSABLE_AGENCE, COMPTABLE, DIRECTION_GENERALE, AUDITEUR_INTERNE) élargit
+  à tout le périmètre : l'agence, ou le réseau pour les rôles à portée réseau.
+- Hors périmètre : 404 (jamais 403). Chaque téléchargement est audité (`documents.telecharge`).
+- Régénérer le document d'un caissier ne lui en retire pas la propriété (l'`acteur_id` d'origine est
+  conservé ; le régénérateur figure dans l'audit).
+
+## Documents générés par les opérations (lot 2)
+
+Générés APRÈS le commit de l'opération, par les routes de guichet ; leur référence (`document`,
+`bon`) est jointe à la réponse, avec le statut `ok` ou `echec` (régénérable).
+
+| Opération | Document | Module | Nom |
+|---|---|---|---|
+| Dépôt | `recu_versement` | `caisse` | `recu_versement_<compte>_<piece>.pdf` |
+| Retrait | `recu_retrait` | `caisse` | `recu_retrait_<compte>_<piece>.pdf` |
+| Placement DAT | `recu_placement_dat` + `bon_dat` | `epargne` | `recu_placement_dat_<compte>_<piece>.pdf`, `bon_dat_<compte>.pdf` |
+| Dénouement DAT | `recu_denouement_dat` | `epargne` | `recu_denouement_dat_<compte>_<piece>.pdf` |
+| Retrait anticipé DAT | `recu_retrait_anticipe_dat` | `epargne` | `recu_retrait_anticipe_dat_<compte>_<piece>.pdf` |
+
+Les services d'épargne eux-mêmes ne génèrent rien : seuls les routeurs archivent.
+
 ## Limites connues
 
 - Le rendu n'est pas garanti identique octet pour octet d'une exécution à l'autre sur Linux

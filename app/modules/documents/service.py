@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,9 +39,18 @@ ACTION_CREE = "documents.archive.cree"
 ACTION_TELECHARGE = "documents.telecharge"
 TAILLE_PAGE_MAX = 100
 
-# Type de document -> gabarit Jinja. Le lot 1 ne connaît que le type d'ESSAI ; les vrais documents
-# (reçus, bons, états) s'y ajoutent aux lots suivants, sans toucher au socle.
-GABARIT_DU_TYPE: dict[str, str] = {"essai": "essai.html.j2"}
+# Type de document -> gabarit Jinja. Un seul gabarit de reçu sert tous les reçus (les lignes et
+# les règles de signature viennent du contexte, voir recus.py). Les types suivants (parts, lettre,
+# états) s'y ajoutent aux lots suivants, sans toucher au socle.
+GABARIT_DU_TYPE: dict[str, str] = {
+    "essai": "essai.html.j2",
+    "recu_versement": "recu.html.j2",
+    "recu_retrait": "recu.html.j2",
+    "recu_placement_dat": "recu.html.j2",
+    "recu_denouement_dat": "recu.html.j2",
+    "recu_retrait_anticipe_dat": "recu.html.j2",
+    "bon_dat": "bon_dat.html.j2",
+}
 
 
 class DocumentIntrouvableError(Exception):
@@ -228,11 +237,21 @@ def _tracer_echec(db: Session, demande: DemandeDocument, message: str) -> Archiv
     return ligne
 
 
+PERMISSION_AGENCE = "documents.read.agence"
+
+
 def _perimetre(courant: UtilisateurCourant) -> ColumnElement[bool]:
+    """Ce que l'acteur peut voir. `documents.read.agence` : tout le périmètre (agence, ou réseau
+    pour les rôles à portée réseau). `documents.read` SEUL (le caissier) : ses PROPRES documents
+    seulement (`acteur_id`), toujours dans son agence — un caissier ne voit jamais ceux d'un
+    collègue."""
     # `condition_perimetre` attend une colonne NULLABLE ; `agency_id` ne l'est pas (invariance de
     # ColumnElement) : le cast est sûr, la condition SQL produite est la même.
     colonne = cast("ColumnElement[uuid.UUID | None]", Archive.agency_id)
-    return courant.condition_perimetre(colonne)
+    dans_le_perimetre = courant.condition_perimetre(colonne)
+    if PERMISSION_AGENCE in courant.permissions:
+        return dans_le_perimetre
+    return and_(dans_le_perimetre, Archive.acteur_id == courant.user_id)
 
 
 def _charger(db: Session, courant: UtilisateurCourant, archive_id: uuid.UUID) -> Archive:
@@ -374,6 +393,7 @@ def regenerer(
         numero_piece=archive.numero_piece,
         objet_lie_type=archive.objet_lie_type,
         objet_lie_id=archive.objet_lie_id,
-        acteur_id=courant.user_id,
+        # Le PROPRIÉTAIRE d'origine : régénérer le document d'un caissier ne le lui retire pas.
+        acteur_id=archive.acteur_id,
     )
     return generer_apres_commit(db, demande, contexte_requete=contexte_requete)

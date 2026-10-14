@@ -24,6 +24,7 @@ from app.modules.caisse.service import AucuneSessionOuverteError
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
 from app.modules.comptabilite.journee import AucuneJourneeOuverteError, journee_de_reference
 from app.modules.comptabilite.models import Account
+from app.modules.documents import recus
 from app.modules.epargne import consultation, gestion_produits, rattachements
 from app.modules.epargne.gestion_produits import CodeDejaUtiliseError, ComptesNonRattachesError
 from app.modules.epargne.guichet import (
@@ -565,12 +566,19 @@ def ouvrir_depot_a_terme_endpoint(
     ) as erreur:
         db.rollback()
         raise _422(erreur) from None
+    # APRÈS le commit de l'opération : reçu du capital ET bon (le contrat). Un échec de génération
+    # ne remet rien en cause : la référence porte alors le statut « echec » (régénérable).
+    recu, bon = recus.archiver_placement(
+        db, courant, resultat, contexte_requete=_contexte(request)
+    )
     produit = next(p for p in consultation.lister_produits(db) if p.id == corps.product_id)
     return ResultatOuvertureDepotATerme(
         compte=_resume(resultat.compte, produit),
         entry_number=resultat.versement.entry_number,
         date_comptable=resultat.versement.date_comptable,
         interets_a_l_echeance=interets_du_contrat(resultat.conditions),
+        document=recus.reference_de(recu),
+        bon=recus.reference_de(bon),
     )
 
 
@@ -642,11 +650,17 @@ def deposer_endpoint(
         AucuneJourneeOuverteError,
     ) as erreur:
         raise _422(erreur) from None
+    # APRÈS le commit du dépôt : le reçu est généré et archivé, le dépôt est déjà acquis.
+    recu = recus.archiver_recu_operation(
+        db, courant, compte_id, resultat, versement=True, montant=corps.montant,
+        contexte_requete=_contexte(request),
+    )
     return ResultatOperation(
         account_number=resultat.account_number,
         nouveau_solde=resultat.nouveau_solde,
         entry_number=resultat.entry_number,
         date_comptable=resultat.date_comptable,
+        document=recus.reference_de(recu),
     )
 
 
@@ -687,7 +701,10 @@ def denouer_endpoint(
     except (OperationError, AucuneSessionOuverteError, AucuneJourneeOuverteError) as erreur:
         db.rollback()
         raise _422(erreur) from None
-    return ResultatDenouement(**vars(resultat))
+    recu = recus.archiver_solde_dat(
+        db, courant, compte_id, resultat, contexte_requete=_contexte(request)
+    )
+    return ResultatDenouement(**vars(resultat), document=recus.reference_de(recu))
 
 
 @router.post("/epargne/comptes/{compte_id}/retrait-anticipe", response_model=ResultatDenouement)
@@ -708,7 +725,10 @@ def retirer_par_anticipation_endpoint(
     except (OperationError, AucuneSessionOuverteError, AucuneJourneeOuverteError) as erreur:
         db.rollback()
         raise _422(erreur) from None
-    return ResultatDenouement(**vars(resultat))
+    recu = recus.archiver_solde_dat(
+        db, courant, compte_id, resultat, contexte_requete=_contexte(request)
+    )
+    return ResultatDenouement(**vars(resultat), document=recus.reference_de(recu))
 
 
 @router.post("/epargne/comptes/{compte_id}/fermeture", response_model=CompteEpargneResume)
@@ -907,9 +927,15 @@ def retirer_endpoint(
         AucuneJourneeOuverteError,
     ) as erreur:
         raise _422(erreur) from None
+    # APRÈS le commit du retrait : reçu (signature du client obligatoire) généré et archivé.
+    recu = recus.archiver_recu_operation(
+        db, courant, compte_id, resultat, versement=False, montant=corps.montant,
+        contexte_requete=_contexte(request),
+    )
     return ResultatOperation(
         account_number=resultat.account_number,
         nouveau_solde=resultat.nouveau_solde,
         entry_number=resultat.entry_number,
         date_comptable=resultat.date_comptable,
+        document=recus.reference_de(recu),
     )

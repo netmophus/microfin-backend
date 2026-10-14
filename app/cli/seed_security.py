@@ -254,6 +254,13 @@ PERMISSIONS: tuple[Permission, ...] = (
     # l'agence. Pas de permission d'écriture : les documents ne se créent que par les opérations
     # qui les produisent, et ne se modifient ni ne se suppriment jamais.
     Permission("documents.read", "documents", "Retrouver et télécharger les documents archivés"),
+    # Élargit documents.read : SANS elle (le caissier), on ne voit que SES propres documents ;
+    # AVEC elle, tout le périmètre (l'agence, ou le réseau pour les rôles à portée réseau).
+    Permission(
+        "documents.read.agence",
+        "documents",
+        "Retrouver les documents de toute son agence (ou du réseau), pas seulement les siens",
+    ),
     Permission("epargne.operation.deposit", "epargne", "Enregistrer un dépôt au guichet"),
     Permission("epargne.operation.withdraw", "epargne", "Enregistrer un retrait au guichet"),
     # Dépôt à terme : le retrait ANTICIPÉ coûte de l'argent au client (pénalité sur les intérêts
@@ -502,6 +509,7 @@ MATRICE: dict[str, frozenset[str]] = {
     "COMPTABLE": frozenset(
         {
             "documents.read",
+            "documents.read.agence",
             "compta.plan.read",
             "compta.plan.manage",
             "compta.ecriture.read",
@@ -532,6 +540,7 @@ MATRICE: dict[str, frozenset[str]] = {
     "RESPONSABLE_AGENCE": frozenset(
         {
             "documents.read",
+            "documents.read.agence",
             "users.read",
             "users.unlock",
             "sessions.read",
@@ -588,6 +597,7 @@ MATRICE: dict[str, frozenset[str]] = {
     "AUDITEUR_INTERNE": frozenset(
         {
             "documents.read",
+            "documents.read.agence",
             "users.read",
             "roles.read",
             "sessions.read",
@@ -622,6 +632,7 @@ MATRICE: dict[str, frozenset[str]] = {
     "DIRECTION_GENERALE": frozenset(
         {
             "documents.read",
+            "documents.read.agence",
             "users.read",
             "roles.read",
             "sessions.read",

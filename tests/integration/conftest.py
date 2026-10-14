@@ -82,6 +82,20 @@ def _executer_ddl_maintenance(instruction: str) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _archive_documents_jetable(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[None, None, None]:
+    """Les reçus générés par les opérations de la suite (API de guichet, etc.) vont dans une archive
+    JETABLE : jamais dans le dossier d'archive de dev, jamais laissés dans l'arbre du dépôt."""
+    ancien = settings.DOCUMENTS_REPERTOIRE
+    settings.DOCUMENTS_REPERTOIRE = str(tmp_path_factory.mktemp("archives_documents"))
+    try:
+        yield
+    finally:
+        settings.DOCUMENTS_REPERTOIRE = ancien
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _base_de_test_jetable() -> Generator[None, None, None]:
     """Provisionne une base PostgreSQL jetable pour toute la session de test, et la détruit à
     la fin — DROP puis CREATE (jamais de réutilisation d'un résidu d'un run précédent), migrée

@@ -7,6 +7,16 @@ from datetime import date, datetime
 from pydantic import BaseModel
 
 
+class DocumentRef(BaseModel):
+    """Référence d'un document, jointe au résultat d'une opération : de quoi le télécharger
+    (`GET /documents/{id}/fichier`) ou, en cas d'échec de génération, le régénérer
+    (`POST /documents/{id}/regenerer`). L'opération elle-même est déjà validée."""
+
+    id: uuid.UUID
+    nom: str
+    statut: str  # 'ok' | 'echec'
+
+
 class DocumentResume(BaseModel):
     id: uuid.UUID
     type: str
