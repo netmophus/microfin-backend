@@ -1,7 +1,7 @@
 """Schémas Pydantic — validation d'entrée par liste blanche (aucun champ non déclaré)."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
@@ -48,8 +48,13 @@ class SessionCaisse(BaseModel):
     caissier_nom: str
     compte_caisse_number: str
     fonds_initial: int
-    opened_at: datetime
+    opened_at: datetime  # heure RÉELLE d'ouverture (audit), pas la date métier des opérations
     closed_at: datetime | None
+    # Journée comptable dans laquelle le caissier opère : la journée actuellement ouverte, tant
+    # que la session est OUVERTE (la clôture de journée exige les sessions fermées, donc une
+    # session ouverte vit forcément dans la journée ouverte). Dérivé, jamais stocké. None pour
+    # une session fermée : la journée ouverte d'aujourd'hui n'est plus la sienne.
+    journee_comptable: date | None
     solde_theorique_actuel: int | None
     montant_reel_cloture: int | None
     solde_theorique_cloture: int | None

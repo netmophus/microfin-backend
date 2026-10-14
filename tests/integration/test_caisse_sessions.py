@@ -752,6 +752,38 @@ def test_endpoint_session_courante_reflete_un_mouvement_en_direct(
     assert fermeture.json()["solde_theorique_cloture"] == 15_000
 
 
+def test_la_session_expose_la_journee_comptable_ouverte(client: TestClient, db: Session) -> None:
+    """Le caissier opère dans la JOURNÉE COMPTABLE, pas à l'heure de son poste : la réponse porte
+    la date de la journée ouverte (champ dérivé, sans migration), à côté de `opened_at` qui reste
+    l'horodatage réel d'audit. Une session fermée n'a plus de journée : celle d'aujourd'hui n'est
+    plus la sienne."""
+    agence = _agence(db, "CXB6")
+    caissier_user = _utilisateur(db, agence, "25")
+    entete = _entete(caissier_user, agence)
+    poste_id = _poste_id_assigne(db, agence, caissier_user)
+    ouverte = journee.date_comptable_courante(db)
+    assert ouverte is not None
+
+    ouverture = client.post(
+        "/caisse/sessions",
+        json={"fonds_initial": 10_000, "poste_id": str(poste_id)},
+        headers=entete,
+    )
+
+    assert ouverture.status_code == 201
+    assert ouverture.json()["journee_comptable"] == ouverte.isoformat()
+    assert ouverture.json()["opened_at"]  # l'heure réelle reste exposée, distincte
+    courante = client.get("/caisse/sessions/courante", headers=entete)
+    assert courante.json()["journee_comptable"] == ouverte.isoformat()
+
+    fermeture = client.post(
+        f"/caisse/sessions/{ouverture.json()['id']}/fermeture",
+        json={"montant_reel": 10_000},
+        headers=entete,
+    )
+    assert fermeture.json()["journee_comptable"] is None
+
+
 # --- Lecture élargie (lettre de demande d'explication) : la sienne toujours, une autre --------
 # SEULEMENT avec caisse.session.read.autres ET dans le périmètre --------------------------------
 

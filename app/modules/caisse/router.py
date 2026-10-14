@@ -127,7 +127,7 @@ from app.modules.caisse.service import (
     valider_ecart,
 )
 from app.modules.comptabilite.comptes import CompteHorsCaisseError, CompteInvalideRattachementError
-from app.modules.comptabilite.journee import AucuneJourneeOuverteError
+from app.modules.comptabilite.journee import AucuneJourneeOuverteError, journee_ouverte
 from app.modules.comptabilite.models import Account
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant, exige, exige_une_de
@@ -163,6 +163,7 @@ def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
     # None une fois fermée — le chiffre figé est solde_theorique_cloture, pas la peine de le
     # répéter sous un second nom.
     actuel = calculer_solde_theorique(db, session) if session.status == "ouverte" else None
+    journee = journee_ouverte(db) if session.status == "ouverte" else None
     seuil = seuil_tolerance(db)
     return SessionCaisse(
         id=session.id,
@@ -174,6 +175,7 @@ def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
         fonds_initial=session.fonds_initial,
         opened_at=session.opened_at,
         closed_at=session.closed_at,
+        journee_comptable=journee.date_comptable if journee is not None else None,
         solde_theorique_actuel=actuel,
         montant_reel_cloture=session.montant_reel_cloture,
         solde_theorique_cloture=session.solde_theorique_cloture,
