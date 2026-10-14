@@ -171,7 +171,13 @@ def lister_produits_endpoint(
     """Les produits d'épargne actifs (pour le choix à l'ouverture)."""
     return [
         ProduitEpargne(
-            id=p.id, code=p.code, name=p.name, type=p.type, is_provisional=p.is_provisional
+            id=p.id,
+            code=p.code,
+            name=p.name,
+            type=p.type,
+            is_provisional=p.is_provisional,
+            duree_min_mois=p.duree_min_mois,
+            duree_max_mois=p.duree_max_mois,
         )
         for p in consultation.lister_produits(db)
     ]

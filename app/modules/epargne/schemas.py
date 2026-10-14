@@ -19,6 +19,9 @@ class ProduitEpargne(BaseModel):
     name: str
     type: str
     is_provisional: bool
+    # Dépôt à terme : bornes de la durée proposée à l'ouverture (NULL hors terme / non paramétré).
+    duree_min_mois: int | None = None
+    duree_max_mois: int | None = None
 
 
 class CompteEpargneResume(BaseModel):

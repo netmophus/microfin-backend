@@ -531,3 +531,15 @@ def test_l_ecran_de_versement_des_interets_ne_propose_pas_les_produits_a_terme(
 
     assert reponse.status_code == 200
     assert str(c.produit.id) not in [p["id"] for p in reponse.json()]
+
+
+def test_la_liste_des_produits_donne_les_bornes_de_duree_du_terme(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-L1")
+
+    reponse = client.get("/epargne/produits", headers=c.responsable)
+
+    assert reponse.status_code == 200
+    ligne = next(p for p in reponse.json() if p["id"] == str(c.produit.id))
+    assert (ligne["duree_min_mois"], ligne["duree_max_mois"]) == (3, 24)
