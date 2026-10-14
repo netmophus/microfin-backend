@@ -438,6 +438,7 @@ class ResultatParts(BaseModel):
     shares_liberees: int
     shares_non_liberees: int
     entry_number: str | None
+    date_comptable: date  # journée comptable de la pièce (jamais l'horloge)
 
 
 class EvenementTimeline(BaseModel):

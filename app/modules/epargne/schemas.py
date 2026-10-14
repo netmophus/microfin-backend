@@ -38,6 +38,10 @@ class CompteEpargneResume(BaseModel):
     term_months: int | None = None
     maturity_date: date | None = None
     principal: int | None = None
+    # Conditions figées au contrat (bon / certificat de dépôt à terme), toujours None hors terme.
+    term_start_date: date | None = None
+    taux_bp_contrat: int | None = None
+    penalite_bp_contrat: int | None = None
 
 
 class MouvementResume(BaseModel):
@@ -106,11 +110,13 @@ class ResultatDenouement(BaseModel):
     total_paye: int
     entry_number: str | None
     message: str
+    date_comptable: date  # journée comptable de la pièce de sortie de caisse
 
 
 class ResultatOuvertureDepotATerme(BaseModel):
     compte: CompteEpargneResume
     entry_number: str | None  # pièce du versement du capital
+    date_comptable: date  # journée comptable de cette pièce
     interets_a_l_echeance: int
 
 
@@ -141,6 +147,7 @@ class ResultatOperation(BaseModel):
     account_number: str
     nouveau_solde: int
     entry_number: str | None
+    date_comptable: date  # journée comptable de la pièce (jamais l'horloge du poste)
 
 
 # --- Intérêts (F4) : prévisualisation obligatoire, puis versement -------------------

@@ -54,6 +54,7 @@ from app.modules.security.mots_de_passe import (
 from app.modules.security.schemas import (
     AgenceBreve,
     ChangePasswordRequest,
+    InstitutionProfil,
     LoginRequest,
     MonProfilResponse,
     RoleBref,
@@ -345,5 +346,11 @@ def mon_profil(
         roles=roles,
         permissions=sorted(courant.permissions),
         agence_courante=agence,
+        institution=InstitutionProfil(
+            nom=settings.IMF_NOM,
+            adresse=settings.IMF_ADRESSE,
+            telephone=settings.IMF_TELEPHONE,
+            numero_agrement=settings.IMF_NUMERO_AGREMENT,
+        ),
         must_change_password=user.must_change_password,
     )

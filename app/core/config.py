@@ -68,6 +68,16 @@ class Settings(BaseSettings):
     # (T4) ne voit jamais que deux fiches sont la même personne. Défaut "NE" pour le dev.
     PAYS_PAR_DEFAUT: str = "NE"
 
+    # IDENTITÉ de l'institution, imprimée en en-tête des pièces justificatives remises au client
+    # (reçus, bon de dépôt à terme). Une institution = un déploiement = un .env. Vides par défaut :
+    # tant que le NOM est vide, l'écran affiche un bandeau « provisoire — à valider » sur chaque
+    # document (jamais un nom inventé). DÉPLOIEMENT (checklist) : à renseigner avant la mise en
+    # production, l'adresse et le numéro d'agrément comme le nom.
+    IMF_NOM: str = ""
+    IMF_ADRESSE: str = ""
+    IMF_TELEPHONE: str = ""
+    IMF_NUMERO_AGREMENT: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

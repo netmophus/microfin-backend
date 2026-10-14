@@ -230,6 +230,11 @@ def test_depot_puis_retrait(client: TestClient, db: Session) -> None:
         f"/epargne/comptes/{compte.id}/retrait", json={"montant": 3000}, headers=entete
     )
     assert retrait.json()["nouveau_solde"] == 7000
+    # Pièce justificative : la date du reçu est celle de la JOURNÉE COMPTABLE, jamais l'horloge.
+    journee_ouverte = journee.date_comptable_courante(db)
+    assert journee_ouverte is not None
+    assert depot.json()["date_comptable"] == journee_ouverte.isoformat()
+    assert retrait.json()["date_comptable"] == journee_ouverte.isoformat()
 
 
 def test_retrait_solde_insuffisant_422_avec_disponible(client: TestClient, db: Session) -> None:

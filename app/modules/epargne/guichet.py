@@ -131,6 +131,7 @@ class ResultatOperation:
     account_number: str
     nouveau_solde: int
     entry_number: str | None
+    date_comptable: date  # entry_date de la pièce : la journée comptable, jamais l'horloge
 
 
 def _charger_compte_verrou(
@@ -310,7 +311,9 @@ def _operer_sans_commit(
             "piece": piece.entry_number,
         },
     )
-    return ResultatOperation(compte.account_number, nouveau_solde, piece.entry_number)
+    return ResultatOperation(
+        compte.account_number, nouveau_solde, piece.entry_number, piece.entry_date
+    )
 
 
 def _operer(
@@ -407,6 +410,7 @@ class ResultatDenouement:
     total_paye: int
     entry_number: str | None
     message: str
+    date_comptable: date  # entry_date de la pièce de SORTIE de caisse
 
 
 def _decomposer(compte: SavingsAccount, journee: date) -> DecompositionDenouement:
@@ -575,6 +579,7 @@ def _solder_depot_a_terme(
         total_paye=d.total_paye,
         entry_number=piece.entry_number,
         message=d.message,
+        date_comptable=piece.entry_date,
     )
 
 

@@ -63,6 +63,17 @@ class TokenResponse(BaseModel):
 # sur la vigilance de l'appelant : elle repose sur le fait que le champ n'existe pas ici.
 
 
+class InstitutionProfil(BaseModel):
+    """Identité de l'institution (config du déploiement), pour l'en-tête des documents imprimés.
+    Chaînes vides tant qu'elle n'est pas configurée : le front affiche alors un bandeau
+    provisoire. Rien de secret : c'est ce qu'on imprime sur un reçu."""
+
+    nom: str
+    adresse: str
+    telephone: str
+    numero_agrement: str
+
+
 class AgenceBreve(BaseModel):
     """Agence réduite à ce qu'un écran d'annuaire affiche."""
 
@@ -250,5 +261,6 @@ class MonProfilResponse(BaseModel):
     permissions: list[str]
     # Agence COURANTE de la session (C6), None si l'utilisateur n'est rattaché à aucune.
     agence_courante: AgenceBreve | None
+    institution: InstitutionProfil
     # Utile au front pour rediriger vers l'écran de renouvellement dès le chargement.
     must_change_password: bool

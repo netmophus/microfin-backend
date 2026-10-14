@@ -551,6 +551,7 @@ def _resultat_parts(resultat: object) -> ResultatParts:
         shares_liberees=resultat.shares_liberees,
         shares_non_liberees=resultat.shares_non_liberees,
         entry_number=resultat.entry_number,
+        date_comptable=resultat.date_comptable,
     )
 
 

@@ -160,6 +160,9 @@ def _resume(compte: object, produit: object) -> CompteEpargneResume:
         term_months=compte.term_months,
         maturity_date=compte.maturity_date,
         principal=compte.principal,
+        term_start_date=compte.term_start_date,
+        taux_bp_contrat=compte.taux_bp_contrat,
+        penalite_bp_contrat=compte.penalite_bp_contrat,
     )
 
 
@@ -566,6 +569,7 @@ def ouvrir_depot_a_terme_endpoint(
     return ResultatOuvertureDepotATerme(
         compte=_resume(resultat.compte, produit),
         entry_number=resultat.versement.entry_number,
+        date_comptable=resultat.versement.date_comptable,
         interets_a_l_echeance=interets_du_contrat(resultat.conditions),
     )
 
@@ -642,6 +646,7 @@ def deposer_endpoint(
         account_number=resultat.account_number,
         nouveau_solde=resultat.nouveau_solde,
         entry_number=resultat.entry_number,
+        date_comptable=resultat.date_comptable,
     )
 
 
@@ -906,4 +911,5 @@ def retirer_endpoint(
         account_number=resultat.account_number,
         nouveau_solde=resultat.nouveau_solde,
         entry_number=resultat.entry_number,
+        date_comptable=resultat.date_comptable,
     )

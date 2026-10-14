@@ -154,6 +154,8 @@ def test_comptant_par_caissier_rend_membre(client: TestClient, db: Session) -> N
     assert reponse.status_code == 200
     assert reponse.json()["is_member"] is True
     assert reponse.json()["shares_liberees"] == 10
+    # Pièce justificative : date de la journée comptable de la pièce, jamais l'horloge.
+    assert reponse.json()["date_comptable"] == journee.date_comptable_courante(db).isoformat()
 
 
 def test_souscription_engagement_par_charge(client: TestClient, db: Session) -> None:

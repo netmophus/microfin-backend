@@ -200,6 +200,11 @@ def test_l_ouverture_place_le_capital_et_derive_l_echeance_de_la_journee(
     attendu = interets_du_terme(MONTANT, TAUX_BP, jours, 365, "plus_proche")
     assert corps["interets_a_l_echeance"] == attendu > 0
     assert corps["entry_number"] is not None
+    assert corps["date_comptable"] == c.journee.isoformat()  # date de la pièce, pas l'horloge
+    # Conditions figées exposées pour le bon (certificat) de dépôt à terme.
+    assert corps["compte"]["term_start_date"] == c.journee.isoformat()
+    assert corps["compte"]["taux_bp_contrat"] == TAUX_BP
+    assert corps["compte"]["penalite_bp_contrat"] == PENALITE_BP
 
     compte = db.get(SavingsAccount, uuid.UUID(corps["compte"]["id"]))
     assert compte is not None
@@ -523,6 +528,7 @@ def test_le_responsable_solde_par_anticipation_et_le_message_dit_le_detail(
     assert corps["mode"] == "anticipe"
     assert corps["total_paye"] == MONTANT  # le jour même : aucun intérêt couru
     assert corps["message"] == apercu.json()["message"]
+    assert corps["date_comptable"] == c.journee.isoformat()
     assert corps["message"].startswith("Retrait anticipé : capital 1 000 000 F")
     statut = db.execute(
         text("SELECT status, balance FROM epargne.accounts WHERE id = :i"), {"i": compte_id}

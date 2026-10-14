@@ -97,6 +97,7 @@ class ResultatParts:
     shares_non_liberees: int
     is_member: bool
     entry_number: str | None
+    date_comptable: date  # entry_date de la pièce : la journée comptable
 
 
 @dataclass(frozen=True)
@@ -366,6 +367,7 @@ def _operer(
         shares_non_liberees=shares.shares_non_liberees,
         is_member=est_membre,
         entry_number=piece.entry_number,
+        date_comptable=piece.entry_date,
     )
 
 
