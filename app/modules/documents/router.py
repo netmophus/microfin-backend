@@ -4,6 +4,7 @@ Tout est gardé par `documents.read` ET cloisonné à l'agence : un document hor
 l'acteur n'existe pas pour lui (404, jamais 403). Chaque téléchargement est audité.
 """
 
+import logging
 import uuid
 from datetime import date
 from typing import Annotated
@@ -12,13 +13,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.modules.documents import service
+from app.modules.comptabilite.journee import date_comptable_courante
+from app.modules.documents import etats, service
 from app.modules.documents.models import Archive
 from app.modules.documents.schemas import DocumentResume, PageDocuments
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 
 router = APIRouter(tags=["documents"])
+journal = logging.getLogger(__name__)
 
 MESSAGE_INTROUVABLE = "Ce document n'existe pas ou n'est pas accessible."
 TAILLE_PAGE_DEFAUT = 25
@@ -72,6 +75,65 @@ def lister_documents_endpoint(
     lignes, total = service.lister(db, courant, filtres, page=page, taille=taille)
     return PageDocuments(
         lignes=[_resume(archive) for archive in lignes], total=total, page=page, taille=taille
+    )
+
+
+ETATS_PAR_SEGMENT = {
+    "journal-du-jour": etats.TYPE_JOURNAL,
+    "balance-du-jour": etats.TYPE_BALANCE,
+}
+MESSAGE_JOURNEE_NON_OUVERTE = (
+    "Seule la journée ouverte peut être demandée en brouillon : les journées clôturées ont leurs "
+    "états figés dans les documents."
+)
+MESSAGE_AUCUNE_JOURNEE_OUVERTE = (
+    "Aucune journée comptable n'est ouverte : il n'y a pas de brouillon."
+)
+MESSAGE_ETAT_INDISPONIBLE = "Le brouillon n'a pas pu être généré. Réessayez."
+
+
+@router.get("/documents/etats/{segment}/brouillon")
+def brouillon_etat_endpoint(
+    segment: str,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("compta.rapport.read"))],
+    db: Annotated[Session, Depends(get_db)],
+    journee: Annotated[
+        date | None, Query(description="Doit être la journée ouverte (défaut : elle).")
+    ] = None,
+) -> Response:
+    """Journal ou balance de la journée OUVERTE, en BROUILLON : rendu à la volée, jamais archivé
+    (un brouillon n'est pas une pièce). Les états des journées clôturées sont archivés et figés
+    à la clôture : on les retrouve par GET /documents."""
+    type_etat = ETATS_PAR_SEGMENT.get(segment)
+    if type_etat is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_INTROUVABLE)
+    ouverte = date_comptable_courante(db)
+    if ouverte is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=MESSAGE_AUCUNE_JOURNEE_OUVERTE,
+        )
+    if journee is not None and journee != ouverte:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=MESSAGE_JOURNEE_NON_OUVERTE
+        )
+    try:
+        pdf, nom = etats.rendre_brouillon(
+            db, courant, type_etat, ouverte, contexte_requete=_contexte(request)
+        )
+    except Exception:
+        journal.exception("Brouillon %s impossible (%s)", type_etat, ouverte)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=MESSAGE_ETAT_INDISPONIBLE
+        ) from None
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{nom}"',
+            "Cache-Control": "private, no-store",
+        },
     )
 
 

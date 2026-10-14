@@ -262,3 +262,94 @@ def balance(
     total_credit = sum(credit for _debit, credit in mouvements.values())
 
     return BalanceResultat(lignes=lignes, total_debit=total_debit, total_credit=total_credit)
+
+
+# --- Journal du jour (brouillard) -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LigneEcritureJournal:
+    compte_numero: str
+    compte_nom: str
+    debit: int
+    credit: int
+
+
+@dataclass(frozen=True)
+class EcritureJournal:
+    numero: str | None
+    libelle: str
+    lignes: list[LigneEcritureJournal]
+
+
+@dataclass(frozen=True)
+class GroupeJournal:
+    code: str
+    nom: str
+    ecritures: list[EcritureJournal]
+    total_debit: int
+    total_credit: int
+
+
+@dataclass(frozen=True)
+class JournalDuJourResultat:
+    jour: date
+    groupes: list[GroupeJournal]
+    total_debit: int
+    total_credit: int
+    nombre_ecritures: int
+
+
+def journal_du_jour(db: Session, jour: date) -> JournalDuJourResultat:
+    """Les écritures VALIDÉES de la journée, groupées par journal (code croissant), dans l'ordre
+    de leur numéro de pièce. Un journal sans écriture ce jour-là n'apparaît pas."""
+    entetes = db.execute(
+        select(JournalEntry, Journal)
+        .join(Journal, Journal.id == JournalEntry.journal_id)
+        .where(JournalEntry.entry_date == jour, JournalEntry.status == "validee")
+        .order_by(Journal.code, JournalEntry.entry_number, JournalEntry.id)
+    ).all()
+    lignes_par_piece: dict[uuid.UUID, list[LigneEcritureJournal]] = {}
+    if entetes:
+        lignes = db.execute(
+            select(JournalLine, Account)
+            .join(Account, Account.id == JournalLine.account_id)
+            .where(JournalLine.entry_id.in_([e.id for e, _journal in entetes]))
+            .order_by(JournalLine.entry_id, JournalLine.line_number)
+        ).all()
+        for ligne, compte in lignes:
+            lignes_par_piece.setdefault(ligne.entry_id, []).append(
+                LigneEcritureJournal(
+                    compte_numero=compte.account_number,
+                    compte_nom=compte.name,
+                    debit=ligne.amount if ligne.side == "D" else 0,
+                    credit=ligne.amount if ligne.side == "C" else 0,
+                )
+            )
+
+    par_journal: dict[str, tuple[Journal, list[EcritureJournal]]] = {}
+    for entete, journal in entetes:
+        ecriture = EcritureJournal(
+            numero=entete.entry_number,
+            libelle=entete.description,
+            lignes=lignes_par_piece.get(entete.id, []),
+        )
+        par_journal.setdefault(journal.code, (journal, []))[1].append(ecriture)
+
+    groupes = [
+        GroupeJournal(
+            code=journal.code,
+            nom=journal.name,
+            ecritures=ecritures,
+            total_debit=sum(ligne.debit for e in ecritures for ligne in e.lignes),
+            total_credit=sum(ligne.credit for e in ecritures for ligne in e.lignes),
+        )
+        for journal, ecritures in par_journal.values()
+    ]
+    return JournalDuJourResultat(
+        jour=jour,
+        groupes=groupes,
+        total_debit=sum(g.total_debit for g in groupes),
+        total_credit=sum(g.total_credit for g in groupes),
+        nombre_ecritures=len(entetes),
+    )

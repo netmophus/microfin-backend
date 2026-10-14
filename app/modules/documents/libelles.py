@@ -109,3 +109,30 @@ LIBELLES.update(
         "lettre_date_signature": "Date",
     }
 )
+
+# --- États comptables de la journée (lot 4) ------------------------------------------------------
+LIBELLES.update(
+    {
+        "titre_journal": "Journal du jour",
+        "titre_balance": "Balance générale arrêtée à la journée",
+        "brouillon_etat": (
+            "BROUILLON — journée encore ouverte : ce document n'est pas figé et n'est pas archivé."
+        ),
+        "journal_ecritures": "Écritures de la journée : {nombre}",
+        "journal_journal": "Journal {code} — {nom}",
+        "journal_piece": "Pièce",
+        "journal_compte": "Compte",
+        "journal_libelle_compte": "Intitulé du compte",
+        "journal_debit": "Débit (F)",
+        "journal_credit": "Crédit (F)",
+        "journal_total_journal": "Total du journal {code}",
+        "journal_total_jour": "Total de la journée",
+        "balance_mouvements": "Mouvements du jour",
+        "balance_soldes": "Soldes cumulés",
+        "balance_debiteur": "Débiteur (F)",
+        "balance_crediteur": "Créditeur (F)",
+        "balance_total": "Total",
+        "balance_vide": "Aucun compte n'a de solde ni de mouvement à cette journée.",
+        "journal_vide": "Aucune écriture validée n'a été passée pendant cette journée.",
+    }
+)

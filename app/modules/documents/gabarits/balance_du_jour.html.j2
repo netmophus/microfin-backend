@@ -1,0 +1,44 @@
+{% extends "base.html.j2" %}
+{# Balance générale arrêtée à la journée : mouvements du jour ET soldes cumulés depuis l'origine. #}
+{% block corps scoped %}
+{% if lignes %}
+<table class="etat">
+  <thead>
+    <tr>
+      <th rowspan="2">{{ libelles.journal_compte }}</th>
+      <th rowspan="2">{{ libelles.journal_libelle_compte }}</th>
+      <th colspan="2" class="nombre">{{ libelles.balance_mouvements }}</th>
+      <th colspan="2" class="nombre">{{ libelles.balance_soldes }}</th>
+    </tr>
+    <tr>
+      <th class="nombre">{{ libelles.balance_debiteur }}</th>
+      <th class="nombre">{{ libelles.balance_crediteur }}</th>
+      <th class="nombre">{{ libelles.balance_debiteur }}</th>
+      <th class="nombre">{{ libelles.balance_crediteur }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ligne in lignes %}
+    <tr class="ligne-ecriture">
+      <td><span class="nombre">{{ ligne.compte }}</span></td>
+      <td>{{ ligne.compte_nom }}</td>
+      <td class="nombre">{{ ligne.mouvement_debit }}</td>
+      <td class="nombre">{{ ligne.mouvement_credit }}</td>
+      <td class="nombre">{{ ligne.solde_debit }}</td>
+      <td class="nombre">{{ ligne.solde_credit }}</td>
+    </tr>
+  {% endfor %}
+    <tr class="total">
+      <td colspan="2">{{ libelles.balance_total }}</td>
+      <td class="nombre">{{ total_mouvement_debit }}</td>
+      <td class="nombre">{{ total_mouvement_credit }}</td>
+      <td class="nombre">{{ total_solde_debit }}</td>
+      <td class="nombre">{{ total_solde_credit }}</td>
+    </tr>
+  </tbody>
+</table>
+{% else %}
+<p>{{ libelles.balance_vide }}</p>
+{% endif %}
+{% endblock %}
+{% block signatures %}{% endblock %}

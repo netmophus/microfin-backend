@@ -51,6 +51,7 @@ def rendre_html(gabarit: str, contexte: dict[str, Any], journee: date) -> str:
         "journee_iso": journee.isoformat(),
         "journee_affichee": formater_jour(journee),
         "duplicata": False,
+        "brouillon": False,
         **contexte,
     }
     return _environnement().get_template(gabarit).render(**complet)

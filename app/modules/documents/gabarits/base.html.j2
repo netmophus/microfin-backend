@@ -9,9 +9,11 @@
 <style>{{ css | safe }}</style>
 </head>
 <body>
+{% if brouillon %}<div class="pied-brouillon">{{ libelles.brouillon_etat }}</div>{% endif %}
 {% for exemplaire in exemplaires %}
 {% if not loop.first %}<div class="trait">{{ libelles.decouper_ici }}</div>{% endif %}
 <section class="exemplaire">
+  {% if brouillon %}<p class="bandeau-brouillon">{{ libelles.brouillon_etat }}</p>{% endif %}
   {% if institution.provisoire %}<p class="bandeau-provisoire">{{ libelles.bandeau_provisoire }}</p>{% endif %}
   {# Mises en page en TABLEAUX (jamais de flottants) : WeasyPrint calcule mal la hauteur d'un bloc
      de flottants, et l'exemplaire suivant remontait sur le trait de découpe. #}

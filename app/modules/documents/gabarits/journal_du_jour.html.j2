@@ -1,0 +1,49 @@
+{% extends "base.html.j2" %}
+{# Journal du jour (brouillard) : les écritures de la journée, groupées par journal. Tout est
+   déjà calculé et formaté dans le contexte construit par etats.py. #}
+{% block corps scoped %}
+<p>{{ libelles.journal_ecritures.format(nombre=nombre_ecritures) }}</p>
+{% for groupe in groupes %}
+<h3 class="journal">{{ libelles.journal_journal.format(code=groupe.code, nom=groupe.nom) }}</h3>
+<table class="etat">
+  <thead>
+    <tr>
+      <th>{{ libelles.journal_compte }}</th>
+      <th>{{ libelles.journal_libelle_compte }}</th>
+      <th class="nombre">{{ libelles.journal_debit }}</th>
+      <th class="nombre">{{ libelles.journal_credit }}</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ecriture in groupe.ecritures %}
+    <tr class="piece"><td colspan="4">{{ libelles.journal_piece }} {{ ecriture.numero }} — {{ ecriture.libelle }}</td></tr>
+    {% for ligne in ecriture.lignes %}
+    <tr class="ligne-ecriture">
+      <td><span class="nombre">{{ ligne.compte }}</span></td>
+      <td>{{ ligne.compte_nom }}</td>
+      <td class="nombre">{{ ligne.debit }}</td>
+      <td class="nombre">{{ ligne.credit }}</td>
+    </tr>
+    {% endfor %}
+  {% endfor %}
+    <tr class="total">
+      <td colspan="2">{{ libelles.journal_total_journal.format(code=groupe.code) }}</td>
+      <td class="nombre">{{ groupe.total_debit_affiche }}</td>
+      <td class="nombre">{{ groupe.total_credit_affiche }}</td>
+    </tr>
+  </tbody>
+</table>
+{% else %}
+<p>{{ libelles.journal_vide }}</p>
+{% endfor %}
+{% if groupes %}
+<table class="etat">
+  <tr class="total">
+    <td>{{ libelles.journal_total_jour }}</td>
+    <td class="nombre">{{ total_debit_affiche }}</td>
+    <td class="nombre">{{ total_credit_affiche }}</td>
+  </tr>
+</table>
+{% endif %}
+{% endblock %}
+{% block signatures %}{% endblock %}

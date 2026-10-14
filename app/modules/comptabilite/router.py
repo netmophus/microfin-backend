@@ -155,6 +155,7 @@ from app.modules.comptabilite.schemas import (
     VerrouillageSaisie,
 )
 from app.modules.comptabilite.service import ModificationInterditeError
+from app.modules.documents import etats
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.models import User
 from app.modules.security.router import _contexte
@@ -1376,6 +1377,11 @@ def cloturer_journee_endpoint(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
         ) from None
+    # APRÈS le commit de la clôture : journal et balance de la journée, archivés et figés. La
+    # clôture est acquise ; un échec laisse une ligne `echec` régénérable, jamais un refus.
+    etats.archiver_etats_cloture(
+        db, courant, journee_cloturee.date_comptable, contexte_requete=_contexte(request)
+    )
     noms = _noms_acteurs(
         db, {journee_cloturee.opened_by, journee_cloturee.closed_by}
     )

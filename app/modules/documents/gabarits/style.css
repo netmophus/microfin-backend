@@ -192,3 +192,69 @@ table.signatures .ligne {
   border: 0.3mm solid #b8c0ca;
   margin: 0 0 3mm 0;
 }
+
+/* États comptables de la journée : tableaux longs, en-tête répété à chaque page. */
+.bandeau-brouillon {
+  border: 0.5mm solid #b42318;
+  color: #b42318;
+  padding: 1mm 2mm;
+  margin: 0 0 2mm 0;
+  font-weight: 700;
+  text-align: center;
+}
+table.etat {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 3mm 0;
+}
+table.etat thead {
+  display: table-header-group;
+}
+table.etat th {
+  font-size: 8pt;
+  font-weight: 700;
+  text-align: left;
+  padding: 0.6mm 1mm;
+  border-bottom: 0.3mm solid #1a1d21;
+}
+table.etat td {
+  padding: 0.4mm 1mm;
+  border-bottom: 0.15mm solid #dfe3e8;
+  vertical-align: top;
+  font-size: 8pt;
+}
+table.etat th.nombre,
+table.etat td.nombre {
+  text-align: right;
+  white-space: nowrap;
+  font-family: "DejaVuMono";
+}
+table.etat tr.piece td {
+  background: #f7f8fa;
+  font-weight: 700;
+  border-top: 0.3mm solid #b8c0ca;
+}
+table.etat tr.piece,
+table.etat tr.ligne-ecriture {
+  break-inside: avoid;
+}
+table.etat tr.total td {
+  font-weight: 700;
+  border-top: 0.3mm solid #1a1d21;
+}
+h3.journal {
+  margin: 2mm 0 1mm 0;
+  font-size: 9.5pt;
+}
+
+/* Répété sur CHAQUE page (position fixe), dans la marge basse. */
+.pied-brouillon {
+  position: fixed;
+  bottom: -9mm;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 7.5pt;
+  font-weight: 700;
+  color: #b42318;
+}

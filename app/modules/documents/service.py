@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, and_, func, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -54,7 +54,14 @@ GABARIT_DU_TYPE: dict[str, str] = {
     "recu_parts_liberation": "recu.html.j2",
     "recu_parts_remboursement": "recu.html.j2",
     "lettre_explication_ecart": "lettre_explication.html.j2",
+    "journal_du_jour": "journal_du_jour.html.j2",
+    "balance_du_jour": "balance_du_jour.html.j2",
 }
+
+# États comptables de la journée : centralisés (écritures sans agence), donc réservés au droit
+# de lecture des rapports comptables et NON au périmètre d'agence.
+TYPES_ETATS_COMPTABLES = ("journal_du_jour", "balance_du_jour")
+PERMISSION_ETATS_COMPTABLES = "compta.rapport.read"
 
 
 class DocumentIntrouvableError(Exception):
@@ -134,6 +141,11 @@ def _rendre(db: Session, demande: DemandeDocument) -> bytes:
         "agence": {"code": agence.code, "nom": agence.name},
     }
     return rendre_pdfa(gabarit, contexte, demande.journee)
+
+
+def rendre_sans_archiver(db: Session, demande: DemandeDocument) -> bytes:
+    """Le PDF d'une demande, rendu à la volée : ni écrit dans l'archive, ni indexé (brouillon)."""
+    return _rendre(db, demande)
 
 
 def _chemin(db: Session, demande: DemandeDocument) -> str:
@@ -253,9 +265,16 @@ def _perimetre(courant: UtilisateurCourant) -> ColumnElement[bool]:
     # ColumnElement) : le cast est sûr, la condition SQL produite est la même.
     colonne = cast("ColumnElement[uuid.UUID | None]", Archive.agency_id)
     dans_le_perimetre = courant.condition_perimetre(colonne)
-    if PERMISSION_AGENCE in courant.permissions:
-        return dans_le_perimetre
-    return and_(dans_le_perimetre, Archive.acteur_id == courant.user_id)
+    if PERMISSION_AGENCE not in courant.permissions:
+        return and_(
+            dans_le_perimetre,
+            Archive.acteur_id == courant.user_id,
+            Archive.type.notin_(TYPES_ETATS_COMPTABLES),
+        )
+    if PERMISSION_ETATS_COMPTABLES in courant.permissions:
+        # Journal et balance : ceux du RÉSEAU, quelle que soit l'agence de l'archive.
+        return or_(Archive.type.in_(TYPES_ETATS_COMPTABLES), dans_le_perimetre)
+    return and_(dans_le_perimetre, Archive.type.notin_(TYPES_ETATS_COMPTABLES))
 
 
 def _charger(db: Session, courant: UtilisateurCourant, archive_id: uuid.UUID) -> Archive:
