@@ -1255,3 +1255,104 @@ def test_secondaire_non_affecte_par_la_responsabilite_des_niveaux(
     )
 
     assert resultat.statut == "receptionne"
+
+
+# --- Dotation descendante : choisir le poste DESTINATION (principale -> secondaire) ----------
+
+
+def test_api_postes_destination_liste_les_postes_actifs_de_l_agence(
+    client: TestClient, db: Session, agence: Agency, poste: Poste
+) -> None:
+    """Le caissier principal n'a AUCUN poste assigné (`mes-postes` lui rend une liste vide) : les
+    candidats à la destination sont les postes ACTIFS de SON agence, assignés ou non."""
+    inactif = Poste(
+        agency_id=agence.id, code="02", libelle="Guichet fermé",
+        compte_caisse_id=_cid(db, "101112"), is_active=False,
+    )
+    autre_agence = Agency(code=f"AG-{uuid.uuid4().hex[:6]}", name="Autre agence")
+    db.add_all([inactif, autre_agence])
+    db.flush()
+    db.add(
+        Poste(
+            agency_id=autre_agence.id, code="01", libelle="Guichet d'ailleurs",
+            compte_caisse_id=_cid(db, "101112"), is_active=True,
+        )
+    )
+    db.flush()
+    principal = _utilisateur_avec_role(db, agence, "CAISSIER")
+    _designer_principal(db, agence, principal)
+    entete = _entete(principal, agence, "CAISSIER")
+
+    destinations = client.get("/caisse/transferts/postes-destination", headers=entete)
+    mes_postes = client.get("/caisse/sessions/mes-postes", headers=entete)
+
+    assert destinations.status_code == 200
+    assert destinations.json() == [
+        {"id": str(poste.id), "code": "01", "libelle": "Guichet 1"}
+    ]  # ni le poste inactif, ni celui de l'autre agence
+    assert mes_postes.json() == []  # c'est bien le défaut corrigé : rien n'est assigné à l'acteur
+
+
+def test_api_postes_destination_permission_absente_403(
+    client: TestClient, db: Session, agence: Agency, poste: Poste
+) -> None:
+    comptable = _utilisateur_avec_role(db, agence, "COMPTABLE")  # pas caisse.transfert.initier
+
+    reponse = client.get(
+        "/caisse/transferts/postes-destination", headers=_entete(comptable, agence, "COMPTABLE")
+    )
+
+    assert reponse.status_code == 403
+
+
+def test_api_postes_destination_cloisonne_a_l_agence_de_l_acteur(
+    client: TestClient, db: Session, agence: Agency, poste: Poste
+) -> None:
+    autre_agence = Agency(code=f"AG-{uuid.uuid4().hex[:6]}", name="Autre agence")
+    db.add(autre_agence)
+    db.flush()
+    etranger = _utilisateur_avec_role(db, autre_agence, "CAISSIER")
+
+    reponse = client.get(
+        "/caisse/transferts/postes-destination", headers=_entete(etranger, autre_agence, "CAISSIER")
+    )
+
+    assert reponse.status_code == 200
+    assert reponse.json() == []  # le poste de `agence` n'est jamais visible depuis l'autre
+
+
+def test_api_dotation_principale_vers_secondaire_par_le_caissier_principal(
+    client: TestClient,
+    db: Session,
+    agence: Agency,
+    poste: Poste,
+    niveaux: None,
+    compte_transit_pose: CaisseParametres,
+) -> None:
+    """Le scénario cassé à l'écran : le caissier principal (sans poste assigné) dote un guichet.
+    Le backend l'autorise sur le niveau SOURCE seulement ; le poste destination n'a qu'à être
+    actif dans l'agence. Écriture d'envoi : D transit / C principale."""
+    principal = _utilisateur_avec_role(db, agence, "CAISSIER")
+    _designer_principal(db, agence, principal)
+    entete = _entete(principal, agence, "CAISSIER")
+    destination = client.get("/caisse/transferts/postes-destination", headers=entete).json()[0]
+    transit, principale = _cid(db, "1141"), _cid(db, "101114")
+    avant = (_solde(db, transit), _solde(db, principale))
+
+    reponse = client.post(
+        "/caisse/transferts",
+        json={
+            "niveau_source": "principale",
+            "niveau_destination": "secondaire",
+            "poste_id": destination["id"],
+            "montant_envoye": 40_000,
+            "motif": "Dotation du guichet 1",
+        },
+        headers=entete,
+    )
+
+    assert reponse.status_code == 201, reponse.text
+    assert reponse.json()["statut"] == "en_transit"
+    assert reponse.json()["compte_source_number"] == "101114"
+    assert _solde(db, transit) == avant[0] + 40_000  # D transit
+    assert _solde(db, principale) == avant[1] - 40_000  # C principale

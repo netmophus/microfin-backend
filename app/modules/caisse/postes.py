@@ -115,6 +115,27 @@ def lister_mes_postes(db: Session, courant: UtilisateurCourant) -> Sequence[Post
     )
 
 
+def lister_postes_destination(db: Session, courant: UtilisateurCourant) -> Sequence[Poste]:
+    """Postes candidats comme DESTINATION d'un transfert : les postes ACTIFS de l'agence COURANTE
+    de l'acteur, assignés ou non. Quand le secondaire reçoit (dotation descendante), l'acteur est
+    le caissier principal, qui n'a aucun poste assigné : `lister_mes_postes` lui rendrait une liste
+    vide. Le poste destination n'a besoin que d'être actif dans l'agence (voir
+    `transferts.initier_transfert`) ; l'autorisation se contrôle sur le niveau SOURCE.
+
+    Sans agence courante, rien — jamais « toutes les agences » par défaut."""
+    if courant.agency_id is None:
+        return []
+    return (
+        db.execute(
+            select(Poste)
+            .where(Poste.agency_id == courant.agency_id, Poste.is_active.is_(True))
+            .order_by(Poste.code)
+        )
+        .scalars()
+        .all()
+    )
+
+
 def _verifier_code_disponible(
     db: Session, *, agency_id: uuid.UUID | None, code: str, exclure_id: uuid.UUID | None = None
 ) -> None:

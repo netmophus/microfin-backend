@@ -979,6 +979,22 @@ def receptionner_transfert_endpoint(
     return _vers_schema_transfert(db, transfert)
 
 
+@router.get("/caisse/transferts/postes-destination", response_model=list[PosteAssigne])
+def lister_postes_destination_endpoint(
+    courant: Annotated[UtilisateurCourant, Depends(exige("caisse.transfert.initier"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[PosteAssigne]:
+    """Postes proposables comme DESTINATION d'un transfert (dotation d'un guichet) : les postes
+    actifs de l'agence courante de l'acteur. Gardé par `caisse.transfert.initier` — qui peut
+    initier un transfert peut en choisir la destination. Distinct de `GET /caisse/postes`
+    (gestion) et de `mes-postes` (les postes de l'acteur, pour ouvrir SA session). Déclaré AVANT
+    `/caisse/transferts/{transfert_id}`, sinon « postes-destination » serait lu comme un id."""
+    return [
+        PosteAssigne(id=p.id, code=p.code, libelle=p.libelle)
+        for p in postes.lister_postes_destination(db, courant)
+    ]
+
+
 @router.get("/caisse/transferts", response_model=PageTransferts)
 def lister_transferts_endpoint(
     courant: Annotated[
