@@ -17,13 +17,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
-from app.modules.epargne.models import Product
+from app.modules.epargne.models import Product, SavingsAccount
 
 RESSOURCE = "epargne.product"
 
 
 class CodeDejaUtiliseError(Exception):
     """Le code produit existe déjà."""
+
+
+class TypeProduitFigeError(Exception):
+    """Le produit porte déjà des comptes : son type ne peut plus changer (un compte à vue ne
+    devient pas un dépôt à terme, ni l'inverse)."""
 
 
 class ComptesNonRattachesError(Exception):
@@ -45,6 +50,9 @@ def creer_produit(
     solde_minimum_remunere: int,
     min_balance: int = 0,
     depot_initial_minimum: int = 0,
+    duree_min_mois: int | None = None,
+    duree_max_mois: int | None = None,
+    penalite_anticipee_bp: int = 0,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Product:
@@ -74,6 +82,9 @@ def creer_produit(
         solde_minimum_remunere=solde_minimum_remunere,
         min_balance=min_balance,
         depot_initial_minimum=depot_initial_minimum,
+        duree_min_mois=duree_min_mois,
+        duree_max_mois=duree_max_mois,
+        penalite_anticipee_bp=penalite_anticipee_bp,
         created_by=par,
         updated_by=par,
     )
@@ -94,6 +105,9 @@ def creer_produit(
             "taux_bp": taux_bp,
             "min_balance": min_balance,
             "depot_initial_minimum": depot_initial_minimum,
+            "duree_min_mois": duree_min_mois,
+            "duree_max_mois": duree_max_mois,
+            "penalite_anticipee_bp": penalite_anticipee_bp,
         },
     )
     return produit
@@ -113,6 +127,9 @@ def modifier_produit(
     solde_minimum_remunere: int,
     min_balance: int = 0,
     depot_initial_minimum: int = 0,
+    duree_min_mois: int | None = None,
+    duree_max_mois: int | None = None,
+    penalite_anticipee_bp: int = 0,
     motif: str,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
@@ -120,6 +137,12 @@ def modifier_produit(
     """Remplace les champs MÉTIER (nom, type, paramètres d'intérêt) — jamais les comptes
     rattachés (`rattachements.py`, écran distinct, permission distincte). MOTIF obligatoire,
     tracé avant/après. Ne touche pas à `is_active`/`is_provisional`."""
+    if type != produit.type and db.execute(
+        select(SavingsAccount.id).where(SavingsAccount.product_id == produit.id).limit(1)
+    ).first():
+        raise TypeProduitFigeError(
+            "Ce produit a déjà des comptes ouverts : son type ne peut plus être modifié."
+        )
     avant = {
         "name": produit.name,
         "type": produit.type,
@@ -131,6 +154,9 @@ def modifier_produit(
         "solde_minimum_remunere": produit.solde_minimum_remunere,
         "min_balance": produit.min_balance,
         "depot_initial_minimum": produit.depot_initial_minimum,
+        "duree_min_mois": produit.duree_min_mois,
+        "duree_max_mois": produit.duree_max_mois,
+        "penalite_anticipee_bp": produit.penalite_anticipee_bp,
     }
 
     produit.name = name
@@ -143,6 +169,9 @@ def modifier_produit(
     produit.solde_minimum_remunere = solde_minimum_remunere
     produit.min_balance = min_balance
     produit.depot_initial_minimum = depot_initial_minimum
+    produit.duree_min_mois = duree_min_mois
+    produit.duree_max_mois = duree_max_mois
+    produit.penalite_anticipee_bp = penalite_anticipee_bp
     produit.updated_by = par
     db.flush()
 
@@ -165,6 +194,9 @@ def modifier_produit(
             "solde_minimum_remunere": solde_minimum_remunere,
             "min_balance": min_balance,
             "depot_initial_minimum": depot_initial_minimum,
+            "duree_min_mois": duree_min_mois,
+            "duree_max_mois": duree_max_mois,
+            "penalite_anticipee_bp": penalite_anticipee_bp,
             "motif": motif,
         },
     )

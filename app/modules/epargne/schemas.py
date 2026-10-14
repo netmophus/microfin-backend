@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ProduitEpargne(BaseModel):
@@ -205,6 +205,29 @@ class ProduitEpargneDetail(BaseModel):
     solde_minimum_remunere: int
     min_balance: int  # solde plancher : ce qui doit rester sur le compte après un retrait
     depot_initial_minimum: int  # minimum du premier dépôt (0 = aucune contrainte)
+    duree_min_mois: int | None  # dépôt à terme : durée minimale choisie à l'ouverture
+    duree_max_mois: int | None
+    penalite_anticipee_bp: int  # dépôt à terme : % des intérêts courus retenu, en points de base
+
+
+MESSAGE_DUREES_TERME = (
+    "Les durées minimale et maximale se saisissent ensemble, la minimale ne dépassant pas la "
+    "maximale."
+)
+MESSAGE_TERME_SEUL = (
+    "La durée et la pénalité de retrait anticipé ne concernent que les dépôts à terme."
+)
+
+
+def _verifier_parametres_terme(
+    type_produit: str, duree_min: int | None, duree_max: int | None, penalite_bp: int
+) -> None:
+    if (duree_min is None) != (duree_max is None):
+        raise ValueError(MESSAGE_DUREES_TERME)
+    if duree_min is not None and duree_max is not None and duree_min > duree_max:
+        raise ValueError(MESSAGE_DUREES_TERME)
+    if type_produit != "terme" and (duree_min is not None or penalite_bp != 0):
+        raise ValueError(MESSAGE_TERME_SEUL)
 
 
 class CreationProduitEpargne(BaseModel):
@@ -232,6 +255,16 @@ class CreationProduitEpargne(BaseModel):
     solde_minimum_remunere: int = Field(default=0, ge=0)
     min_balance: int = Field(default=0, ge=0)
     depot_initial_minimum: int = Field(default=0, ge=0)
+    duree_min_mois: int | None = Field(default=None, ge=1, le=600)
+    duree_max_mois: int | None = Field(default=None, ge=1, le=600)
+    penalite_anticipee_bp: int = Field(default=0, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def _coherence_terme(self) -> "CreationProduitEpargne":
+        _verifier_parametres_terme(
+            self.type, self.duree_min_mois, self.duree_max_mois, self.penalite_anticipee_bp
+        )
+        return self
 
 
 class ModificationProduitEpargne(BaseModel):
@@ -254,7 +287,18 @@ class ModificationProduitEpargne(BaseModel):
     solde_minimum_remunere: int = Field(ge=0)
     min_balance: int = Field(ge=0)
     depot_initial_minimum: int = Field(ge=0)
+    duree_min_mois: int | None = Field(default=None, ge=1, le=600)
+    duree_max_mois: int | None = Field(default=None, ge=1, le=600)
+    penalite_anticipee_bp: int = Field(default=0, ge=0, le=10000)
     motif: str = Field(min_length=3, max_length=500)
+
+
+    @model_validator(mode="after")
+    def _coherence_terme(self) -> "ModificationProduitEpargne":
+        _verifier_parametres_terme(
+            self.type, self.duree_min_mois, self.duree_max_mois, self.penalite_anticipee_bp
+        )
+        return self
 
 
 class ActivationProduit(BaseModel):

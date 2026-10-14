@@ -126,6 +126,9 @@ def _vers_detail(produit: Product) -> ProduitEpargneDetail:
         solde_minimum_remunere=produit.solde_minimum_remunere,
         min_balance=produit.min_balance,
         depot_initial_minimum=produit.depot_initial_minimum,
+        duree_min_mois=produit.duree_min_mois,
+        duree_max_mois=produit.duree_max_mois,
+        penalite_anticipee_bp=produit.penalite_anticipee_bp,
     )
 
 
@@ -246,6 +249,9 @@ def creer_produit_endpoint(
             solde_minimum_remunere=corps.solde_minimum_remunere,
             min_balance=corps.min_balance,
             depot_initial_minimum=corps.depot_initial_minimum,
+            duree_min_mois=corps.duree_min_mois,
+            duree_max_mois=corps.duree_max_mois,
+            penalite_anticipee_bp=corps.penalite_anticipee_bp,
             par=courant.user_id,
             contexte=_contexte(request),
         )
@@ -280,23 +286,32 @@ def modifier_produit_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_PRODUIT_INTROUVABLE
         )
-    gestion_produits.modifier_produit(
-        db,
-        produit,
-        name=corps.name,
-        type=corps.type,
-        taux_bp=corps.taux_bp,
-        periodicite=corps.periodicite,
-        methode_calcul_solde=corps.methode_calcul_solde,
-        base_jours=corps.base_jours,
-        regle_arrondi=corps.regle_arrondi,
-        solde_minimum_remunere=corps.solde_minimum_remunere,
-        min_balance=corps.min_balance,
-        depot_initial_minimum=corps.depot_initial_minimum,
-        motif=corps.motif,
-        par=courant.user_id,
-        contexte=_contexte(request),
-    )
+    try:
+        gestion_produits.modifier_produit(
+            db,
+            produit,
+            name=corps.name,
+            type=corps.type,
+            taux_bp=corps.taux_bp,
+            periodicite=corps.periodicite,
+            methode_calcul_solde=corps.methode_calcul_solde,
+            base_jours=corps.base_jours,
+            regle_arrondi=corps.regle_arrondi,
+            solde_minimum_remunere=corps.solde_minimum_remunere,
+            min_balance=corps.min_balance,
+            depot_initial_minimum=corps.depot_initial_minimum,
+            duree_min_mois=corps.duree_min_mois,
+            duree_max_mois=corps.duree_max_mois,
+            penalite_anticipee_bp=corps.penalite_anticipee_bp,
+            motif=corps.motif,
+            par=courant.user_id,
+            contexte=_contexte(request),
+        )
+    except gestion_produits.TypeProduitFigeError as erreur:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
     db.commit()
     return _vers_detail(produit)
 

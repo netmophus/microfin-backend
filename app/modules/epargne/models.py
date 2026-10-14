@@ -88,6 +88,14 @@ class Product(Base):
     compte_charge_interet_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.accounts.id")
     )
+    # Dépôt à terme (migration 0065) : bornes de la durée choisie à l'ouverture du compte (en mois)
+    # et pénalité de retrait anticipé, en points de base des intérêts COURUS (10 000 = tous les
+    # intérêts ; le capital n'est jamais entamé). Sans objet hors type « terme ».
+    duree_min_mois: Mapped[int | None] = mapped_column(sa.Integer)
+    duree_max_mois: Mapped[int | None] = mapped_column(sa.Integer)
+    penalite_anticipee_bp: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
@@ -151,6 +159,18 @@ class SavingsAccount(Base):
     closed_at: Mapped[datetime | None] = mapped_column(TS)
     closed_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     closure_reason: Mapped[str | None] = mapped_column(sa.Text)
+    # Dépôt à terme (migration 0065) : NULL pour un compte à vue. Les huit champs vont ensemble et
+    # sont IMMUABLES (trigger) : la durée choisie, l'échéance dérivée de la journée comptable
+    # d'ouverture, le capital, et les quatre paramètres de calcul figés au contrat — un
+    # changement du produit ne touche jamais un DAT en cours.
+    term_months: Mapped[int | None] = mapped_column(sa.Integer)
+    term_start_date: Mapped[date | None] = mapped_column(sa.Date)
+    maturity_date: Mapped[date | None] = mapped_column(sa.Date)
+    principal: Mapped[int | None] = mapped_column(sa.BigInteger)
+    taux_bp_contrat: Mapped[int | None] = mapped_column(sa.Integer)
+    penalite_bp_contrat: Mapped[int | None] = mapped_column(sa.Integer)
+    base_jours_contrat: Mapped[int | None] = mapped_column(sa.Integer)
+    regle_arrondi_contrat: Mapped[str | None] = mapped_column(sa.String(20))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)

@@ -13,7 +13,7 @@
 
 import uuid
 from collections.abc import Generator
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select, text
@@ -142,6 +142,19 @@ def _produit_epargne(db: Session, *, type_: str = "a_vue", min_balance: int = 0)
 def _compte_epargne(
     db: Session, agence: Agency, tier_id: uuid.UUID, produit: EpargneProduct
 ) -> SavingsAccount:
+    if produit.type == "terme":
+        # Un compte à terme porte ses conditions dès sa naissance (trigger 0065) : on les pose
+        # directement, ce test ne s'intéresse qu'au refus du crédit/prélèvement sur un DAT.
+        compte = SavingsAccount(
+            account_number=f"DAT{uuid.uuid4().hex[:10]}", product_id=produit.id,
+            tier_id=tier_id, agency_id=agence.id, status="actif", balance=0,
+            term_months=6, term_start_date=date(2026, 1, 1), maturity_date=date(2026, 7, 1),
+            principal=1_000_000, taux_bp_contrat=500, penalite_bp_contrat=5000,
+            base_jours_contrat=365, regle_arrondi_contrat="plus_proche",
+        )
+        db.add(compte)
+        db.flush()
+        return compte
     return epargne_service.ouvrir_compte(
         db, tier_id=tier_id, product_id=produit.id, agency_id=agence.id, par=None
     )
