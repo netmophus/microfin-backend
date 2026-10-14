@@ -27,14 +27,17 @@ from app.modules.comptabilite.models import Account
 from app.modules.epargne import consultation, gestion_produits, rattachements
 from app.modules.epargne.gestion_produits import CodeDejaUtiliseError, ComptesNonRattachesError
 from app.modules.epargne.guichet import (
+    CompteATermeError,
     CompteClotureError,
     CompteIntrouvableError,
     MontantInvalideError,
+    OperationError,
     OperationGeleeError,
     PremierDepotInsuffisantError,
     SoldeInsuffisantError,
     deposer,
     fermer_compte,
+    ouvrir_depot_a_terme,
     retirer,
 )
 from app.modules.epargne.interets import (
@@ -55,6 +58,7 @@ from app.modules.epargne.schemas import (
     CompteGuichet,
     CompteRattachement,
     CreationProduitEpargne,
+    DemandeDepotATerme,
     DemandeInterets,
     LigneRapprochement,
     ModificationProduitEpargne,
@@ -69,15 +73,19 @@ from app.modules.epargne.schemas import (
     RapportInterets,
     RattachementsProduit,
     ResultatOperation,
+    ResultatOuvertureDepotATerme,
+    SimulationDepotATerme,
     ValidationProduitResultat,
 )
 from app.modules.epargne.service import (
     CompteDebiteurError,
     CompteDejaClotureError,
+    DepotATermeRequisError,
     MembreNonActifError,
     ProduitIntrouvableError,
     ouvrir_compte,
 )
+from app.modules.epargne.terme import DepotATermeError, interets_du_contrat, simuler
 from app.modules.security.autorisation import UtilisateurCourant, exige
 from app.modules.security.router import _contexte
 from app.modules.tiers.models import Tier
@@ -143,6 +151,9 @@ def _resume(compte: object, produit: object) -> CompteEpargneResume:
         balance=compte.balance,
         status=compte.status,
         is_provisional=produit.is_provisional,
+        term_months=compte.term_months,
+        maturity_date=compte.maturity_date,
+        principal=compte.principal,
     )
 
 
@@ -458,7 +469,7 @@ def ouvrir_compte_endpoint(
             contexte=_contexte(request),
         )
         db.commit()
-    except MembreNonActifError as erreur:
+    except (MembreNonActifError, DepotATermeRequisError) as erreur:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
@@ -473,6 +484,75 @@ def ouvrir_compte_endpoint(
         p for p in consultation.lister_produits(db) if p.id == corps.product_id
     )
     return _resume(compte, produit)
+
+
+@router.post("/epargne/depots-a-terme/simulation", response_model=SimulationDepotATerme)
+def simuler_depot_a_terme_endpoint(
+    corps: DemandeDepotATerme,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.open"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> SimulationDepotATerme:
+    """Échéance et intérêts attendus d'un placement, à montrer au client avant de valider. Ne
+    déplace aucun argent et n'écrit rien : mêmes contrôles et même calcul que l'ouverture."""
+    try:
+        simulation = simuler(db, corps.product_id, corps.term_months, corps.montant)
+    except (DepotATermeError, AucuneJourneeOuverteError) as erreur:
+        raise _422(erreur) from None
+    return SimulationDepotATerme(**vars(simulation))
+
+
+@router.post(
+    "/tiers/{tier_id}/depots-a-terme",
+    response_model=ResultatOuvertureDepotATerme,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(exige("epargne.operation.deposit"))],
+)
+def ouvrir_depot_a_terme_endpoint(
+    tier_id: uuid.UUID,
+    corps: DemandeDepotATerme,
+    request: Request,
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.open"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> ResultatOuvertureDepotATerme:
+    """Ouvre un dépôt à terme ET place le capital en une seule opération. Il faut les DEUX
+    droits : ouvrir un compte (KYC) et encaisser le capital (session de caisse ouverte)."""
+    agency_id = db.execute(
+        select(Tier.primary_agency_id).where(
+            Tier.id == tier_id,
+            Tier.deleted_at.is_(None),
+            courant.condition_perimetre(Tier.primary_agency_id),
+        )
+    ).scalar_one_or_none()
+    if agency_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_MEMBRE_INTROUVABLE
+        )
+    try:
+        resultat = ouvrir_depot_a_terme(
+            db,
+            courant,
+            tier_id=tier_id,
+            agency_id=agency_id,
+            product_id=corps.product_id,
+            term_months=corps.term_months,
+            montant=corps.montant,
+            contexte=_contexte(request),
+        )
+    except (
+        DepotATermeError,
+        OperationError,
+        MembreNonActifError,
+        AucuneSessionOuverteError,
+        AucuneJourneeOuverteError,
+    ) as erreur:
+        db.rollback()
+        raise _422(erreur) from None
+    produit = next(p for p in consultation.lister_produits(db) if p.id == corps.product_id)
+    return ResultatOuvertureDepotATerme(
+        compte=_resume(resultat.compte, produit),
+        entry_number=resultat.versement.entry_number,
+        interets_a_l_echeance=interets_du_contrat(resultat.conditions),
+    )
 
 
 # --- Guichet : recherche + dépôt/retrait --------------------------------------------
@@ -496,6 +576,9 @@ def _vers_compte_guichet(ligne: Any) -> CompteGuichet:
         balance=compte.balance,
         status=compte.status,
         is_provisional=produit.is_provisional,
+        term_months=compte.term_months,
+        maturity_date=compte.maturity_date,
+        principal=compte.principal,
     )
 
 
@@ -533,6 +616,7 @@ def deposer_endpoint(
     except (
         MontantInvalideError,
         OperationGeleeError,
+        CompteATermeError,
         CompteClotureError,
         PremierDepotInsuffisantError,
         AucuneSessionOuverteError,
@@ -735,6 +819,7 @@ def retirer_endpoint(
         SoldeInsuffisantError,
         MontantInvalideError,
         OperationGeleeError,
+        CompteATermeError,
         CompteClotureError,
         AucuneSessionOuverteError,
         AucuneJourneeOuverteError,

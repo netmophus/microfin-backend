@@ -31,6 +31,10 @@ class CompteEpargneResume(BaseModel):
     balance: int  # francs CFA entiers
     status: str  # 'actif' | 'cloture'
     is_provisional: bool  # du produit
+    # Dépôt à terme : renseignés seulement pour un compte à terme (l'échéance bloque le compte).
+    term_months: int | None = None
+    maturity_date: date | None = None
+    principal: int | None = None
 
 
 class MouvementResume(BaseModel):
@@ -55,6 +59,33 @@ class OuvertureCompte(BaseModel):
     product_id: uuid.UUID
 
 
+class DemandeDepotATerme(BaseModel):
+    """Placement d'un dépôt à terme : produit, durée choisie (en mois) et capital en francs entiers.
+    Sert à la simulation comme à l'ouverture réelle : mêmes champs, mêmes contrôles."""
+
+    product_id: uuid.UUID
+    term_months: int = Field(ge=1, le=600)
+    montant: int  # francs CFA entiers ; le service refuse <= 0 (message clair)
+
+
+class SimulationDepotATerme(BaseModel):
+    journee_comptable: date
+    maturity_date: date
+    jours: int
+    interets_a_l_echeance: int
+    total_a_l_echeance: int
+    taux_bp: int
+    penalite_anticipee_bp: int
+    duree_min_mois: int
+    duree_max_mois: int
+
+
+class ResultatOuvertureDepotATerme(BaseModel):
+    compte: CompteEpargneResume
+    entry_number: str | None  # pièce du versement du capital
+    interets_a_l_echeance: int
+
+
 class CompteGuichet(BaseModel):
     """Ce que le caissier voit après recherche par numéro. Le NOM du membre est proéminent :
     c'est la vérification humaine contre une faute de frappe dans le numéro."""
@@ -69,6 +100,9 @@ class CompteGuichet(BaseModel):
     balance: int
     status: str
     is_provisional: bool
+    term_months: int | None = None
+    maturity_date: date | None = None
+    principal: int | None = None
 
 
 class OperationGuichet(BaseModel):

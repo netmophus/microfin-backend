@@ -14,6 +14,7 @@ principe que le score de risque des tiers : le cache est un reflet, l'historique
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ from app.modules.comptabilite.models import JournalEntry
 from app.modules.epargne import numerotation
 from app.modules.epargne.models import SavingsAccount, SavingsMovement
 from app.modules.epargne.operations import TYPE_CLOTURE, poser_ecriture_operation
+from app.modules.epargne.terme import ConditionsTerme
 
 
 class OuvertureError(Exception):
@@ -35,6 +37,11 @@ class MembreNonActifError(OuvertureError):
 
 class ProduitIntrouvableError(OuvertureError):
     """Produit d'épargne inexistant ou inactif."""
+
+
+class DepotATermeRequisError(OuvertureError):
+    """Un dépôt à terme ne s'ouvre pas comme un compte ordinaire : il naît avec sa durée et son
+    capital (`guichet.ouvrir_depot_a_terme`)."""
 
 
 class FermetureError(Exception):
@@ -73,6 +80,22 @@ def _statut_tier(db: Session, tier_id: uuid.UUID) -> str | None:
     ).scalar_one_or_none()
 
 
+def _champs_terme(conditions: ConditionsTerme | None) -> dict[str, Any]:
+    """Les huit colonnes de contrat d'un compte à terme (aucune pour un compte à vue)."""
+    if conditions is None:
+        return {}
+    return {
+        "term_months": conditions.term_months,
+        "term_start_date": conditions.term_start_date,
+        "maturity_date": conditions.maturity_date,
+        "principal": conditions.principal,
+        "taux_bp_contrat": conditions.taux_bp,
+        "penalite_bp_contrat": conditions.penalite_bp,
+        "base_jours_contrat": conditions.base_jours,
+        "regle_arrondi_contrat": conditions.regle_arrondi,
+    }
+
+
 def ouvrir_compte(
     db: Session,
     *,
@@ -80,11 +103,16 @@ def ouvrir_compte(
     product_id: uuid.UUID,
     agency_id: uuid.UUID,
     par: uuid.UUID | None,
+    conditions_terme: ConditionsTerme | None = None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> SavingsAccount:
     """Ouvre un compte d'épargne pour un membre ACTIF. Solde initial 0. Numéro atomique.
 
     Refuse (gate KYC) si le tiers n'est pas 'actif' : un prospect n'a pas de compte.
+
+    Un produit « terme » n'accepte QUE `conditions_terme` (posées ici, figées, immuables en base) ;
+    ces conditions sont refusées sur tout autre produit. Le capital se place dans la même
+    transaction (`guichet.ouvrir_depot_a_terme`) : jamais de compte à terme vide.
     """
     statut = _statut_tier(db, tier_id)
     if statut != "actif":
@@ -95,7 +123,7 @@ def ouvrir_compte(
 
     produit = db.execute(
         text(
-            "SELECT compte_epargne_id, compte_epargne_client_id FROM epargne.products "
+            "SELECT compte_epargne_id, compte_epargne_client_id, type FROM epargne.products "
             "WHERE id = :id AND is_active"
         ),
         {"id": product_id},
@@ -110,7 +138,14 @@ def ouvrir_compte(
     est_membre = db.execute(
         text("SELECT is_member FROM tiers.tiers WHERE id = :t"), {"t": tier_id}
     ).scalar_one()
-    compte_membre, compte_client = produit
+    compte_membre, compte_client, type_produit = produit
+    if (type_produit == "terme") != (conditions_terme is not None):
+        raise DepotATermeRequisError(
+            "Un dépôt à terme s'ouvre avec sa durée et son capital : utilisez l'ouverture d'un "
+            "dépôt à terme."
+            if type_produit == "terme"
+            else "Ce produit n'est pas un dépôt à terme : aucune durée à fixer."
+        )
     collectif = compte_membre if (est_membre or compte_client is None) else compte_client
 
     compte = SavingsAccount(
@@ -121,6 +156,7 @@ def ouvrir_compte(
         status="actif",
         balance=0,
         compte_collectif_id=collectif,
+        **_champs_terme(conditions_terme),
         opened_by=par,
         created_by=par,
         updated_by=par,
@@ -136,7 +172,19 @@ def ouvrir_compte(
         resource_type="epargne.account",
         resource_id=compte.id,
         agency_id=agency_id,
-        new_values={"account_number": compte.account_number, "tier_id": str(tier_id)},
+        new_values={
+            "account_number": compte.account_number,
+            "tier_id": str(tier_id),
+            **(
+                {
+                    "term_months": conditions_terme.term_months,
+                    "maturity_date": conditions_terme.maturity_date.isoformat(),
+                    "principal": conditions_terme.principal,
+                }
+                if conditions_terme is not None
+                else {}
+            ),
+        },
     )
     return compte
 

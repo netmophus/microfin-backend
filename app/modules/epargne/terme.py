@@ -10,12 +10,63 @@ caisse fermée) ne rapporte rien de plus.
 """
 
 import calendar
+import uuid
+from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+from sqlalchemy.orm import Session
+
+from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.epargne.interets import calculer_montant
+from app.modules.epargne.models import Product
 
 POINTS_DE_BASE = 10_000
+
+
+class DepotATermeError(Exception):
+    """Base des refus d'ouverture d'un dépôt à terme (message métier, en français)."""
+
+
+class ProduitATermeIntrouvableError(DepotATermeError):
+    """Produit inexistant, inactif, ou qui n'est pas un dépôt à terme."""
+
+
+class DureeInvalideError(DepotATermeError):
+    """Durée hors des bornes du produit, ou produit dont les durées ne sont pas paramétrées."""
+
+
+class CapitalInvalideError(DepotATermeError):
+    """Capital nul ou négatif."""
+
+
+@dataclass(frozen=True)
+class ConditionsTerme:
+    """Les conditions FIGÉES au contrat : posées une fois à l'ouverture, immuables en base."""
+
+    term_months: int
+    term_start_date: date
+    maturity_date: date
+    principal: int
+    taux_bp: int
+    penalite_bp: int
+    base_jours: int
+    regle_arrondi: str
+
+
+@dataclass(frozen=True)
+class SimulationTerme:
+    """Ce que l'agent montre au client avant de valider : l'échéance et les intérêts attendus."""
+
+    journee_comptable: date
+    maturity_date: date
+    jours: int
+    interets_a_l_echeance: int
+    total_a_l_echeance: int
+    taux_bp: int
+    penalite_anticipee_bp: int
+    duree_min_mois: int
+    duree_max_mois: int
 
 
 def ajouter_mois(depart: date, mois: int) -> date:
@@ -48,3 +99,73 @@ def penalite_sur_interets(interets_courus: int, penalite_bp: int) -> int:
         return 0
     brut = Decimal(interets_courus) * Decimal(penalite_bp) / Decimal(POINTS_DE_BASE)
     return min(int(brut.quantize(Decimal(1), rounding=ROUND_HALF_UP)), interets_courus)
+
+
+def conditions_du_contrat(
+    db: Session, product_id: uuid.UUID, term_months: int, montant: int
+) -> tuple[Product, ConditionsTerme]:
+    """Valide la demande d'ouverture et fige les conditions du contrat.
+
+    La journée de départ est la JOURNÉE comptable ouverte (jamais la date du poste) ; sans journée
+    ouverte, `AucuneJourneeOuverteError` remonte. Les quatre paramètres de calcul sont COPIÉS du
+    produit à cet instant : ils ne bougeront plus pour ce compte."""
+    produit = db.get(Product, product_id)
+    if produit is None or not produit.is_active or produit.type != "terme":
+        raise ProduitATermeIntrouvableError(
+            "Ce produit n'est pas un dépôt à terme disponible."
+        )
+    if produit.duree_min_mois is None or produit.duree_max_mois is None:
+        raise DureeInvalideError(
+            "Les durées de ce dépôt à terme ne sont pas encore paramétrées : "
+            "contactez l'administration fonctionnelle."
+        )
+    if not produit.duree_min_mois <= term_months <= produit.duree_max_mois:
+        raise DureeInvalideError(
+            f"Durée refusée : ce dépôt à terme se place de {produit.duree_min_mois} à "
+            f"{produit.duree_max_mois} mois."
+        )
+    if montant <= 0:
+        raise CapitalInvalideError("Montant invalide : saisissez un capital supérieur à zéro.")
+    depart = date_comptable_obligatoire(db)
+    return produit, ConditionsTerme(
+        term_months=term_months,
+        term_start_date=depart,
+        maturity_date=ajouter_mois(depart, term_months),
+        principal=montant,
+        taux_bp=produit.taux_bp,
+        penalite_bp=produit.penalite_anticipee_bp,
+        base_jours=produit.base_jours,
+        regle_arrondi=produit.regle_arrondi,
+    )
+
+
+def interets_du_contrat(conditions: ConditionsTerme) -> int:
+    """Intérêts bruts d'un placement conduit jusqu'à l'échéance : capital x taux x durée exacte
+    (échéance moins départ, en jours), avec les paramètres figés au contrat."""
+    jours = (conditions.maturity_date - conditions.term_start_date).days
+    return interets_du_terme(
+        conditions.principal, conditions.taux_bp, jours, conditions.base_jours,
+        conditions.regle_arrondi,
+    )
+
+
+def simuler(
+    db: Session, product_id: uuid.UUID, term_months: int, montant: int
+) -> SimulationTerme:
+    """Échéance et intérêts attendus d'un placement, SANS rien écrire : même validation et même
+    calcul que l'ouverture réelle."""
+    produit, conditions = conditions_du_contrat(db, product_id, term_months, montant)
+    assert produit.duree_min_mois is not None and produit.duree_max_mois is not None
+    jours = (conditions.maturity_date - conditions.term_start_date).days
+    interets = interets_du_contrat(conditions)
+    return SimulationTerme(
+        journee_comptable=conditions.term_start_date,
+        maturity_date=conditions.maturity_date,
+        jours=jours,
+        interets_a_l_echeance=interets,
+        total_a_l_echeance=conditions.principal + interets,
+        taux_bp=conditions.taux_bp,
+        penalite_anticipee_bp=conditions.penalite_bp,
+        duree_min_mois=produit.duree_min_mois,
+        duree_max_mois=produit.duree_max_mois,
+    )

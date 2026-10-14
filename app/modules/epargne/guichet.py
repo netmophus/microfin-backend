@@ -47,6 +47,7 @@ from app.modules.caisse.service import resoudre_session_active
 from app.modules.epargne import service
 from app.modules.epargne.models import Product, SavingsAccount, SavingsMovement
 from app.modules.epargne.operations import TYPE_DEPOT, TYPE_RETRAIT, poser_ecriture_operation
+from app.modules.epargne.terme import ConditionsTerme, conditions_du_contrat
 from app.modules.security.autorisation import UtilisateurCourant
 
 
@@ -81,6 +82,10 @@ class SoldeInsuffisantError(OperationError):
 
 class PremierDepotInsuffisantError(OperationError):
     """Le premier dépôt d'un compte jamais mouvementé est sous le minimum du produit."""
+
+
+class CompteATermeError(OperationError):
+    """Dépôt ou retrait ordinaire sur un dépôt à terme : il est bloqué jusqu'à l'échéance."""
 
 
 class ActionsAudit:
@@ -182,7 +187,7 @@ def _enregistrer_mouvement(
     db.flush()
 
 
-def _operer(
+def _operer_sans_commit(
     db: Session,
     courant: UtilisateurCourant,
     compte_id: uuid.UUID,
@@ -193,6 +198,7 @@ def _operer(
     signe: int,  # +1 dépôt, -1 retrait
     action_audit: str,
     contexte: ContexteRequete,
+    placement_initial: bool = False,
 ) -> ResultatOperation:
     """Tronc commun dépôt/retrait : verrou, contrôles, pièce + mouvement + solde, audit, commit.
 
@@ -202,6 +208,12 @@ def _operer(
     compte_caisse_id = resoudre_session_active(db, courant.user_id).compte_caisse_id
     compte = _charger_compte_verrou(db, courant, compte_id)
     _controler(db, compte, montant)
+    if compte.maturity_date is not None and not placement_initial:
+        raise CompteATermeError(
+            "Ce compte est un dépôt à terme, bloqué jusqu'au "
+            f"{compte.maturity_date.strftime('%d/%m/%Y')} : ni dépôt ni retrait ordinaire. "
+            "Utilisez le dénouement à l'échéance ou le retrait anticipé."
+        )
 
     produit = db.get(Product, compte.product_id)
     assert produit is not None  # FK garantit l'existence
@@ -260,8 +272,73 @@ def _operer(
             "piece": piece.entry_number,
         },
     )
-    db.commit()
     return ResultatOperation(compte.account_number, nouveau_solde, piece.entry_number)
+
+
+def _operer(
+    db: Session,
+    courant: UtilisateurCourant,
+    compte_id: uuid.UUID,
+    montant: int,
+    *,
+    code_operation: str,
+    sens: str,
+    signe: int,
+    action_audit: str,
+    contexte: ContexteRequete,
+) -> ResultatOperation:
+    """`_operer_sans_commit` + l'UNIQUE commit de la transaction de guichet."""
+    resultat = _operer_sans_commit(
+        db, courant, compte_id, montant,
+        code_operation=code_operation, sens=sens, signe=signe,
+        action_audit=action_audit, contexte=contexte,
+    )
+    db.commit()
+    return resultat
+
+
+@dataclass(frozen=True)
+class ResultatOuvertureDepotATerme:
+    """Reçu d'ouverture : le compte, le reçu du versement et les conditions figées."""
+
+    compte: SavingsAccount
+    versement: ResultatOperation
+    conditions: ConditionsTerme
+
+
+def ouvrir_depot_a_terme(
+    db: Session,
+    courant: UtilisateurCourant,
+    *,
+    tier_id: uuid.UUID,
+    agency_id: uuid.UUID,
+    product_id: uuid.UUID,
+    term_months: int,
+    montant: int,
+    contexte: ContexteRequete = CONTEXTE_VIDE,
+) -> ResultatOuvertureDepotATerme:
+    """Ouvre un dépôt à terme ET place le capital dans UNE transaction : jamais de compte à terme
+    vide. Durée choisie ici (dans les bornes du produit), échéance dérivée de la journée
+    comptable, conditions de calcul figées au contrat. Le capital entre en caisse comme un dépôt
+    (session de caisse ouverte exigée). Un seul commit, à la fin ; tout refus annule l'ensemble."""
+    resoudre_session_active(db, courant.user_id)
+    _, conditions = conditions_du_contrat(db, product_id, term_months, montant)
+    compte = service.ouvrir_compte(
+        db,
+        tier_id=tier_id,
+        product_id=product_id,
+        agency_id=agency_id,
+        par=courant.user_id,
+        conditions_terme=conditions,
+        contexte=contexte,
+    )
+    versement = _operer_sans_commit(
+        db, courant, compte.id, montant,
+        code_operation=TYPE_DEPOT, sens="credit", signe=+1,
+        action_audit=ActionsAudit.DEPOT, contexte=contexte, placement_initial=True,
+    )
+    db.commit()
+    return ResultatOuvertureDepotATerme(compte, versement, conditions)
 
 
 def deposer(
