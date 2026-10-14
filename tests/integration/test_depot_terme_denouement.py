@@ -89,7 +89,9 @@ class Cadre:
         uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
         self.caissier = UtilisateurCourant(
             user_id=uid, roles=("CAISSIER",),
-            permissions=frozenset({"epargne.operation.deposit", "epargne.operation.withdraw"}),
+            permissions=frozenset(
+                {"epargne.operation.deposit", "epargne.operation.withdraw", "epargne.dat.open"}
+            ),
             primary_agency_id=self.agence.id, agency_id=self.agence.id, voit_tout=True,
         )
         self.poste = Poste(

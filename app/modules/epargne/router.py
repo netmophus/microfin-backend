@@ -501,10 +501,11 @@ def ouvrir_compte_endpoint(
 @router.post("/epargne/depots-a-terme/simulation", response_model=SimulationDepotATerme)
 def simuler_depot_a_terme_endpoint(
     corps: DemandeDepotATerme,
-    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.open"))],
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.dat.open"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> SimulationDepotATerme:
-    """Échéance et intérêts attendus d'un placement, à montrer au client avant de valider. Ne
+    """Échéance et intérêts attendus d'un placement, à montrer au client avant de valider (guichet,
+    epargne.dat.open). Ne
     déplace aucun argent et n'écrit rien : mêmes contrôles et même calcul que l'ouverture."""
     try:
         simulation = simuler(db, corps.product_id, corps.term_months, corps.montant)
@@ -523,11 +524,13 @@ def ouvrir_depot_a_terme_endpoint(
     tier_id: uuid.UUID,
     corps: DemandeDepotATerme,
     request: Request,
-    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.account.open"))],
+    courant: Annotated[UtilisateurCourant, Depends(exige("epargne.dat.open"))],
     db: Annotated[Session, Depends(get_db)],
 ) -> ResultatOuvertureDepotATerme:
-    """Ouvre un dépôt à terme ET place le capital en une seule opération. Il faut les DEUX
-    droits : ouvrir un compte (KYC) et encaisser le capital (session de caisse ouverte)."""
+    """Ouvre un dépôt à terme ET place le capital en une seule opération, AU GUICHET. Il faut les
+    DEUX droits : ouvrir un dépôt à terme (epargne.dat.open) et encaisser le capital
+    (epargne.operation.deposit, avec une session de caisse ouverte : le capital entre dans la
+    caisse de CETTE session, comme un dépôt)."""
     agency_id = db.execute(
         select(Tier.primary_agency_id).where(
             Tier.id == tier_id,

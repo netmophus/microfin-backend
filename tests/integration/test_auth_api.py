@@ -405,6 +405,7 @@ def test_me_renvoie_l_identite_et_les_permissions(
             "epargne.product.read",
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
+            "epargne.dat.open",  # ouverture d'un dépôt à terme AU GUICHET (pas account.open)
             "tiers.read.basic",
             "tiers.shares.pay",
             "tiers.shares.read",

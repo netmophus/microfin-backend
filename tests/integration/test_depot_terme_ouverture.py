@@ -19,6 +19,7 @@ from app.modules.caisse.models import Poste, PosteAssignation
 from app.modules.caisse.service import ouvrir_session
 from app.modules.comptabilite import journee
 from app.modules.epargne import service
+from app.modules.epargne.guichet import OuvertureDepotATermeRefuseeError, ouvrir_depot_a_terme
 from app.modules.epargne.models import Product, SavingsAccount
 from app.modules.epargne.rapprochement import rapprocher
 from app.modules.epargne.terme import ajouter_mois, interets_du_terme
@@ -128,11 +129,13 @@ def _entete(db: Session, agence: Agency, role_code: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {jeton}"}
 
 
-def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) -> None:
+def _ouvrir_session_caisse(
+    db: Session, agence: Agency, entete: dict[str, str], code_poste: str = "01"
+) -> None:
     jeton = entete["Authorization"].removeprefix("Bearer ")
     user_id = decoder_access_token(jeton).sub
     poste = Poste(
-        agency_id=agence.id, code="01", libelle="Caisse principale",
+        agency_id=agence.id, code=code_poste, libelle="Caisse principale",
         compte_caisse_id=agence.compte_caisse_id,
     )
     db.add(poste)
@@ -150,16 +153,19 @@ def _ouvrir_session_caisse(db: Session, agence: Agency, entete: dict[str, str]) 
 
 
 class Cadre:
-    """Une agence, un membre actif, un produit DAT et un responsable avec sa session de caisse."""
+    """Une agence, un membre actif, un produit DAT, un CAISSIER (qui ouvre au guichet, avec sa
+    session de caisse) et un responsable (retrait anticipé, avec la sienne)."""
 
     def __init__(self, db: Session, code: str, *, session: bool = True) -> None:
         self.db = db
         self.agence = _agence(db, code)
         self.tier_id = _membre(db, self.agence)
         self.produit = _produit_dat(db)
+        self.caissier = _entete(db, self.agence, "CAISSIER")
         self.responsable = _entete(db, self.agence, "RESPONSABLE_AGENCE")
         if session:
-            _ouvrir_session_caisse(db, self.agence, self.responsable)
+            _ouvrir_session_caisse(db, self.agence, self.caissier, "01")
+        _ouvrir_session_caisse(db, self.agence, self.responsable, "02")
         courant = journee.date_comptable_courante(db)
         assert courant is not None
         self.journee: date = courant
@@ -170,7 +176,7 @@ class Cadre:
     def ouvrir(self, client: TestClient, **kw: int) -> object:
         return client.post(
             f"/tiers/{self.tier_id}/depots-a-terme", json=self.corps(**kw),
-            headers=self.responsable,
+            headers=self.caissier,
         )
 
 
@@ -328,12 +334,15 @@ def test_l_ouverture_ordinaire_refuse_un_produit_a_terme(client: TestClient, db:
 # --- Autorisation : il faut les DEUX droits (refus négatifs) --------------------------
 
 
-@pytest.mark.parametrize("role", ["CAISSIER", "CHARGE_CLIENTELE"])
-def test_il_faut_ouvrir_un_compte_et_encaisser(
+@pytest.mark.parametrize("role", ["CHARGE_CLIENTELE", "RESPONSABLE_AGENCE"])
+def test_sans_la_permission_dediee_l_ouverture_est_refusee(
     client: TestClient, db: Session, role: str
 ) -> None:
+    """Le chargé de clientèle ouvre des comptes mais n'encaisse pas ; le responsable d'agence a
+    account.open ET deposit, et même une session de caisse : sans epargne.dat.open, refus."""
     c = Cadre(db, f"DT-A{role[:3]}")
-    entete = _entete(db, c.agence, role)  # le caissier n'ouvre pas ; le chargé n'encaisse pas
+    entete = _entete(db, c.agence, role)
+    _ouvrir_session_caisse(db, c.agence, entete, "03")
 
     reponse = client.post(
         f"/tiers/{c.tier_id}/depots-a-terme", json=c.corps(), headers=entete
@@ -345,15 +354,74 @@ def test_il_faut_ouvrir_un_compte_et_encaisser(
     ).scalar_one() == 0
 
 
-def test_la_simulation_est_reservee_a_qui_ouvre_un_compte(
+def test_le_caissier_n_ouvre_toujours_pas_de_compte_ordinaire(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-A5")
+    produit_vue = _produit_dat(db, type_produit="a_vue")
+
+    reponse = client.post(
+        f"/tiers/{c.tier_id}/comptes-epargne", json={"product_id": str(produit_vue.id)},
+        headers=c.caissier,
+    )
+
+    assert reponse.status_code == 403
+
+
+def test_le_service_revérifie_la_permission_d_ouverture(db: Session) -> None:
+    """Défense en profondeur : même appelé hors route, le service refuse sans epargne.dat.open."""
+    c = Cadre(db, "DT-A6")
+    uid = db.execute(text("SELECT id FROM security.users LIMIT 1")).scalar_one()
+    sans_droit = UtilisateurCourant(
+        user_id=uid, roles=("CAISSIER",),
+        permissions=frozenset({"epargne.operation.deposit"}),
+        primary_agency_id=c.agence.id, agency_id=c.agence.id, voit_tout=True,
+    )
+
+    with pytest.raises(OuvertureDepotATermeRefuseeError, match="pas le droit d'ouvrir"):
+        ouvrir_depot_a_terme(
+            db, sans_droit, tier_id=c.tier_id, agency_id=c.agence.id,
+            product_id=c.produit.id, term_months=6, montant=MONTANT,
+        )
+
+
+def test_le_capital_entre_dans_la_caisse_de_la_session_du_caissier(
+    client: TestClient, db: Session
+) -> None:
+    c = Cadre(db, "DT-A7")
+    compte_caisse = db.execute(
+        text("SELECT compte_caisse_id FROM caisse.postes WHERE agency_id = :a AND code = '01'"),
+        {"a": c.agence.id},
+    ).scalar_one()
+
+    reponse = c.ouvrir(client)
+
+    assert reponse.status_code == 201, reponse.text
+    lignes = db.execute(
+        text(
+            "SELECT a.id, l.side, l.amount FROM comptabilite.journal_lines l "
+            "JOIN comptabilite.journal_entries e ON e.id = l.entry_id "
+            "JOIN comptabilite.accounts a ON a.id = l.account_id "
+            "WHERE e.entry_number = :n"
+        ),
+        {"n": reponse.json()["entry_number"]},
+    ).all()
+    assert (compte_caisse, "D", MONTANT) in [tuple(ligne) for ligne in lignes]
+    assert (_cid(db, "252111"), "C", MONTANT) in [tuple(ligne) for ligne in lignes]
+
+
+def test_la_simulation_est_reservee_a_qui_peut_ouvrir_un_depot_a_terme(
     client: TestClient, db: Session
 ) -> None:
     c = Cadre(db, "DT-A2")
-    entete = _entete(db, c.agence, "CAISSIER")
+    chargee = _entete(db, c.agence, "CHARGE_CLIENTELE")  # account.open, mais pas dat.open
 
     assert client.post(
-        "/epargne/depots-a-terme/simulation", json=c.corps(), headers=entete
+        "/epargne/depots-a-terme/simulation", json=c.corps(), headers=chargee
     ).status_code == 403
+    assert client.post(
+        "/epargne/depots-a-terme/simulation", json=c.corps(), headers=c.caissier
+    ).status_code == 200
 
 
 # --- Simulation ---------------------------------------------------------------------
@@ -366,7 +434,7 @@ def test_la_simulation_donne_l_echeance_et_les_interets_sans_rien_ecrire(
     avant = db.execute(text("SELECT count(*) FROM epargne.accounts")).scalar_one()
 
     reponse = client.post(
-        "/epargne/depots-a-terme/simulation", json=c.corps(mois=6), headers=c.responsable
+        "/epargne/depots-a-terme/simulation", json=c.corps(mois=6), headers=c.caissier
     )
 
     assert reponse.status_code == 200, reponse.text
@@ -388,7 +456,7 @@ def test_la_simulation_applique_les_memes_refus_que_l_ouverture(
     c = Cadre(db, "DT-S2")
 
     reponse = client.post(
-        "/epargne/depots-a-terme/simulation", json=c.corps(mois=1), headers=c.responsable
+        "/epargne/depots-a-terme/simulation", json=c.corps(mois=1), headers=c.caissier
     )
 
     assert reponse.status_code == 422

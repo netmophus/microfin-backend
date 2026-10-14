@@ -65,6 +65,8 @@ from app.modules.epargne.terme import (
 )
 from app.modules.security.autorisation import UtilisateurCourant
 
+OUVERTURE_DAT = "epargne.dat.open"
+
 
 def _fcfa(montant: int) -> str:
     """Formate un montant en francs, lisible par un caissier (et son client) : « 7 000 F »."""
@@ -101,6 +103,10 @@ class PremierDepotInsuffisantError(OperationError):
 
 class CompteATermeError(OperationError):
     """Dépôt ou retrait ordinaire sur un dépôt à terme : il est bloqué jusqu'à l'échéance."""
+
+
+class OuvertureDepotATermeRefuseeError(OperationError):
+    """L'acteur n'a pas le droit d'ouvrir un dépôt à terme (epargne.dat.open)."""
 
 
 class EcheanceNonAtteinteError(OperationError):
@@ -352,7 +358,15 @@ def ouvrir_depot_a_terme(
     """Ouvre un dépôt à terme ET place le capital dans UNE transaction : jamais de compte à terme
     vide. Durée choisie ici (dans les bornes du produit), échéance dérivée de la journée
     comptable, conditions de calcul figées au contrat. Le capital entre en caisse comme un dépôt
-    (session de caisse ouverte exigée). Un seul commit, à la fin ; tout refus annule l'ensemble."""
+    (session de caisse ouverte exigée) : sur la caisse de la session de l'acteur, jamais celle de
+    l'agence. Un seul commit, à la fin ; tout refus annule l'ensemble.
+
+    `epargne.dat.open` est revérifié ici en plus de la route : ce service ouvre un compte, il ne
+    doit pas dépendre du seul décorateur du routeur."""
+    if OUVERTURE_DAT not in courant.permissions:
+        raise OuvertureDepotATermeRefuseeError(
+            "Vous n'avez pas le droit d'ouvrir un dépôt à terme."
+        )
     resoudre_session_active(db, courant.user_id)
     _, conditions = conditions_du_contrat(db, product_id, term_months, montant)
     compte = service.ouvrir_compte(

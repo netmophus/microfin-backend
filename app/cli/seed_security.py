@@ -255,6 +255,15 @@ PERMISSIONS: tuple[Permission, ...] = (
     # courus) — acte de responsable, jamais du simple caissier (même logique que
     # tiers.shares.refund). Le dénouement à l'échéance, lui, est un acte de caisse normal et
     # réutilise epargne.operation.withdraw.
+    # Ouverture d'un dépôt à terme AU GUICHET : le caissier ouvre le compte et encaisse le capital
+    # dans une seule opération. Permission dédiée, volontairement distincte de
+    # epargne.account.open : le caissier garde l'interdiction d'ouvrir des comptes ORDINAIRES
+    # (acte de chargé de clientèle / responsable, avec le contrôle KYC qui l'accompagne).
+    Permission(
+        "epargne.dat.open",
+        "epargne",
+        "Ouvrir un dépôt à terme et encaisser son capital au guichet",
+    ),
     Permission(
         "epargne.dat.retrait_anticipe",
         "epargne",
@@ -442,6 +451,7 @@ MATRICE: dict[str, frozenset[str]] = {
             "epargne.product.read",
             "epargne.operation.deposit",
             "epargne.operation.withdraw",
+            "epargne.dat.open",
             "tiers.shares.pay",  # le caissier ENCAISSE la libération / le comptant (l'argent entre)
             "tiers.shares.read",
             "credit.remboursement.create",  # même logique : encaisser une échéance, l'argent entre
