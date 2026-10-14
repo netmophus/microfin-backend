@@ -21,7 +21,12 @@ from app.modules.epargne.gestion_produits import (
     modifier_produit,
 )
 from app.modules.epargne.models import Product, SavingsAccount
-from app.modules.epargne.operations import TYPE_DEPOT, poser_ecriture_operation
+from app.modules.epargne.operations import (
+    TYPE_DEPOT,
+    enregistrer_credit_externe,
+    enregistrer_debit_externe,
+    poser_ecriture_operation,
+)
 from app.modules.epargne.schemas import CreationProduitEpargne
 from app.modules.epargne.terme import (
     ajouter_mois,
@@ -329,3 +334,34 @@ def test_un_compte_a_vue_n_est_pas_concerne_par_le_blocage(db: Session) -> None:
     compte = _compte(db, _produit(db, "a_vue"))
     _mouvement(db, compte, "credit", "depot", 10_000, 10_000, date(2026, 1, 1))
     _mouvement(db, compte, "debit", "retrait", 4_000, 6_000, date(2026, 1, 2))
+
+
+# --- Le garde-fou applicatif MORD, et la base tient quand on le contourne ----------------
+
+
+@pytest.mark.integration
+def test_le_trigger_tient_si_le_garde_fou_applicatif_est_contourne(db: Session) -> None:
+    """Preuve que le blocage ne repose pas sur le seul refus applicatif : on appelle directement
+    les enregistrements externes (crédit de décaissement, débit de prélèvement), SANS passer par
+    `charger_compte_pour_credit_externe` ni `configurer_prelevement` — la base refuse."""
+    compte = _compte(db, _produit(db, "terme"), **CONDITIONS)
+    assert compte.est_a_terme
+    piece = poser_ecriture_operation(
+        db, compte, TYPE_DEPOT, 1_000, None, entry_date=date(2026, 1, 1)
+    ).id
+
+    with _refuse(db, "bloque jusqu"), db.begin_nested():
+        enregistrer_credit_externe(
+            db, compte, 1_000, operation_type="decaissement", label="essai",
+            journal_entry_id=piece, par=None,
+        )
+    with _refuse(db, "bloque jusqu"), db.begin_nested():
+        enregistrer_debit_externe(
+            db, compte, 1_000, operation_type="prelevement", label="essai",
+            journal_entry_id=piece, par=None,
+        )
+
+
+@pytest.mark.integration
+def test_un_compte_a_vue_n_est_pas_a_terme(db: Session) -> None:
+    assert not _compte(db, _produit(db, "a_vue")).est_a_terme

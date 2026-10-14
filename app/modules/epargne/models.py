@@ -176,6 +176,12 @@ class SavingsAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
 
+    @property
+    def est_a_terme(self) -> bool:
+        """Dépôt à terme : bloqué jusqu'à son échéance, il n'est ni créditable ni prélevable par un
+        autre module. Le trigger 0065 le garantit en base ; ce prédicat permet un refus clair."""
+        return self.maturity_date is not None
+
     def __repr__(self) -> str:
         return f"<SavingsAccount {self.account_number} {self.status} solde={self.balance}>"
 

@@ -363,9 +363,9 @@ def test_decaissement_epargne_compte_ferme_refuse(client: TestClient, db: Sessio
 
 
 def test_decaissement_epargne_compte_dat_refuse(client: TestClient, db: Session) -> None:
-    """Dette temporaire (voir docs/conformite-comptable.md) : aucun mécanisme de blocage
-    jusqu'à échéance n'existe pour un DAT — le créditer d'un décaissement n'a pas de sens
-    métier (fonds indisponibles au client). Refusé, pas une exclusion silencieuse."""
+    """Un dépôt à terme est bloqué jusqu'à son échéance : le créditer d'un décaissement n'a pas
+    de sens métier (fonds indisponibles au client). Refusé explicitement, pas une exclusion
+    silencieuse."""
     agence = _agence(db, "DEA5B")
     tier_id = _tier(db, agence)
     produit_credit = _produit_credit(db)

@@ -282,8 +282,7 @@ def test_configurer_prelevement_compte_ferme_refuse(db: Session) -> None:
 
 def test_configurer_prelevement_dat_refuse(db: Session) -> None:
     """Même raison que le décaissement crédité sur compte (charger_compte_pour_credit_externe) :
-    un DAT n'a aucun mécanisme de blocage dans ce module — le prélever romprait le blocage
-    prévu à terme."""
+    un dépôt à terme est bloqué jusqu'à son échéance, le prélever romprait ce blocage."""
     agence = _agence(db, "PRA4")
     tier_id = _tier(db, agence)
     produit_credit = _produit_credit(db)

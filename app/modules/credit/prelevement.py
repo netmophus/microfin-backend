@@ -96,13 +96,11 @@ def configurer_prelevement(
         raise CompteInvalideError(
             "Ce compte est fermé : il ne peut pas servir de compte de prélèvement."
         )
-    # DAT exclu — MÊME RAISON qu'au décaissement crédité sur compte (voir
-    # epargne.operations.charger_compte_pour_credit_externe) : un DAT n'a aucun mécanisme de
-    # blocage jusqu'à échéance dans ce module, le prélever romprait le blocage prévu à terme.
-    type_produit = db.execute(
-        select(SavingsProduct.type).where(SavingsProduct.id == compte.product_id)
-    ).scalar_one()
-    if type_produit == "terme":
+    # Un dépôt à terme est bloqué jusqu'à son échéance (trigger 0065) : le prélever est exclu,
+    # pour la même raison que le décaissement crédité sur compte (voir
+    # epargne.operations.charger_compte_pour_credit_externe). Refus explicite, pas une erreur
+    # brute de la base.
+    if compte.est_a_terme:
         raise CompteInvalideError(
             "Ce compte est un dépôt à terme : il ne peut pas servir de compte de prélèvement "
             "(le client ne pourrait pas en disposer librement)."

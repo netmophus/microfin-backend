@@ -9,36 +9,57 @@
 > redéploiement. Les valeurs livrées sont **provisoires**, marquées « À VALIDER » (drapeau
 > `is_provisional` en base + bannière à l'écran). Aucune n'est présentée comme définitive.
 
-## ⚠️ Chantier non démarré, nommé explicitement : blocage des DAT (dépôts à terme)
+## Dépôt à terme (DAT) — implémenté, valeurs à faire valider (14/10/2026)
 
-Le blocage des DAT (date d'échéance, contrôle au retrait, pénalité de sortie anticipée
-éventuelle) **n'a jamais été implémenté**. Un DAT est aujourd'hui **aussi liquide qu'un compte à
-vue** — `epargne.products.type` (`a_vue`/`terme`/`programmee`) n'est qu'une étiquette, sans
-aucune conséquence sur `retirer()` (`epargne/guichet.py`), qui ne contrôle que
-`min_balance`/`decouvert_autorise`, identique quel que soit le type. Il n'existe aucune colonne
-`maturity_date` sur `epargne.accounts`.
+Le DAT est un vrai produit : durée choisie à l'ouverture, blocage jusqu'à l'échéance, intérêts
+versés à l'échéance, retrait anticipé avec pénalité. Ancien chantier « blocage des DAT »
+(`DETTE TEMPORAIRE` du 05/08/2026) **purgé**.
 
-**Risque assumé et documenté, PAS corrigé par un filtre** (bien qu'un filtre équivalent existe
-ailleurs — voir plus bas) : bloquer le retrait au guichet par `type = 'terme'` créerait un
-**blocage permanent, sans mécanisme de déblocage**, faute de date d'échéance en base — rien ne
-dirait quand le lever. Ce serait remplacer le trou actuel par un incident pire (un client ne
-récupérerait plus jamais son épargne), pas une correction. Décision (05/08/2026) : ne pas
-toucher au guichet de retrait tant que le vrai mécanisme n'existe pas.
+**Règles métier arrêtées** (le banquier a tranché) :
+- **Ouverture et mise de fonds en une seule transaction** : jamais de compte à terme vide. La
+  durée (en mois) est choisie à l'ouverture, dans les bornes `duree_min_mois`/`duree_max_mois` du
+  produit ; l'échéance se dérive de la **journée comptable** d'ouverture (jamais de la date du
+  poste), avec bornage en fin de mois (31/01 + 1 mois = 28/02).
+- **Intérêts versés à l'échéance**, une seule fois, sur le capital placé et la durée exacte
+  (échéance moins départ, en jours), sans capitalisation. **Ils s'arrêtent à l'échéance** : un
+  dénouement tardif ne rapporte rien de plus.
+- **Retrait anticipé autorisé avec pénalité** : le client reçoit son capital **intact** + les
+  intérêts courus au prorata, diminués d'un pourcentage (`penalite_anticipee_bp`, en points de
+  base des intérêts courus). La pénalité ne dépasse jamais les intérêts courus. Aucun compte de
+  produit n'est nécessaire : la pénalité réduit simplement la charge d'intérêts.
+- **Conditions figées au contrat** (taux, pénalité, base de jours, règle d'arrondi) : un
+  changement du produit ne modifie jamais un DAT en cours, le calcul reste rejouable. Calcul en
+  Decimal pur puis arrondi au franc, archivé dans `epargne.interet_calculs` (période
+  `DENOUEMENT`, détail du mode, des jours, des intérêts courus et de la pénalité).
+- **Dénouement en espèces uniquement** (version 1). Le virement vers un compte à vue est hors
+  périmètre, à prévoir plus tard. **Renouvellement automatique : hors périmètre.**
+- **Permissions** : le dénouement à l'échéance est un acte de caisse normal
+  (`epargne.operation.withdraw`) ; le retrait anticipé coûte de l'argent au client et exige
+  `epargne.dat.retrait_anticipe` (RESPONSABLE_AGENCE).
 
-**Découvert le 05/08/2026** (chantier CR6d, sélecteur de décaissement de crédit) : le sélecteur
-qui propose un compte du tiers pour recevoir un décaissement exclut désormais les DAT — ce
-filtre-là est sûr (retire une option d'une liste, réversible, sans conséquence persistante sur
-le compte lui-même), contrairement à un filtre au retrait. Voir `docs/conformite-credit.md` §6.
+**Écritures** (modèles `epargne.denouement` et `epargne.retrait_anticipe`, provisoires, journal
+CA) : D 60252 / C 252xxx pour les intérêts (modèle `epargne.interet`), puis D 252xxx / C caisse
+pour le total versé. Le rattachement du produit vise 252111 (membres) / 252121 (clients) et la
+charge 60252, comme au seed.
 
-**Nécessite, avant tout code sur le mécanisme lui-même** :
-1. Une **décision réglementaire préalable** : y a-t-il une pénalité de sortie anticipée sur un
-   DAT selon le référentiel/les pratiques UEMOA/BCEAO ? Sans cette réponse, aucun contrôle ne
-   peut être écrit correctement.
-2. Une **migration** : colonne date d'échéance sur `epargne.accounts` (ou équivalent).
-3. Un **contrôle au retrait** : refus (ou pénalité) avant l'échéance, autorisé après.
+**Dernier rempart en base** (migration 0065) : conditions obligatoires sur un compte à terme et
+immuables ; type du produit figé dès qu'il porte des comptes ; sur un compte à terme, seuls sont
+admis le dépôt du capital (premier mouvement), un crédit d'intérêts, le dénouement (à partir de
+l'échéance) et le retrait anticipé (avant l'échéance), tous deux pour la totalité du solde.
 
-Chantier à part entière, avec sa propre analyse au moment de l'attaquer — pas une ligne de
-filtre glissée ailleurs.
+**Exclusions assumées** : un DAT ne reçoit pas de décaissement de crédit et ne peut pas servir de
+compte de prélèvement (refus explicite, `CompteInvalideError`) ; il ne figure pas dans le
+versement périodique des intérêts (refus, et absent de la liste de l'écran).
+
+### ⚠️ À faire valider par l'expert-comptable : intérêts courus non provisionnés
+
+Les intérêts d'un DAT sont **comptabilisés au dénouement** (D 60252 au moment du paiement). Un DAT
+à 12 mois qui chevauche deux exercices accumule des intérêts courus que le principe de
+rattachement des charges voudrait voir provisionnés à la clôture de l'exercice. **Ce n'est pas une
+dette introduite par le DAT** : c'est le chantier systémique « intérêts courus non provisionnés »
+déjà au backlog, qui dépend de la régularisation de fin d'exercice (pas encore construite). Cible
+comptable envisagée quand ce chantier sera fait : **2526 « Dettes rattachées »** (sous 252) —
+à valider par l'expert. Voir `a-solder-avant-deploiement`.
 
 ## Le plan de comptes — référentiel officiel RCSFD + extensions IMF
 

@@ -185,13 +185,13 @@ restreint le choix à un type de compte précis — les deux existent dans la pr
 éviter la manipulation d'espèces). **À confirmer avec l'expert si le sujet se pose
 formellement**, mais rien ici ne prétend appliquer une règle qui n'existe pas.
 
-**Exception temporaire — les DAT ('terme') sont exclus du sélecteur** (05/08/2026). Ce filtre
-exclut les DAT du sélecteur de décaissement en attendant un vrai mécanisme de blocage (date
-d'échéance, contrôle au retrait). Le jour où ce mécanisme existera, remplacer ce filtre par un
-vrai prédicat « compte disponible », pas une exclusion par type. Détail du chantier de fond
-(blocage DAT jamais implémenté dans le module Épargne) : voir `docs/conformite-comptable.md`.
-Refusé aux deux niveaux : `epargne/operations.py::charger_compte_pour_credit_externe` (serveur,
-`CompteInvalideError`) et le sélecteur frontend (le compte n'apparaît même pas dans la liste).
+**Les dépôts à terme (DAT) sont exclus du sélecteur** — règle métier, plus une exception
+temporaire. Un DAT est bloqué jusqu'à son échéance (migration 0065, voir
+`docs/conformite-comptable.md`) : y créditer un décaissement n'a pas de sens (le client ne pourrait
+pas en disposer). Refusé aux deux niveaux : `epargne/operations.py::charger_compte_pour_credit_externe`
+(serveur, `CompteInvalideError`, prédicat `SavingsAccount.est_a_terme`) et le sélecteur frontend
+(le compte n'apparaît même pas dans la liste). En dernier rempart, le trigger de base refuse tout
+crédit ordinaire sur un compte à terme.
 
 Traçabilité : `credit.applications.mode_decaissement` et `compte_destination_id` sont remplis
 dans **les deux cas** (miroir de `compte_credit_id` côté créance) — un contrôleur retrouve
