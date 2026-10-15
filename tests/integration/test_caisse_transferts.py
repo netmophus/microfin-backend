@@ -52,11 +52,13 @@ from app.modules.caisse.transferts import (
     DoubleRegardError,
     ResponsableCoffreRequisError,
     SessionCaissierRequiseError,
+    SoldeInsuffisantError,
     initier_transfert,
     receptionner_transfert,
 )
-from app.modules.comptabilite import journee
+from app.modules.comptabilite import ecritures, journee
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
+from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.jwt import creer_access_token
@@ -127,6 +129,33 @@ def _solde(db: Session, compte_id: uuid.UUID) -> int:
     ).scalar_one()
 
 
+FONDS_SOURCE = 10_000_000
+
+
+def alimenter_compte(
+    db: Session, compte_id: uuid.UUID, montant: int = FONDS_SOURCE, jour: object = None
+) -> None:
+    """Pose une pièce VALIDÉE D compte / C 1141 : depuis le contrôle de solde des transferts, une
+    source doit contenir au grand livre ce qu'on en envoie. Contrepartie 1141 (liaison) : peu
+    importe, seule la source est lue."""
+    journal_id = db.execute(
+        text("SELECT journal_id FROM comptabilite.entry_schemas WHERE code = :c"),
+        {"c": "caisse.transfert.envoi"},
+    ).scalar_one()
+    entree = ecritures.creer_brouillon(
+        db,
+        journal_id=journal_id,
+        entry_date=jour or journee.date_comptable_courante(db),  # type: ignore[arg-type]
+        description="Alimentation de test",
+        lignes=[
+            LigneSaisie(account_id=compte_id, side="D", amount=montant),
+            LigneSaisie(account_id=_cid(db, "1141"), side="C", amount=montant),
+        ],
+        par=None,
+    )
+    ecritures.valider(db, entree, None)
+
+
 def _lignes(db: Session, entry_id: uuid.UUID) -> list[tuple[str, int]]:
     return db.execute(
         text(
@@ -156,6 +185,7 @@ def poste(db: Session, agence: Agency) -> Poste:
     )
     db.add(poste)
     db.flush()
+    alimenter_compte(db, _cid(db, "101112"))
     return poste
 
 
@@ -167,6 +197,8 @@ def niveaux(db: Session, agence: Agency) -> None:
         NiveauCaisse(agency_id=agence.id, niveau="principale", compte_caisse_id=_cid(db, "101114"))
     )
     db.flush()
+    alimenter_compte(db, _cid(db, "101115"))
+    alimenter_compte(db, _cid(db, "101114"))
 
 
 @pytest.fixture
@@ -1357,3 +1389,168 @@ def test_api_dotation_principale_vers_secondaire_par_le_caissier_principal(
     assert reponse.json()["compte_source_number"] == "101114"
     assert _solde(db, transit) == avant[0] + 40_000  # D transit
     assert _solde(db, principale) == avant[1] - 40_000  # C principale
+
+
+# --- Contrôle du solde de la source (grand livre) --------------------------------------------
+
+
+def _nb_lignes(db: Session) -> int:
+    return db.execute(text("SELECT count(*) FROM comptabilite.journal_lines")).scalar_one()
+
+
+def test_envoi_superieur_au_solde_du_coffre_refuse_sans_aucun_mouvement(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    """Cas vécu : coffre à 3 150 000, envoi de 5 000 000 -> refus, rien n'est posté."""
+    envoyeur = _utilisateur(db, agence)
+    coffre = _cid(db, "101115")
+    disponible = int(_solde(db, coffre))
+    demande = disponible + 1_850_000
+    lignes_avant = _nb_lignes(db)
+    transferts_avant = db.execute(select(Transfert)).scalars().all()
+
+    with pytest.raises(SoldeInsuffisantError) as erreur:
+        initier_transfert(
+            db,
+            _courant(envoyeur, agence),
+            niveau_source="coffre",
+            niveau_destination="principale",
+            poste_id=None,
+            montant_envoye=demande,
+            motif="Trop gros",
+        )
+
+    def _f(n: int) -> str:
+        return f"{n:,}".replace(",", "\u00a0")
+
+    assert str(erreur.value) == (
+        f"Solde insuffisant sur le compte source : disponible {_f(disponible)} F, "
+        f"demandé {_f(demande)} F."
+    )
+    assert _solde(db, coffre) == disponible
+    assert _nb_lignes(db) == lignes_avant
+    assert db.execute(select(Transfert)).scalars().all() == transferts_avant
+
+
+def test_envoi_egal_au_solde_accepte_et_laisse_la_source_a_zero(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    envoyeur = _utilisateur(db, agence)
+    coffre = _cid(db, "101115")
+    disponible = int(_solde(db, coffre))
+
+    transfert = initier_transfert(
+        db,
+        _courant(envoyeur, agence),
+        niveau_source="coffre",
+        niveau_destination="principale",
+        poste_id=None,
+        montant_envoye=disponible,
+        motif="Tout le coffre",
+    )
+
+    assert transfert.statut == "en_transit"
+    assert _solde(db, coffre) == 0
+    with pytest.raises(SoldeInsuffisantError):  # plus rien à envoyer, même 1 F
+        initier_transfert(
+            db,
+            _courant(envoyeur, agence),
+            niveau_source="coffre",
+            niveau_destination="principale",
+            poste_id=None,
+            montant_envoye=1,
+            motif="Un franc de trop",
+        )
+
+
+def test_envoi_inferieur_au_solde_accepte(
+    db: Session, agence: Agency, niveaux: None, compte_transit_pose: CaisseParametres
+) -> None:
+    envoyeur = _utilisateur(db, agence)
+    coffre = _cid(db, "101115")
+    disponible = int(_solde(db, coffre))
+
+    initier_transfert(
+        db,
+        _courant(envoyeur, agence),
+        niveau_source="coffre",
+        niveau_destination="principale",
+        poste_id=None,
+        montant_envoye=disponible - 1,
+        motif="Presque tout",
+    )
+
+    assert _solde(db, coffre) == 1
+
+
+def test_solde_controle_aussi_pour_principale_et_secondaire_sources(
+    db: Session,
+    agence: Agency,
+    poste: Poste,
+    niveaux: None,
+    compte_transit_pose: CaisseParametres,
+) -> None:
+    principal = _utilisateur(db, agence)
+    _designer_principal(db, agence, principal)
+    dispo_principale = int(_solde(db, _cid(db, "101114")))
+    with pytest.raises(SoldeInsuffisantError):
+        initier_transfert(
+            db,
+            _courant(principal, agence),
+            niveau_source="principale",
+            niveau_destination="coffre",
+            poste_id=None,
+            montant_envoye=dispo_principale + 1,
+            motif="Trop",
+        )
+
+    caissier = _utilisateur(db, agence)
+    _session_ouverte(db, poste, caissier)
+    dispo_poste = int(_solde(db, _cid(db, "101112")))
+    with pytest.raises(SoldeInsuffisantError):
+        initier_transfert(
+            db,
+            _courant(caissier, agence),
+            niveau_source="secondaire",
+            niveau_destination="principale",
+            poste_id=poste.id,
+            montant_envoye=dispo_poste + 1,
+            motif="Trop",
+        )
+    initier_transfert(  # l'égalité passe aussi côté guichet
+        db,
+        _courant(caissier, agence),
+        niveau_source="secondaire",
+        niveau_destination="principale",
+        poste_id=poste.id,
+        montant_envoye=dispo_poste,
+        motif="Versement du guichet",
+    )
+
+
+def test_api_envoi_superieur_au_solde_422_message_humain(
+    client: TestClient,
+    db: Session,
+    agence: Agency,
+    niveaux: None,
+    compte_transit_pose: CaisseParametres,
+) -> None:
+    envoyeur = _utilisateur_avec_role(db, agence, "RESPONSABLE_AGENCE")
+    disponible = int(_solde(db, _cid(db, "101115")))
+
+    reponse = client.post(
+        "/caisse/transferts",
+        json={
+            "niveau_source": "coffre",
+            "niveau_destination": "principale",
+            "montant_envoye": disponible + 1,
+            "motif": "Trop gros (API)",
+        },
+        headers=_entete(envoyeur, agence, "RESPONSABLE_AGENCE"),
+    )
+
+    assert reponse.status_code == 422
+    detail = reponse.json()["detail"]
+    assert detail.startswith("Solde insuffisant sur le compte source : disponible")
+    # Le routeur annule la transaction à l'erreur : aucun transfert n'a été créé.
+    assert db.execute(select(Transfert)).scalars().all() == []

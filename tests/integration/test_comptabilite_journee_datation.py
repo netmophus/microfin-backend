@@ -49,6 +49,7 @@ from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 from app.modules.tiers.parts_operations import TYPE_SOUSCRIPTION_COMPTANT, poser_ecriture_parts
+from tests.integration.test_caisse_transferts import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -278,6 +279,7 @@ def test_transfert_porte_la_date_de_la_journee_a_lenvoi_et_a_la_reception(db: Se
     config.compte_ecart_transfert_manquant_id = _cid(db, "6099")
     config.compte_ecart_transfert_excedent_id = _cid(db, "7099")
     db.flush()
+    alimenter_compte(db, _cid(db, "101115"), jour=JOURNEE_DATE)
 
     s = uuid.uuid4().hex[:8]
     envoyeur = User(

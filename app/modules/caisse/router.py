@@ -948,6 +948,7 @@ def _traduire_transfert(erreur: Exception) -> HTTPException:
             transferts_caisse.CompteNonParametreError,
             transferts_caisse.SessionCaissierRequiseError,
             transferts_caisse.MontantInvalideError,
+            transferts_caisse.SoldeInsuffisantError,
             transferts_caisse.CompteTransitNonParametreError,
             transferts_caisse.CompteEcartTransfertNonParametreError,
             transferts_caisse.TransfertDejaReceptionneError,

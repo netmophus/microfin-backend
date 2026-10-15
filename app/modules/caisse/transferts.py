@@ -77,7 +77,7 @@ from app.modules.caisse.service import TAILLE_PAGE_DEFAUT, TAILLE_PAGE_MAX
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.journee import date_comptable_obligatoire
-from app.modules.comptabilite.models import Account, EntrySchema
+from app.modules.comptabilite.models import Account, EntrySchema, JournalEntry, JournalLine
 from app.modules.comptabilite.schemas_ecriture import (
     SchemaIntrouvableError,
     SchemaSansJournalError,
@@ -201,6 +201,16 @@ class MontantInvalideError(TransfertError):
     """Montant nul, négatif, ou non entier."""
 
 
+class SoldeInsuffisantError(TransfertError):
+    """Le montant demandé dépasse le solde du compte source au grand livre."""
+
+    def __init__(self, disponible: int, demande: int) -> None:
+        super().__init__(
+            "Solde insuffisant sur le compte source : "
+            f"disponible {_francs(disponible)} F, demandé {_francs(demande)} F."
+        )
+
+
 class CompteTransitNonParametreError(TransfertError):
     """Le compte de liaison (transit) n'est pas rattaché."""
 
@@ -239,6 +249,40 @@ class DoubleRegardError(TransfertError):
             "vous ne pouvez pas réceptionner un transfert que vous avez vous-même envoyé : "
             "un autre agent doit confirmer la réception."
         )
+
+
+def _francs(montant: int) -> str:
+    return f"{montant:,}".replace(",", "\u00a0")
+
+
+def _verifier_solde_source(db: Session, compte_source_id: uuid.UUID, montant: int) -> None:
+    """Refuse un envoi supérieur au solde du compte source AU GRAND LIVRE (écritures validées,
+    selon le sens normal du compte) — la vérité serveur, pas le théorique d'une session. Le
+    compte est verrouillé le temps de la transaction : deux envois simultanés ne peuvent pas
+    dépenser deux fois le même solde. L'égalité est acceptée."""
+    compte = db.execute(
+        select(Account).where(Account.id == compte_source_id).with_for_update()
+    ).scalar_one()
+    disponible = int(
+        db.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (JournalLine.side == compte.normal_side, JournalLine.amount),
+                            else_=-JournalLine.amount,
+                        )
+                    ),
+                    0,
+                )
+            )
+            .select_from(JournalLine)
+            .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+            .where(JournalLine.account_id == compte.id, JournalEntry.status == "validee")
+        ).scalar_one()
+    )
+    if montant > disponible:
+        raise SoldeInsuffisantError(disponible, montant)
 
 
 def _lire_parametres(db: Session) -> CaisseParametres | None:
@@ -394,6 +438,8 @@ def initier_transfert(
     if config is None or config.compte_transit_id is None:
         raise CompteTransitNonParametreError()
     compte_transit_id = config.compte_transit_id
+
+    _verifier_solde_source(db, compte_source_id, montant_envoye)
 
     def _resoudre_role(role: str) -> uuid.UUID:
         if role == "TRANSIT":
