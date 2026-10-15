@@ -41,7 +41,7 @@ TABLE DES ERREURS (un seul endroit) :
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -584,10 +584,12 @@ def apercu_echeancier_endpoint(
     application_id: uuid.UUID,
     courant: Annotated[UtilisateurCourant, Depends(exige("credit.demande.read"))],
     db: Annotated[Session, Depends(get_db)],
+    montant: Annotated[int | None, Query(gt=0)] = None,
 ) -> list[EcheanceApercuLigne]:
-    """Aperçu PUR de l'échéancier d'une demande approuvée — calcul, RIEN n'est écrit en base.
-    À présenter au client avant signature/décaissement : montants définitifs, dates
-    indicatives (voir decaissement.generer_apercu)."""
+    """Aperçu PUR de l'échéancier — calcul, RIEN n'est écrit en base. Demande approuvée : à
+    présenter au client avant signature/décaissement. Demande en instruction : simulation avant
+    décision, sur `montant` (le montant que le comité s'apprête à accorder) ou, à défaut, sur le
+    montant demandé. Montants définitifs, dates indicatives (voir decaissement.generer_apercu)."""
     ligne = consultation.lire_demande(db, courant, application_id)
     if ligne is None:
         raise HTTPException(
@@ -597,7 +599,7 @@ def apercu_echeancier_endpoint(
     assert demande is not None
 
     try:
-        echeances = generer_apercu(db, demande)
+        echeances = generer_apercu(db, demande, montant=montant)
     except (
         DemandeNonApprouveeError,
         ProduitIntrouvableError,

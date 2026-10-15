@@ -205,13 +205,83 @@ def test_apercu_disponible_des_que_approuve(client: TestClient, db: Session) -> 
     assert "status" not in lignes[0]  # rien à suivre pour un aperçu
 
 
-def test_apercu_refuse_si_pas_encore_approuve(client: TestClient, db: Session) -> None:
-    agence = _agence(db, "APA2")
-    tier_id = _tier(db, agence)
-    produit = _produit(db)
+def _demande_en_instruction(
+    db: Session, agence: Agency, tier_id: uuid.UUID, produit: Product, montant: int
+) -> uuid.UUID:
     demande = creer_demande(
         db, tier_id=tier_id, agency_id=agence.id, product_id=produit.id,
-        montant_demande=200000, duree_echeances=6, objet="Non décidée", par=None,
+        montant_demande=montant, duree_echeances=6, objet="Non décidée", par=None,
+    )
+    db.commit()
+    return demande.id
+
+
+def test_apercu_en_instruction_sur_le_montant_demande(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "APA2")
+    demande_id = _demande_en_instruction(db, agence, _tier(db, agence), _produit(db), 200000)
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    reponse = client.get(f"/credit/demandes/{demande_id}/echeancier-apercu", headers=responsable)
+
+    assert reponse.status_code == 200
+    lignes = reponse.json()
+    assert len(lignes) == 6
+    assert sum(ligne["capital"] for ligne in lignes) == 200000
+    assert lignes[-1]["capital_restant_du"] == 0
+
+
+def test_apercu_en_instruction_suit_le_montant_accorde_saisi(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "APA2B")
+    demande_id = _demande_en_instruction(db, agence, _tier(db, agence), _produit(db), 200000)
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    reponse = client.get(
+        f"/credit/demandes/{demande_id}/echeancier-apercu?montant=120000", headers=responsable
+    )
+
+    assert reponse.status_code == 200
+    assert sum(ligne["capital"] for ligne in reponse.json()) == 120000
+
+
+def test_apercu_en_instruction_refuse_un_montant_hors_bornes(
+    client: TestClient, db: Session
+) -> None:
+    agence = _agence(db, "APA2C")
+    demande_id = _demande_en_instruction(db, agence, _tier(db, agence), _produit(db), 200000)
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    au_dessus = client.get(
+        f"/credit/demandes/{demande_id}/echeancier-apercu?montant=200001", headers=responsable
+    )
+    nul = client.get(
+        f"/credit/demandes/{demande_id}/echeancier-apercu?montant=0", headers=responsable
+    )
+
+    assert au_dessus.status_code == 422 and "200000" in au_dessus.json()["detail"]
+    assert nul.status_code == 422
+
+
+def test_apercu_en_instruction_necrit_rien_en_base(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "APA2D")
+    demande_id = _demande_en_instruction(db, agence, _tier(db, agence), _produit(db), 200000)
+    responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
+
+    client.get(f"/credit/demandes/{demande_id}/echeancier-apercu", headers=responsable)
+
+    avant = db.execute(select(Installment).where(Installment.application_id == demande_id))
+    assert avant.scalars().all() == []
+
+
+def test_apercu_refuse_si_la_demande_est_refusee(client: TestClient, db: Session) -> None:
+    agence = _agence(db, "APA2E")
+    demande = creer_demande(
+        db, tier_id=_tier(db, agence), agency_id=agence.id, product_id=_produit(db).id,
+        montant_demande=200000, duree_echeances=6, objet="Refusée", par=None,
+    )
+    decider(
+        db, demande, decision="refuse", montant_decide=None, motif="Dossier incomplet", par=None
     )
     db.commit()
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
@@ -219,7 +289,7 @@ def test_apercu_refuse_si_pas_encore_approuve(client: TestClient, db: Session) -
     reponse = client.get(f"/credit/demandes/{demande.id}/echeancier-apercu", headers=responsable)
 
     assert reponse.status_code == 422
-    assert "approuv" in reponse.json()["detail"].lower()
+    assert "instruction" in reponse.json()["detail"].lower()
 
 
 def test_apercu_refuse_proprement_sans_journee_ouverte(client: TestClient, db: Session) -> None:

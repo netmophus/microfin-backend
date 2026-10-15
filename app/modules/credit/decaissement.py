@@ -308,8 +308,33 @@ def decaisser(
     return demande
 
 
-def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
-    """Aperçu PUR de l'échéancier d'une demande APPROUVÉE — même moteur que decaisser()
+def _montant_de_l_apercu(demande: Application, montant: int | None) -> int:
+    """Montant sur lequel porte l'aperçu. Demande approuvée : le montant accordé, figé. Demande
+    EN INSTRUCTION (avant la décision du comité) : `montant` s'il est fourni — le montant que le
+    comité s'apprête à accorder, jamais au-delà du montant demandé —, sinon le montant demandé."""
+    if demande.status == "approuve":
+        assert demande.montant_decide is not None
+        return demande.montant_decide
+    if demande.status != "en_instruction":
+        raise DemandeNonApprouveeError(
+            f"Cette demande ({demande.application_number}) n'est ni en instruction ni approuvée "
+            f"(statut={demande.status}) : aucun échéancier à prévisualiser."
+        )
+    if montant is None:
+        return demande.montant_demande
+    if montant <= 0 or montant > demande.montant_demande:
+        raise DemandeNonApprouveeError(
+            f"Le montant simulé doit être compris entre 1 et {demande.montant_demande} F "
+            "(le montant demandé)."
+        )
+    return montant
+
+
+def generer_apercu(
+    db: Session, demande: Application, *, montant: int | None = None
+) -> list[EcheanceApercu]:
+    """Aperçu PUR de l'échéancier d'une demande APPROUVÉE (ou EN INSTRUCTION : voir
+    _montant_de_l_apercu) — même moteur que decaisser()
     (generer_echeancier + _dater_echeances). RIEN N'EST ÉCRIT EN BASE : aucun db.add, aucun
     db.commit — juste deux lectures (produit, date de la journée comptable ouverte) et un
     calcul. À présenter au client avant signature/décaissement.
@@ -330,11 +355,7 @@ def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
     devenu indisponible. Peut lever EcheancierImpossibleError — même garde-fou qu'au
     décaissement, révélé PLUS TÔT (dès l'approbation, avant toute tentative réelle). Lève
     AucuneJourneeOuverteError si aucune journée n'est ouverte — propagée, pas absorbée."""
-    if demande.status != "approuve":
-        raise DemandeNonApprouveeError(
-            f"Cette demande ({demande.application_number}) n'est pas approuvée "
-            f"(statut={demande.status}) : aucun échéancier à prévisualiser."
-        )
+    montant_apercu = _montant_de_l_apercu(demande, montant)
 
     produit = db.get(Product, demande.product_id)
     if produit is None or not produit.is_active:
@@ -342,7 +363,7 @@ def generer_apercu(db: Session, demande: Application) -> list[EcheanceApercu]:
 
     jour = date_comptable_obligatoire(db)
     echeances = generer_echeancier(
-        montant=demande.montant_decide,
+        montant=montant_apercu,
         taux_bp=produit.taux_bp,
         duree_echeances=demande.duree_echeances,
         periodicite=produit.periodicite,
