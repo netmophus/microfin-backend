@@ -135,3 +135,26 @@ LIBELLES.update(
         "journal_vide": "Aucune écriture validée n'a été passée pendant cette journée.",
     }
 )
+
+# --- Arrêté de caisse (à chaque fermeture de session) --------------------------------------------
+LIBELLES.update(
+    {
+        "titre_arrete": "ARRÊTÉ DE CAISSE",
+        "numero_arrete": "Arrêté n° {numero}",
+        "arrete_agence": "Agence",
+        "arrete_compte": "Compte de caisse",
+        "arrete_journee": "Journée comptable de la session",
+        "arrete_caissier": "Caissier",
+        "arrete_ouverture": "Ouverture de session (heure réelle)",
+        "arrete_fermeture": "Fermeture de session (heure réelle)",
+        "arrete_fonds_initial": "Fonds initial",
+        "arrete_entrees": "Total des entrées",
+        "arrete_sorties": "Total des sorties",
+        "arrete_solde_theorique": "Solde théorique",
+        "arrete_montant_compte": "Montant compté à la fermeture",
+        "arrete_ecart": "Écart (compté \u2212 théorique)",
+        "arrete_motif": "Motif de l'écart",
+        "arrete_sans_motif": "Aucun motif saisi",
+        "arrete_solde_en_lettres": "Solde théorique arrêté à la somme de :",
+    }
+)

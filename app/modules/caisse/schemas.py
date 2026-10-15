@@ -5,6 +5,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.modules.documents.schemas import DocumentRef
+
 
 class OuvertureSession(BaseModel):
     """Fonds initial compté PHYSIQUEMENT par le caissier à l'ouverture. `poste_id` TOUJOURS
@@ -65,6 +67,9 @@ class SessionCaisse(BaseModel):
     valide_le: datetime | None
     valide_par_nom: str | None
     a_valider: bool
+    # Arrêté de caisse de la session (session fermée) : de quoi le télécharger, ou le régénérer
+    # s'il est en échec. None tant que la session est ouverte.
+    arrete: DocumentRef | None = None
 
 
 class LigneSessionManquante(BaseModel):

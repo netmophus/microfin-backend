@@ -273,27 +273,20 @@ def _charger_session_de_lacteur(
     return session
 
 
-def calculer_solde_theorique(
+def calculer_mouvements(
     db: Session, session: CaisseSession, *, jusqu_a: datetime | None = None
-) -> int:
-    """fonds_initial + Σ mouvements de caisse VALIDÉS du CAISSIER de cette session, sur son
-    compte de caisse ancré, entre l'ouverture et `jusqu_a` (par défaut : maintenant — utile pour
-    un aperçu en cours de session, avant toute fermeture).
-
-    Calcul PUR sur les écritures déjà postées (`journal_entries.status = 'validee'`) — même
-    discipline que `epargne.rapprochement.rapprocher()` : jamais un solde stocké qu'on relirait,
-    toujours recalculable à l'identique tant que les écritures (immuables) n'ont pas changé.
-
-    101111 (Caisse) est de sens NORMAL DÉBITEUR : un dépôt (D CAISSE) l'augmente, un retrait
-    (C CAISSE) le diminue — solde = Σ débits - Σ crédits, PAS l'inverse de `rapprocher()` (qui
-    rapproche un compte de sens créditeur, une dette envers les membres)."""
+) -> tuple[int, int]:
+    """(entrées, sorties) de la session : Σ débits et Σ crédits des mouvements de caisse VALIDÉS
+    du caissier, sur son compte de caisse ancré, entre l'ouverture et `jusqu_a` (par défaut :
+    maintenant). SOURCE UNIQUE du solde théorique affiché à l'écran et de l'arrêté de caisse."""
     borne = jusqu_a
     if borne is None:
         borne = db.execute(text("SELECT NOW()")).scalar_one()
 
-    mouvements = db.execute(
+    entrees, sorties = db.execute(
         text(
-            "SELECT COALESCE(SUM(CASE WHEN jl.side = 'D' THEN jl.amount ELSE -jl.amount END), 0) "
+            "SELECT COALESCE(SUM(CASE WHEN jl.side = 'D' THEN jl.amount ELSE 0 END), 0), "
+            "COALESCE(SUM(CASE WHEN jl.side = 'C' THEN jl.amount ELSE 0 END), 0) "
             "FROM comptabilite.journal_lines jl "
             "JOIN comptabilite.journal_entries je ON je.id = jl.entry_id "
             "WHERE jl.account_id = :compte "
@@ -308,8 +301,26 @@ def calculer_solde_theorique(
             "ouverture": session.opened_at,
             "borne": borne,
         },
-    ).scalar_one()
-    return session.fonds_initial + int(mouvements)
+    ).one()
+    return int(entrees), int(sorties)
+
+
+def calculer_solde_theorique(
+    db: Session, session: CaisseSession, *, jusqu_a: datetime | None = None
+) -> int:
+    """fonds_initial + Σ mouvements de caisse VALIDÉS du CAISSIER de cette session, sur son
+    compte de caisse ancré, entre l'ouverture et `jusqu_a` (par défaut : maintenant — utile pour
+    un aperçu en cours de session, avant toute fermeture).
+
+    Calcul PUR sur les écritures déjà postées (`journal_entries.status = 'validee'`) — même
+    discipline que `epargne.rapprochement.rapprocher()` : jamais un solde stocké qu'on relirait,
+    toujours recalculable à l'identique tant que les écritures (immuables) n'ont pas changé.
+
+    101111 (Caisse) est de sens NORMAL DÉBITEUR : un dépôt (D CAISSE) l'augmente, un retrait
+    (C CAISSE) le diminue — solde = Σ débits - Σ crédits, PAS l'inverse de `rapprocher()` (qui
+    rapproche un compte de sens créditeur, une dette envers les membres)."""
+    entrees, sorties = calculer_mouvements(db, session, jusqu_a=jusqu_a)
+    return session.fonds_initial + entrees - sorties
 
 
 @dataclass(frozen=True)

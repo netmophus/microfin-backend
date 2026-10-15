@@ -78,3 +78,16 @@ class Archive(Base):
 
     def __repr__(self) -> str:
         return f"<Archive {self.type} {self.cle_naturelle} {self.statut}>"
+
+
+class Numerotation(Base):
+    """Compteur des numéros de pièce propres aux documents (ex. arrêté de caisse AC-2026-000001),
+    par préfixe et par année de journée comptable (migration 0068). Même mécanisme que la
+    numérotation des pièces comptables : une seule instruction sous verrou de ligne."""
+
+    __tablename__ = "numerotation"
+    __table_args__: tuple[Any, ...] = ({"schema": "documents"},)
+
+    prefixe: Mapped[str] = mapped_column(sa.String(10), primary_key=True)
+    annee: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
+    last_value: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)

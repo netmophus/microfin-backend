@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     IMF_ADRESSE: str = ""
     IMF_TELEPHONE: str = ""
     IMF_NUMERO_AGREMENT: str = ""
+    # Fuseau d'AFFICHAGE des heures réelles (ouverture/fermeture de session) sur les documents.
+    # Les horodatages sont stockés en UTC ; ce réglage ne sert qu'à les écrire à l'heure locale.
+    # Défaut : Niger. DÉPLOIEMENT : à changer pour une institution d'un autre fuseau.
+    FUSEAU_HORAIRE_DOCUMENTS: str = "Africa/Niamey"
 
     # ARCHIVE des documents générés par le serveur (reçus, bons, états : PDF/A, jamais supprimés).
     # Chemin ABSOLU. Obligatoire hors dev : un dossier par défaut en production laisserait des

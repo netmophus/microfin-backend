@@ -173,6 +173,8 @@ TABLES_ATTENDUES = frozenset(
         "epargne.interet_calculs",
         # Documents — index immuable des documents archivés par le serveur (migration 0067).
         "documents.archives",
+        # Documents — compteur des numéros de pièce (arrêté de caisse) (migration 0068).
+        "documents.numerotation",
         # Tiers PS1 — parts sociales : config, solde, registre append-only (migration 0026).
         "tiers.share_parameters",
         "tiers.member_shares",

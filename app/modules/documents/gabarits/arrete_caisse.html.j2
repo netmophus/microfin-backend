@@ -1,0 +1,39 @@
+{% extends "base.html.j2" %}
+{# Arrêté de caisse : un seul exemplaire, signé du caissier. Tous les montants et textes viennent
+   du contexte construit par arretes.py : aucune règle métier dans le gabarit. #}
+{% block corps scoped %}
+<table class="lignes">
+  <tr><td>{{ libelles.arrete_agence }}</td><td class="valeur">{{ agence_session }} ({{ agence.code }})</td></tr>
+  <tr><td>{{ libelles.arrete_compte }}</td><td class="valeur"><span class="nombre">{{ compte_caisse }}</span></td></tr>
+  <tr><td>{{ libelles.arrete_journee }}</td><td class="valeur"><span class="nombre">{{ journee_session }}</span></td></tr>
+  <tr><td>{{ libelles.arrete_caissier }}</td><td class="valeur">{{ caissier }}</td></tr>
+  <tr><td>{{ libelles.arrete_ouverture }}</td><td class="valeur"><span class="nombre">{{ ouverture_reelle }}</span></td></tr>
+  <tr><td>{{ libelles.arrete_fermeture }}</td><td class="valeur"><span class="nombre">{{ fermeture_reelle }}</span></td></tr>
+</table>
+<table class="lignes">
+  <tr><td>{{ libelles.arrete_fonds_initial }}</td><td class="valeur"><span class="nombre">{{ fonds_initial_affiche }}</span></td></tr>
+  <tr><td>{{ libelles.arrete_entrees }}</td><td class="valeur"><span class="nombre">{{ entrees_affiche }}</span></td></tr>
+  <tr><td>{{ libelles.arrete_sorties }}</td><td class="valeur"><span class="nombre">{{ sorties_affiche }}</span></td></tr>
+  <tr class="total"><td>{{ libelles.arrete_solde_theorique }}</td><td class="valeur"><span class="nombre">{{ solde_theorique_affiche }}</span></td></tr>
+  <tr><td>{{ libelles.arrete_montant_compte }}</td><td class="valeur"><span class="nombre">{{ montant_compte_affiche }}</span></td></tr>
+  <tr class="total"><td>{{ libelles.arrete_ecart }}</td><td class="valeur"><span class="nombre">{{ ecart_affiche }}</span></td></tr>
+  {% if ecart != 0 %}
+  <tr><td>{{ libelles.arrete_motif }}</td><td class="valeur">{{ motif_ecart or libelles.arrete_sans_motif }}</td></tr>
+  {% endif %}
+</table>
+{% if solde_theorique >= 0 %}
+<p>{{ libelles.arrete_solde_en_lettres }} {{ solde_theorique | montant_en_lettres }}.</p>
+{% endif %}
+{% endblock %}
+{% block signatures scoped %}
+<table class="duo signatures">
+  <tr>
+    <td class="zone">
+      <p>{{ libelles.signature_caissier }}</p>
+      <div class="ligne"></div>
+    </td>
+    <td class="espace"></td>
+    <td class="espace"></td>
+  </tr>
+</table>
+{% endblock %}

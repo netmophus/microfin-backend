@@ -129,7 +129,8 @@ from app.modules.caisse.service import (
 from app.modules.comptabilite.comptes import CompteHorsCaisseError, CompteInvalideRattachementError
 from app.modules.comptabilite.journee import AucuneJourneeOuverteError
 from app.modules.comptabilite.models import Account
-from app.modules.documents import lettres
+from app.modules.documents import arretes, lettres
+from app.modules.documents.recus import reference_de
 from app.modules.documents.schemas import DocumentRef
 from app.modules.documents.service import nom_de_fichier
 from app.modules.parameters.models import Agency
@@ -190,6 +191,11 @@ def _vers_schema(db: Session, session: CaisseSession) -> SessionCaisse:
         valide_le=session.valide_le,
         valide_par_nom=valide_par_nom,
         a_valider=session_a_valider(session, seuil),
+        arrete=(
+            reference_de(arretes.dernier_arrete(db, str(session.id)))
+            if session.status == "fermee"
+            else None
+        ),
     )
 
 
@@ -410,6 +416,11 @@ def fermer_session_endpoint(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
         ) from None
+    # L'arrêté de caisse se génère APRÈS le commit de la fermeture : un échec de rendu ne défait
+    # jamais une fermeture déjà actée (il est tracé, et se régénère).
+    arretes.archiver_arrete(
+        db, _vers_schema(db, resultat.session), contexte_requete=_contexte(request)
+    )
     return _vers_schema(db, resultat.session)
 
 

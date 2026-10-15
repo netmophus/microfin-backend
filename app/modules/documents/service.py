@@ -54,6 +54,7 @@ GABARIT_DU_TYPE: dict[str, str] = {
     "recu_parts_liberation": "recu.html.j2",
     "recu_parts_remboursement": "recu.html.j2",
     "lettre_explication_ecart": "lettre_explication.html.j2",
+    "arrete_caisse": "arrete_caisse.html.j2",
     "journal_du_jour": "journal_du_jour.html.j2",
     "balance_du_jour": "balance_du_jour.html.j2",
 }
