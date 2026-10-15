@@ -70,6 +70,7 @@ def creer_produit(
     methode_amortissement: str,
     regle_arrondi: str,
     taux_usure_max_bp: int | None,
+    taux_tva_bp: int,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Product:
@@ -99,6 +100,7 @@ def creer_produit(
         methode_amortissement=methode_amortissement,
         regle_arrondi=regle_arrondi,
         taux_usure_max_bp=taux_usure_max_bp,
+        taux_tva_bp=taux_tva_bp,
         created_by=par,
         updated_by=par,
     )
@@ -112,7 +114,12 @@ def creer_produit(
         acteur_id=par,
         resource_type=RESSOURCE,
         resource_id=produit.id,
-        new_values={"code": code, "name": name, "taux_bp": taux_bp},
+        new_values={
+            "code": code,
+            "name": name,
+            "taux_bp": taux_bp,
+            "taux_tva_bp": taux_tva_bp,
+        },
     )
     return produit
 
@@ -127,13 +134,15 @@ def modifier_produit(
     methode_amortissement: str,
     regle_arrondi: str,
     taux_usure_max_bp: int | None,
+    taux_tva_bp: int | None = None,
     motif: str,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Product:
-    """Remplace les champs MÉTIER (nom, taux, amortissement) — jamais les comptes rattachés.
-    MOTIF obligatoire, tracé avant/après. Ne touche pas à `is_active`/`is_provisional` ni à
-    `base_jours` (GELÉ, jamais modifiable — voir `creer_produit`)."""
+    """Remplace les champs MÉTIER (nom, taux, amortissement, TVA) — jamais les comptes
+    rattachés. `taux_tva_bp` à None = inchangé. MOTIF obligatoire, tracé avant/après. Ne touche
+    pas à `is_active`/`is_provisional` ni à `base_jours` (GELÉ, jamais modifiable — voir
+    `creer_produit`)."""
     _verifier_taux_usure(taux_bp, taux_usure_max_bp)
 
     avant = {
@@ -143,6 +152,7 @@ def modifier_produit(
         "methode_amortissement": produit.methode_amortissement,
         "regle_arrondi": produit.regle_arrondi,
         "taux_usure_max_bp": produit.taux_usure_max_bp,
+        "taux_tva_bp": produit.taux_tva_bp,
     }
 
     produit.name = name
@@ -151,6 +161,8 @@ def modifier_produit(
     produit.methode_amortissement = methode_amortissement
     produit.regle_arrondi = regle_arrondi
     produit.taux_usure_max_bp = taux_usure_max_bp
+    if taux_tva_bp is not None:
+        produit.taux_tva_bp = taux_tva_bp
     produit.updated_by = par
     db.flush()
 
@@ -169,6 +181,7 @@ def modifier_produit(
             "methode_amortissement": methode_amortissement,
             "regle_arrondi": regle_arrondi,
             "taux_usure_max_bp": taux_usure_max_bp,
+            "taux_tva_bp": produit.taux_tva_bp,
             "motif": motif,
         },
     )
@@ -185,6 +198,8 @@ def valider_produit(
     """Lève `is_provisional` — GARDE-FOU STRICT (décidé pour le crédit, plus large que
     l'épargne) :
       - refuse si `compte_credit_membre_id` absent (le minimum indispensable) ;
+      - refuse si `taux_tva_bp > 0` ET `compte_tva_id` absent — la TVA ne pourrait pas être
+        collectée au premier remboursement (aucun compte TVA requis si le taux est 0) ;
       - refuse AUSSI si `taux_bp > 0` ET `compte_produits_interets_id` absent — un produit à
         taux non nul sans ce rattachement échouera au premier remboursement portant une part
         d'intérêts (`remboursement.py`), un piège silencieux que le garde-fou épargne (taux
@@ -202,6 +217,13 @@ def valider_produit(
             "Impossible de valider ce produit : le taux est non nul mais aucun compte de "
             "produits d'intérêts n'est rattaché — le premier remboursement portant une part "
             "d'intérêts échouerait (voir l'écran de rattachement comptable)."
+        )
+
+    if produit.taux_tva_bp > 0 and produit.compte_tva_id is None:
+        raise ComptesNonRattachesError(
+            "Impossible de valider ce produit : un taux de TVA est paramétré mais aucun compte "
+            "de TVA collectée n'est rattaché — la TVA ne pourrait pas être collectée au "
+            "remboursement (voir l'écran de rattachement comptable)."
         )
 
     avertissements: list[str] = []

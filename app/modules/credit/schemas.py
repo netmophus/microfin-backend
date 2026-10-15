@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+TAUX_TVA_DEFAUT_BP = 1900  # 19 % : défaut applicatif à la création d'un nouveau produit
+
 # --- Gestion du référentiel produit (création, modification, validation, activation) ------
 # Distinct des rattachements comptables / paramètres d'intérêt (à venir, lot 3b) : ici, le
 # CYCLE DE VIE du produit lui-même — credit.product.manage (ADMIN_FONCTIONNEL). Même patron
@@ -35,6 +37,7 @@ class ProduitCreditDetail(BaseModel):
     base_jours: int
     regle_arrondi: str
     taux_usure_max_bp: int | None
+    taux_tva_bp: int
 
 
 class CreationProduitCredit(BaseModel):
@@ -56,6 +59,9 @@ class CreationProduitCredit(BaseModel):
     methode_amortissement: Literal["capital_constant", "echeance_constante"] = "echeance_constante"
     regle_arrondi: Literal["plus_proche", "plancher"] = "plus_proche"
     taux_usure_max_bp: int | None = Field(default=None, ge=0, le=10000)
+    # TVA sur les intérêts, en points de base. 1900 = 19 % : défaut applicatif d'un NOUVEAU
+    # produit ; 0 = produit exonéré (migration 0069 : les produits existants valent 0).
+    taux_tva_bp: int = Field(default=TAUX_TVA_DEFAUT_BP, ge=0, le=10000)
 
 
 class ModificationProduitCredit(BaseModel):
@@ -76,6 +82,8 @@ class ModificationProduitCredit(BaseModel):
     methode_amortissement: Literal["capital_constant", "echeance_constante"]
     regle_arrondi: Literal["plus_proche", "plancher"]
     taux_usure_max_bp: int | None = Field(default=None, ge=0, le=10000)
+    # None = taux de TVA inchangé (les clients antérieurs à la TVA ne l'envoient pas).
+    taux_tva_bp: int | None = Field(default=None, ge=0, le=10000)
     motif: str = Field(min_length=3, max_length=500)
 
 
@@ -113,15 +121,17 @@ class RattachementsProduitCredit(BaseModel):
     compte_credit_membre: CompteRattachement | None
     compte_credit_client: CompteRattachement | None
     compte_produits_interets: CompteRattachement | None
+    compte_tva: CompteRattachement | None
 
 
 class ModificationRattachementsProduitCredit(BaseModel):
-    """Les 3 rattachements TOUJOURS fournis ensemble — l'écran soumet l'état complet de ses 3
+    """Les 4 rattachements TOUJOURS fournis ensemble — l'écran soumet l'état complet de ses 4
     sélecteurs à chaque enregistrement, même discipline que l'épargne."""
 
     compte_credit_membre: str | None
     compte_credit_client: str | None
     compte_produits_interets: str | None
+    compte_tva: str | None
     motif: str = Field(min_length=3, max_length=500)
 
 
@@ -203,7 +213,8 @@ class EcheanceLigne(BaseModel):
     due_date: date
     capital: int
     interets: int
-    total: int
+    tva: int
+    total: int  # TTC : capital + intérêts + TVA
     capital_restant_du: int
     status: str
     montant_paye: int
@@ -218,7 +229,8 @@ class EcheanceApercuLigne(BaseModel):
     due_date: date
     capital: int
     interets: int
-    total: int
+    tva: int
+    total: int  # TTC : capital + intérêts + TVA
     capital_restant_du: int
 
 
@@ -231,6 +243,7 @@ class EcheanceDue(BaseModel):
     due_date: date
     capital: int
     interets: int
+    tva: int
     total: int
     montant_paye: int
     solde_du: int
@@ -262,6 +275,7 @@ class RemboursementRecu(BaseModel):
     due_date: date
     capital: int
     interets: int
+    tva: int
     montant_total: int
     paid_at: datetime
     solde_du: int
@@ -276,6 +290,7 @@ class ApercuSoldeAnticipe(BaseModel):
 
     capital_restant: int
     interets_courus: int
+    tva_courue: int
     montant_total: int
     date_reference_interets: date
     jours_courus: int
@@ -286,6 +301,7 @@ class SoldeAnticipeRecu(BaseModel):
 
     capital_regle: int
     interets_courus: int
+    tva_courue: int
     montant_total: int
     jours_courus: int
     solde_at: datetime

@@ -83,6 +83,14 @@ class Product(Base):
     # MÉTIER (taux d'usure BCEAO par produit), jamais codée en dur ; revérifiée par le service
     # à la création/modification, pas un CHECK SQL (voir gestion_produits.py).
     taux_usure_max_bp: Mapped[int | None] = mapped_column(sa.Integer)
+    # TVA sur les INTÉRÊTS (migration 0069) : points de base, 0 = produit exonéré. Le capital
+    # n'est jamais taxé. Le défaut de 19 % n'est appliqué qu'à la création d'un nouveau produit
+    # (API) ; les produits antérieurs à 0069 valent 0.
+    taux_tva_bp: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, server_default=sa.text("0")
+    )
+    # Compte d'État « TVA collectée à reverser » (332100). Exigé à la validation si taux > 0.
+    compte_tva_id: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_ACCOUNT))
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID, sa.ForeignKey(FK_USER))
     updated_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=NOW)
@@ -222,6 +230,9 @@ class Installment(Base):
     due_date: Mapped[date] = mapped_column(sa.Date, nullable=False)
     capital: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     interets: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    # TVA sur les intérêts de l'échéance (migration 0069). `total` est le total TTC :
+    # capital + intérêts + TVA.
+    tva: Mapped[int] = mapped_column(sa.BigInteger, nullable=False, server_default=sa.text("0"))
     total: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     capital_restant_du: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(
@@ -265,6 +276,10 @@ class Repayment(Base):
     )
     montant_capital: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     montant_interets: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
+    # TVA encaissée par CE versement (migration 0069) : montant_total = capital + intérêts + TVA.
+    montant_tva: Mapped[int] = mapped_column(
+        sa.BigInteger, nullable=False, server_default=sa.text("0")
+    )
     montant_total: Mapped[int] = mapped_column(sa.BigInteger, nullable=False)
     entry_id: Mapped[uuid.UUID] = mapped_column(
         UUID, sa.ForeignKey("comptabilite.journal_entries.id"), nullable=False

@@ -159,6 +159,7 @@
 331;Débiteurs divers;3;D;FALSE;BILAN;ACTIF;Debiteurs divers
 3319;Autres créances en souffrance et provisions pour dépréciation;3;D;TRUE;BILAN;ACTIF;Debiteurs divers
 332;Créditeurs divers;3;C;TRUE;BILAN;PASSIF;Crediteurs divers
+332100;État, TVA collectée à reverser;3;C;TRUE;BILAN;PASSIF;Crediteurs divers
 37;COMPTES TRANSITOIRES ET D'ATTENTE;3;D;FALSE;BILAN;ACTIF;Comptes transitoires et d'attente - actif
 378;Autres comptes transitoires;3;D;TRUE;BILAN;ACTIF;Comptes transitoires et d'attente - actif
 378100;Virements internes de fonds - transit caisses;3;D;TRUE;BILAN;ACTIF;Comptes transitoires et d'attente - actif

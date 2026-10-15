@@ -39,6 +39,13 @@ intérêts) et un nombre de lignes VARIABLE (la ligne CREDIT ou la ligne PRODUIT
 <= 0). Décision : ne pas complexifier un moteur partagé par 3 modules pour un cas
 structurellement différent (voir migration 0034).
 
+TVA SUR LES INTÉRÊTS (migration 0069) : le versement ne se ventile plus en deux mais en trois —
+capital, intérêts HT, TVA. Le bloc « intérêts + TVA » d'une échéance se règle AVANT le capital ;
+la TVA suit les intérêts effectivement encaissés (`echeancier.repartir_bloc_interets`, fonction
+du cumul encaissé : la somme des TVA des versements partiels égale exactement la TVA de
+l'échéance). La TVA est créditée au compte d'État du produit (`compte_tva_id`, 332100). Un
+produit exonéré (taux 0) ne produit aucune ligne de TVA : comportement strictement inchangé.
+
 VENTILATION INTÉRÊTS D'ABORD (défaut PROVISOIRE, convention bancaire courante — à valider,
 voir docs/conformite-credit.md). Déduite de `montant_paye` (avant CE versement), AUCUNE colonne
 dédiée : les intérêts déjà couverts sont `min(montant_paye_avant, echeance.interets)`, ce
@@ -71,7 +78,11 @@ from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import Journal, JournalEntry
 from app.modules.credit.decaissement import RattachementManquantError
 from app.modules.credit.demandes import RESSOURCE, CreditError
-from app.modules.credit.echeancier import calculer_interets_courus
+from app.modules.credit.echeancier import (
+    calculer_interets_courus,
+    calculer_tva,
+    repartir_bloc_interets,
+)
 from app.modules.credit.models import Application, DelinquencyTier, Installment, Product, Repayment
 
 CODE_JOURNAL = "CA"  # journal de caisse — même journal que le décaissement
@@ -96,6 +107,7 @@ class ResultatRemboursement:
     montant: int
     montant_capital: int
     montant_interets: int
+    montant_tva: int
     paid_at: datetime
     solde_du: int
     echeance_soldee: bool
@@ -169,7 +181,7 @@ def encours_actuel(db: Session, application_id: uuid.UUID) -> int:
     if echeance is None:
         return 0
     encours_avant_cette_echeance = echeance.capital_restant_du + echeance.capital
-    part_capital_deja_versee = max(0, echeance.montant_paye - echeance.interets)
+    part_capital_deja_versee = max(0, echeance.montant_paye - echeance.interets - echeance.tva)
     return encours_avant_cette_echeance - part_capital_deja_versee
 
 
@@ -218,11 +230,21 @@ def rembourser(
         )
 
     # Ventilation intérêts d'abord (PROVISOIRE) : déduite de montant_paye_avant, aucune colonne
-    # dédiée — voir docstring module.
-    interets_deja_couverts = min(montant_paye_avant, echeance.interets)
-    interets_restants = echeance.interets - interets_deja_couverts
-    part_interets = min(montant, interets_restants)
-    part_capital = montant - part_interets
+    # dédiée — voir docstring module. Le bloc « intérêts + TVA » passe avant le capital.
+    produit = db.get(Product, demande.product_id)
+    assert produit is not None  # FK NOT NULL depuis demandes.creer_demande
+    bloc = echeance.interets + echeance.tva
+    cumul_avant = min(montant_paye_avant, bloc)
+    cumul_apres = min(montant_paye_avant + montant, bloc)
+    interets_avant, tva_avant = repartir_bloc_interets(
+        cumul_avant, echeance.interets, echeance.tva, produit.regle_arrondi
+    )
+    interets_apres, tva_apres = repartir_bloc_interets(
+        cumul_apres, echeance.interets, echeance.tva, produit.regle_arrondi
+    )
+    part_interets = interets_apres - interets_avant
+    part_tva = tva_apres - tva_avant
+    part_capital = montant - part_interets - part_tva
 
     # D CAISSE (guichet, défaut) ou D le compte fourni par l'appelant (CR5d : le collectif
     # épargne du tiers) — voir docstring module. Bloc C6 : le guichet volontaire (cette
@@ -255,8 +277,7 @@ def rembourser(
             )
         )
     if part_interets > 0:
-        produit = db.get(Product, demande.product_id)
-        if produit is None or produit.compte_produits_interets_id is None:
+        if produit.compte_produits_interets_id is None:
             raise RattachementManquantError(
                 "ce produit de crédit n'a pas de compte de produits d'intérêts rattaché "
                 "(plan comptable)"
@@ -267,6 +288,20 @@ def rembourser(
                 side="C",
                 amount=part_interets,
                 label=f"{reference} (intérêts)",
+            )
+        )
+    if part_tva > 0:
+        if produit.compte_tva_id is None:
+            raise RattachementManquantError(
+                "ce produit de crédit n'a pas de compte de TVA collectée rattaché "
+                "(plan comptable)"
+            )
+        lignes.append(
+            LigneSaisie(
+                account_id=produit.compte_tva_id,
+                side="C",
+                amount=part_tva,
+                label=f"{reference} (TVA)",
             )
         )
 
@@ -304,6 +339,7 @@ def rembourser(
             application_id=demande.id,
             montant_capital=part_capital,
             montant_interets=part_interets,
+            montant_tva=part_tva,
             montant_total=montant,
             entry_id=entry.id,
             paid_by=par,
@@ -324,6 +360,7 @@ def rembourser(
             "numero": echeance.numero,
             "montant_capital": part_capital,
             "montant_interets": part_interets,
+            "montant_tva": part_tva,
             "montant_total": montant,
             "montant_paye": nouveau_montant_paye,
             "status": echeance.status,
@@ -335,6 +372,7 @@ def rembourser(
         montant=montant,
         montant_capital=part_capital,
         montant_interets=part_interets,
+        montant_tva=part_tva,
         paid_at=maintenant,
         solde_du=echeance.total - nouveau_montant_paye,
         echeance_soldee=echeance_soldee,
@@ -378,10 +416,11 @@ class ResultatSoldeAnticipe:
     demande: Application
     capital_regle: int
     interets_courus: int
-    montant_total: int
+    montant_total: int  # capital + intérêts courus + TVA sur ces intérêts
     jours_courus: int
     solde_at: datetime
     entry_id: uuid.UUID
+    tva_courue: int = 0
 
 
 @dataclass(frozen=True)
@@ -394,9 +433,10 @@ class DetailSoldeAnticipe:
 
     capital_restant: int
     interets_courus: int
-    montant_total: int
+    montant_total: int  # capital + intérêts courus + TVA sur ces intérêts (capital non taxé)
     date_reference: date
     jours_courus: int
+    tva_courue: int = 0
 
 
 def _date_reference_interets_courus(db: Session, demande: Application) -> date:
@@ -465,12 +505,19 @@ def _detail_solde_anticipe(db: Session, demande: Application, *, jour: date) -> 
             "(plan comptable)"
         )
 
+    tva_courue = calculer_tva(interets_courus, produit.taux_tva_bp, produit.regle_arrondi)
+    if tva_courue > 0 and produit.compte_tva_id is None:
+        raise RattachementManquantError(
+            "ce produit de crédit n'a pas de compte de TVA collectée rattaché (plan comptable)"
+        )
+
     return DetailSoldeAnticipe(
         capital_restant=capital_restant,
         interets_courus=interets_courus,
-        montant_total=capital_restant + interets_courus,
+        montant_total=capital_restant + interets_courus + tva_courue,
         date_reference=date_reference,
         jours_courus=jours,
+        tva_courue=tva_courue,
     )
 
 
@@ -518,6 +565,7 @@ def solder_par_anticipation(
     detail = _detail_solde_anticipe(db, demande, jour=jour)
     capital_restant = detail.capital_restant
     interets_courus = detail.interets_courus
+    tva_courue = detail.tva_courue
     montant_total = detail.montant_total
     jours = detail.jours_courus
 
@@ -544,6 +592,17 @@ def solder_par_anticipation(
                 side="C",
                 amount=interets_courus,
                 label=f"{reference} (intérêts courus)",
+            )
+        )
+    if tva_courue > 0:
+        # Rattachement déjà vérifié par _detail_solde_anticipe (RattachementManquantError sinon).
+        assert produit.compte_tva_id is not None
+        lignes.append(
+            LigneSaisie(
+                account_id=produit.compte_tva_id,
+                side="C",
+                amount=tva_courue,
+                label=f"{reference} (TVA sur intérêts courus)",
             )
         )
 
@@ -579,6 +638,7 @@ def solder_par_anticipation(
             "status": "solde",
             "capital_regle": capital_restant,
             "interets_courus": interets_courus,
+            "tva_courue": tva_courue,
             "montant_total": montant_total,
             "jours_courus": jours,
             "entry_number": entry.entry_number,
@@ -592,4 +652,5 @@ def solder_par_anticipation(
         jours_courus=jours,
         solde_at=maintenant,
         entry_id=entry.id,
+        tva_courue=tva_courue,
     )

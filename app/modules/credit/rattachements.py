@@ -3,7 +3,8 @@ premier bloc « comptable » que le crédit n'avait pas encore — contrairement
 avait déjà ces deux écrans avant le chantier « gestion des produits »).
 
 Distinct de `gestion_produits.py` (lot 3a, cycle de vie + paramètres métier, admin fonctionnel,
-`credit.product.manage`) : ici, la LECTURE et l'ÉCRITURE des 3 comptes eux-mêmes, depuis
+`credit.product.manage`) : ici, la LECTURE et l'ÉCRITURE des 4 comptes eux-mêmes (crédit membre,
+crédit client, produits d'intérêts, TVA collectée), depuis
 l'écran du comptable (`compta.plan.manage`). `decaissement.py`/`remboursement.py` gèrent déjà
 proprement un rattachement absent (refus humain à la résolution, `RattachementManquantError`) —
 vider un rattachement est donc une action LÉGITIME ici, pas une erreur.
@@ -35,11 +36,12 @@ def modifier_rattachements(
     compte_credit_membre_number: str | None,
     compte_credit_client_number: str | None,
     compte_produits_interets_number: str | None,
+    compte_tva_number: str | None,
     motif: str,
     par: uuid.UUID | None,
     contexte: ContexteRequete = CONTEXTE_VIDE,
 ) -> Product:
-    """Re-pointe les 3 rattachements — MOTIF obligatoire, tracé avant/après. Les garde-fous de
+    """Re-pointe les 4 rattachements — MOTIF obligatoire, tracé avant/après. Les garde-fous de
     `compte_saisie_actif` remontent TELS QUELS si l'un des comptes soumis est invalide.
 
     Aucune vérification de cohérence avec `is_provisional` ici : un produit déjà VALIDÉ garde
@@ -63,6 +65,8 @@ def modifier_rattachements(
         else None
     )
 
+    nouveau_tva = compte_saisie_actif(db, compte_tva_number) if compte_tva_number else None
+
     def _numero(account_id: uuid.UUID | None) -> str | None:
         if account_id is None:
             return None
@@ -73,11 +77,13 @@ def modifier_rattachements(
         "compte_credit_membre": _numero(produit.compte_credit_membre_id),
         "compte_credit_client": _numero(produit.compte_credit_client_id),
         "compte_produits_interets": _numero(produit.compte_produits_interets_id),
+        "compte_tva": _numero(produit.compte_tva_id),
     }
 
     produit.compte_credit_membre_id = nouveau_membre.id if nouveau_membre else None
     produit.compte_credit_client_id = nouveau_client.id if nouveau_client else None
     produit.compte_produits_interets_id = nouveau_interets.id if nouveau_interets else None
+    produit.compte_tva_id = nouveau_tva.id if nouveau_tva else None
     produit.updated_by = par
     db.flush()
 
@@ -93,6 +99,7 @@ def modifier_rattachements(
             "compte_credit_membre": compte_credit_membre_number,
             "compte_credit_client": compte_credit_client_number,
             "compte_produits_interets": compte_produits_interets_number,
+            "compte_tva": compte_tva_number,
             "motif": motif,
         },
     )

@@ -16,7 +16,7 @@ où `base_jours` est un paramètre VIVANT du calcul d'intérêts (`epargne/inter
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, localcontext
 
 PERIODES_PAR_AN = {"mensuelle": 12, "trimestrielle": 4, "annuelle": 1}
@@ -31,8 +31,9 @@ class Echeance:
     numero: int
     capital: int
     interets: int
-    total: int
+    total: int  # total TTC : capital + intérêts + TVA
     capital_restant_du: int
+    tva: int = 0  # TVA sur les intérêts de l'échéance (0 si produit exonéré)
 
 
 def _arrondir(valeur: Decimal, regle_arrondi: str) -> int:
@@ -48,8 +49,13 @@ def generer_echeancier(
     periodicite: str,
     methode_amortissement: str,
     regle_arrondi: str,
+    taux_tva_bp: int = 0,
 ) -> list[Echeance]:
     """Calcule l'échéancier théorique d'un crédit à échéances fixes. Pure, sans effet de bord.
+
+    `taux_tva_bp` : TVA sur les INTÉRÊTS (jamais sur le capital), arrondie selon la règle du
+    produit. Elle s'ajoute APRÈS l'amortissement : capital, intérêts et capital restant dû sont
+    identiques à ceux d'un produit exonéré ; seul `total` (TTC) et `tva` changent.
 
     Lève EcheancierImpossibleError si la combinaison de paramètres ne permet pas de
     produire un échéancier où capital_restant_du reste toujours >= 0 — plutôt que de
@@ -73,8 +79,48 @@ def generer_echeancier(
         )
 
         if methode_amortissement == "capital_constant":
-            return _generer_capital_constant(montant, taux_periode, duree_echeances, regle_arrondi)
-        return _generer_echeance_constante(montant, taux_periode, duree_echeances, regle_arrondi)
+            ht = _generer_capital_constant(montant, taux_periode, duree_echeances, regle_arrondi)
+        else:
+            ht = _generer_echeance_constante(montant, taux_periode, duree_echeances, regle_arrondi)
+    if taux_tva_bp <= 0:
+        return ht
+    return [_avec_tva(e, taux_tva_bp, regle_arrondi) for e in ht]
+
+
+def calculer_tva(interets: int, taux_tva_bp: int, regle_arrondi: str) -> int:
+    """TVA sur `interets` (francs entiers) : taux_tva_bp x interets / 10000, arrondie selon la
+    règle du produit. 0 si le taux ou les intérêts sont nuls."""
+    if interets <= 0 or taux_tva_bp <= 0:
+        return 0
+    return _arrondir(Decimal(taux_tva_bp) * Decimal(interets) / Decimal(10000), regle_arrondi)
+
+
+def _avec_tva(echeance: Echeance, taux_tva_bp: int, regle_arrondi: str) -> Echeance:
+    tva = calculer_tva(echeance.interets, taux_tva_bp, regle_arrondi)
+    return replace(echeance, tva=tva, total=echeance.capital + echeance.interets + tva)
+
+
+def repartir_bloc_interets(
+    cumul: int, interets: int, tva: int, regle_arrondi: str
+) -> tuple[int, int]:
+    """Répartit `cumul` francs encaissés sur le bloc « intérêts + TVA » d'une échéance entre la
+    part d'intérêts et la part de TVA. Le bloc se règle AVANT le capital (intérêts d'abord).
+
+    Fonction du CUMUL encaissé (pas du versement) : la répartition d'un versement est la
+    différence entre la répartition après lui et celle avant lui. Les parts de TVA des versements
+    successifs d'une même échéance s'additionnent donc EXACTEMENT à la TVA de l'échéance, quel
+    que soit le découpage (la dernière fraction absorbe l'arrondi). Sans TVA, tout le cumul va
+    aux intérêts."""
+    bloc = interets + tva
+    cumul = max(0, min(cumul, bloc))
+    if cumul >= bloc:
+        return interets, tva
+    if tva == 0:
+        return cumul, 0
+    part_interets = min(
+        interets, _arrondir(Decimal(cumul) * Decimal(interets) / Decimal(bloc), regle_arrondi)
+    )
+    return part_interets, cumul - part_interets
 
 
 def _generer_capital_constant(

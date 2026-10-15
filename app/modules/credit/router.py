@@ -193,6 +193,7 @@ def _vers_detail(produit: Product) -> ProduitCreditDetail:
         base_jours=produit.base_jours,
         regle_arrondi=produit.regle_arrondi,
         taux_usure_max_bp=produit.taux_usure_max_bp,
+        taux_tva_bp=produit.taux_tva_bp,
     )
 
 
@@ -227,6 +228,7 @@ def creer_produit_endpoint(
             methode_amortissement=corps.methode_amortissement,
             regle_arrondi=corps.regle_arrondi,
             taux_usure_max_bp=corps.taux_usure_max_bp,
+            taux_tva_bp=corps.taux_tva_bp,
             par=courant.user_id,
             contexte=_contexte(request),
         )
@@ -271,6 +273,7 @@ def modifier_produit_endpoint(
             methode_amortissement=corps.methode_amortissement,
             regle_arrondi=corps.regle_arrondi,
             taux_usure_max_bp=corps.taux_usure_max_bp,
+            taux_tva_bp=corps.taux_tva_bp,
             motif=corps.motif,
             par=courant.user_id,
             contexte=_contexte(request),
@@ -365,6 +368,7 @@ def _vers_rattachements(db: Session, produit: Product) -> RattachementsProduitCr
         compte_credit_membre=_compte_rattachement(db, produit.compte_credit_membre_id),
         compte_credit_client=_compte_rattachement(db, produit.compte_credit_client_id),
         compte_produits_interets=_compte_rattachement(db, produit.compte_produits_interets_id),
+        compte_tva=_compte_rattachement(db, produit.compte_tva_id),
     )
 
 
@@ -408,6 +412,7 @@ def modifier_rattachements_produit_endpoint(
             compte_credit_membre_number=corps.compte_credit_membre,
             compte_credit_client_number=corps.compte_credit_client,
             compte_produits_interets_number=corps.compte_produits_interets,
+            compte_tva_number=corps.compte_tva,
             motif=corps.motif,
             par=courant.user_id,
             contexte=_contexte(request),
@@ -616,6 +621,7 @@ def apercu_echeancier_endpoint(
             due_date=e.due_date,
             capital=e.capital,
             interets=e.interets,
+            tva=e.tva,
             total=e.total,
             capital_restant_du=e.capital_restant_du,
         )
@@ -729,6 +735,7 @@ def lire_echeancier_endpoint(
             due_date=e.due_date,
             capital=e.capital,
             interets=e.interets,
+            tva=e.tva,
             total=e.total,
             capital_restant_du=e.capital_restant_du,
             status=e.status,
@@ -769,6 +776,7 @@ def rechercher_remboursement_endpoint(
                         due_date=echeance.due_date,
                         capital=echeance.capital,
                         interets=echeance.interets,
+                        tva=echeance.tva,
                         total=echeance.total,
                         montant_paye=echeance.montant_paye,
                         solde_du=echeance.total - echeance.montant_paye,
@@ -832,6 +840,7 @@ def rembourser_endpoint(
         due_date=echeance.due_date,
         capital=resultat.montant_capital,
         interets=resultat.montant_interets,
+        tva=resultat.montant_tva,
         montant_total=resultat.montant,
         paid_at=resultat.paid_at,
         solde_du=resultat.solde_du,
@@ -882,6 +891,7 @@ def apercu_solde_anticipe_endpoint(
     return ApercuSoldeAnticipe(
         capital_restant=detail.capital_restant,
         interets_courus=detail.interets_courus,
+        tva_courue=detail.tva_courue,
         montant_total=detail.montant_total,
         date_reference_interets=detail.date_reference,
         jours_courus=detail.jours_courus,
@@ -932,6 +942,7 @@ def solder_par_anticipation_endpoint(
     return SoldeAnticipeRecu(
         capital_regle=resultat.capital_regle,
         interets_courus=resultat.interets_courus,
+        tva_courue=resultat.tva_courue,
         montant_total=resultat.montant_total,
         jours_courus=resultat.jours_courus,
         solde_at=resultat.solde_at,

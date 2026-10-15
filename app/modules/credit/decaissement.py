@@ -84,8 +84,9 @@ class EcheanceApercu:
     due_date: date
     capital: int
     interets: int
-    total: int
+    total: int  # total TTC : capital + intérêts + TVA
     capital_restant_du: int
+    tva: int = 0
 
 
 def _ajouter_periode(depart: date, periodicite: str) -> date:
@@ -188,6 +189,11 @@ def decaisser(
             "ce produit de crédit n'a pas de compte de crédit rattaché (plan comptable) "
             "pour ce tiers"
         )
+    if produit.taux_tva_bp > 0 and produit.compte_tva_id is None:
+        raise RattachementManquantError(
+            "ce produit de crédit est soumis à la TVA mais n'a pas de compte de TVA collectée "
+            "rattaché (plan comptable)"
+        )
 
     jour = entry_date
     if jour is None:
@@ -250,6 +256,7 @@ def decaisser(
         periodicite=produit.periodicite,
         methode_amortissement=produit.methode_amortissement,
         regle_arrondi=produit.regle_arrondi,
+        taux_tva_bp=produit.taux_tva_bp,
     )
 
     for echeance, echeance_date in _dater_echeances(db, echeances, jour, produit.periodicite):
@@ -260,6 +267,7 @@ def decaisser(
                 due_date=echeance_date,
                 capital=echeance.capital,
                 interets=echeance.interets,
+                tva=echeance.tva,
                 total=echeance.total,
                 capital_restant_du=echeance.capital_restant_du,
             )
@@ -369,6 +377,7 @@ def generer_apercu(
         periodicite=produit.periodicite,
         methode_amortissement=produit.methode_amortissement,
         regle_arrondi=produit.regle_arrondi,
+        taux_tva_bp=produit.taux_tva_bp,
     )
     return [
         EcheanceApercu(
@@ -376,6 +385,7 @@ def generer_apercu(
             due_date=echeance_date,
             capital=echeance.capital,
             interets=echeance.interets,
+            tva=echeance.tva,
             total=echeance.total,
             capital_restant_du=echeance.capital_restant_du,
         )

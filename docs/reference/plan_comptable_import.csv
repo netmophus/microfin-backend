@@ -159,6 +159,7 @@
 331;Débiteurs divers;;3;33;D;FALSE;TRUE;
 3319;Autres créances en souffrance et provisions pour dépréciation;;3;331;D;TRUE;TRUE;
 332;Créditeurs divers;;3;33;C;TRUE;TRUE;
+332100;État, TVA collectée à reverser;;3;332;C;TRUE;TRUE;
 37;COMPTES TRANSITOIRES ET D'ATTENTE;;3;;D;FALSE;TRUE;
 378;Autres comptes transitoires;;3;37;D;TRUE;TRUE;
 378100;Virements internes de fonds - transit caisses;;3;378;D;TRUE;TRUE;

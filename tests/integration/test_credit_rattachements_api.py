@@ -109,6 +109,7 @@ CORPS_VIDE = {
     "compte_credit_membre": None,
     "compte_credit_client": None,
     "compte_produits_interets": None,
+    "compte_tva": None,
     "motif": "Tentative",
 }
 
@@ -146,12 +147,13 @@ def test_lecture_produit_introuvable_404(client: TestClient, db: Session) -> Non
 # --- Écriture : succès, motif, audit ------------------------------------------------------
 
 
-def test_modification_reussie_des_3_comptes_avec_motif_trace(
+def test_modification_reussie_des_4_comptes_avec_motif_trace(
     client: TestClient, db: Session
 ) -> None:
     membre = _compte(db, "461211")
     client_compte = _compte(db, "461221")
     interets = _compte(db, "752111", account_class=7, normal_side="C")
+    tva = _compte(db, "332190", normal_side="C")
     produit = _produit(db, code="PC-MOD")
     comptable = _entete_auth(db, "COMPTABLE")
 
@@ -161,6 +163,7 @@ def test_modification_reussie_des_3_comptes_avec_motif_trace(
             "compte_credit_membre": membre.account_number,
             "compte_credit_client": client_compte.account_number,
             "compte_produits_interets": interets.account_number,
+            "compte_tva": tva.account_number,
             "motif": "Rattachement initial du produit",
         },
         headers=comptable,
@@ -171,6 +174,7 @@ def test_modification_reussie_des_3_comptes_avec_motif_trace(
     assert corps["compte_credit_membre"]["account_number"] == "461211"
     assert corps["compte_credit_client"]["account_number"] == "461221"
     assert corps["compte_produits_interets"]["account_number"] == "752111"
+    assert corps["compte_tva"]["account_number"] == "332190"
 
     ligne = db.execute(
         text(
@@ -181,6 +185,7 @@ def test_modification_reussie_des_3_comptes_avec_motif_trace(
     ).one()
     assert ligne.old_values["compte_credit_membre"] is None
     assert ligne.new_values["motif"] == "Rattachement initial du produit"
+    assert ligne.new_values["compte_tva"] == "332190"
 
 
 def test_modification_motif_absent_refusee(client: TestClient, db: Session) -> None:
@@ -228,6 +233,7 @@ def test_modification_possible_sur_produit_deja_valide(client: TestClient, db: S
             "compte_credit_membre": nouveau_membre.account_number,
             "compte_credit_client": None,
             "compte_produits_interets": None,
+            "compte_tva": None,
             "motif": "Correction après coup",
         },
         headers=comptable,
@@ -256,6 +262,7 @@ def test_compte_de_regroupement_soumis_directement_est_refuse(
             "compte_credit_membre": regroupement.account_number,
             "compte_credit_client": None,
             "compte_produits_interets": None,
+            "compte_tva": None,
             "motif": "Tentative de contournement du sélecteur",
         },
         headers=comptable,
@@ -283,6 +290,7 @@ def test_compte_desactive_soumis_directement_est_refuse(client: TestClient, db: 
             "compte_credit_membre": desactive.account_number,
             "compte_credit_client": None,
             "compte_produits_interets": None,
+            "compte_tva": None,
             "motif": "Tentative de contournement du sélecteur",
         },
         headers=comptable,
