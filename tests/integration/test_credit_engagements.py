@@ -27,6 +27,7 @@ from app.modules.credit.models import Installment, Product
 from app.modules.credit.remboursement import rembourser
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.tiers.cycle_de_vie import EngagementsOuvertsError, executer_transition
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -152,7 +153,8 @@ def _ouvrir_session_caisse(db: Session, agency_id: uuid.UUID) -> uuid.UUID:
             user_id=uid, roles=(), permissions=frozenset(),
             primary_agency_id=agency_id, agency_id=agency_id, voit_tout=True,
         )
-        ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+        session_caisse = ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+        alimenter_compte(db, session_caisse.compte_caisse_id)
     return uid
 
 

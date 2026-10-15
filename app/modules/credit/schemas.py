@@ -249,6 +249,18 @@ class EcheanceDue(BaseModel):
     solde_du: int
 
 
+class DossierDecaissable(BaseModel):
+    """Un résultat de recherche du guichet de décaissement : un dossier APPROUVÉ."""
+
+    id: uuid.UUID
+    application_number: str
+    tier_number: str
+    tier_nom: str
+    product_name: str
+    montant_decide: int
+    duree_echeances: int
+
+
 class DossierRemboursable(BaseModel):
     """Un résultat de recherche du guichet (CR6d). `prochaine_echeance` absente (None) = ce
     crédit est déjà entièrement soldé — affiché tel quel, jamais un résultat qui échouerait

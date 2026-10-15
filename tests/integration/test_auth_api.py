@@ -411,6 +411,7 @@ def test_me_renvoie_l_identite_et_les_permissions(
             "tiers.shares.pay",
             "tiers.shares.read",
             "credit.remboursement.create",
+            "credit.decaissement.create",
             "caisse.session.open",
             "caisse.session.close",
             "caisse.session.read",

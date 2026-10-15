@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -47,7 +47,7 @@ from app.modules.caisse.ecart_operations import RattachementEcartManquantError, 
 from app.modules.caisse.models import CaisseParametres, CaisseSession, Poste, PosteAssignation
 from app.modules.caisse.postes import PosteIntrouvableError
 from app.modules.comptabilite import journee
-from app.modules.comptabilite.models import Account
+from app.modules.comptabilite.models import Account, JournalEntry, JournalLine
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.models import User
@@ -59,6 +59,32 @@ PERMISSION_LECTURE_AUTRES = "caisse.session.read.autres"
 
 TAILLE_PAGE_DEFAUT = 25
 TAILLE_PAGE_MAX = 100
+
+
+def solde_grand_livre(db: Session, compte_id: uuid.UUID) -> int:
+    """Solde d'un compte au GRAND LIVRE (écritures validées, selon le sens normal du compte) —
+    la vérité serveur, pas le théorique d'une session. Le compte est verrouillé le temps de la
+    transaction : deux sorties simultanées ne peuvent pas dépenser deux fois le même solde."""
+    compte = db.execute(
+        select(Account).where(Account.id == compte_id).with_for_update()
+    ).scalar_one()
+    total = db.execute(
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (JournalLine.side == compte.normal_side, JournalLine.amount),
+                        else_=-JournalLine.amount,
+                    )
+                ),
+                0,
+            )
+        )
+        .select_from(JournalLine)
+        .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+        .where(JournalLine.account_id == compte.id, JournalEntry.status == "validee")
+    ).scalar_one()
+    return int(total)
 
 
 class JourneeFermeeError(Exception):

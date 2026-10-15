@@ -31,6 +31,7 @@ from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.jwt import creer_access_token, decoder_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -166,7 +167,7 @@ def _ouvrir_session_caisse(db: Session, agence: Agency) -> uuid.UUID:
         db.flush()
         db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
         db.flush()
-        ouvrir_session(
+        session_caisse = ouvrir_session(
             db,
             UtilisateurCourant(
                 user_id=uid, roles=(), permissions=frozenset(),
@@ -174,6 +175,7 @@ def _ouvrir_session_caisse(db: Session, agence: Agency) -> uuid.UUID:
             ),
             poste_id=poste.id, fonds_initial=0,
         )
+        alimenter_compte(db, session_caisse.compte_caisse_id)
     return uid
 
 
@@ -193,7 +195,7 @@ def _ouvrir_session_caisse_acteur(db: Session, agence: Agency, entete: dict[str,
     db.flush()
     db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
     db.flush()
-    ouvrir_session(
+    session_caisse = ouvrir_session(
         db,
         UtilisateurCourant(
             user_id=user_id, roles=(), permissions=frozenset(),
@@ -201,6 +203,7 @@ def _ouvrir_session_caisse_acteur(db: Session, agence: Agency, entete: dict[str,
         ),
         poste_id=poste.id, fonds_initial=0,
     )
+    alimenter_compte(db, session_caisse.compte_caisse_id)
 
 
 def _demande_decaissee(

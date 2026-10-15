@@ -200,6 +200,7 @@ def test_une_permission_hors_matrice_est_revoquee(session: Session) -> None:
         "tiers.shares.pay",
         "tiers.shares.read",
         "credit.remboursement.create",
+        "credit.decaissement.create",
         "caisse.session.open",
         "caisse.session.close",
         "caisse.session.read",

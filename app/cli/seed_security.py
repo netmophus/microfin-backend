@@ -468,6 +468,10 @@ MATRICE: dict[str, frozenset[str]] = {
             "tiers.shares.pay",  # le caissier ENCAISSE la libération / le comptant (l'argent entre)
             "tiers.shares.read",
             "credit.remboursement.create",  # même logique : encaisser une échéance, l'argent entre
+            # Décaissement en espèces au guichet : l'argent sort de SA session de caisse (sans
+            # session ouverte le serveur refuse). Pas de credit.demande.read : il ne voit que les
+            # dossiers approuvés remontés par la recherche du guichet.
+            "credit.decaissement.create",
             "caisse.session.open",
             "caisse.session.close",
             "caisse.session.read",

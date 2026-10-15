@@ -73,11 +73,11 @@ from app.modules.caisse.models import (
     Poste,
     Transfert,
 )
-from app.modules.caisse.service import TAILLE_PAGE_DEFAUT, TAILLE_PAGE_MAX
+from app.modules.caisse.service import TAILLE_PAGE_DEFAUT, TAILLE_PAGE_MAX, solde_grand_livre
 from app.modules.comptabilite import ecritures
 from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.comptabilite.journee import date_comptable_obligatoire
-from app.modules.comptabilite.models import Account, EntrySchema, JournalEntry, JournalLine
+from app.modules.comptabilite.models import Account, EntrySchema
 from app.modules.comptabilite.schemas_ecriture import (
     SchemaIntrouvableError,
     SchemaSansJournalError,
@@ -256,31 +256,8 @@ def _francs(montant: int) -> str:
 
 
 def _verifier_solde_source(db: Session, compte_source_id: uuid.UUID, montant: int) -> None:
-    """Refuse un envoi supérieur au solde du compte source AU GRAND LIVRE (écritures validées,
-    selon le sens normal du compte) — la vérité serveur, pas le théorique d'une session. Le
-    compte est verrouillé le temps de la transaction : deux envois simultanés ne peuvent pas
-    dépenser deux fois le même solde. L'égalité est acceptée."""
-    compte = db.execute(
-        select(Account).where(Account.id == compte_source_id).with_for_update()
-    ).scalar_one()
-    disponible = int(
-        db.execute(
-            select(
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (JournalLine.side == compte.normal_side, JournalLine.amount),
-                            else_=-JournalLine.amount,
-                        )
-                    ),
-                    0,
-                )
-            )
-            .select_from(JournalLine)
-            .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
-            .where(JournalLine.account_id == compte.id, JournalEntry.status == "validee")
-        ).scalar_one()
-    )
+    """Refuse un envoi supérieur au solde du compte source au grand livre ; l'égalité passe."""
+    disponible = solde_grand_livre(db, compte_source_id)
     if montant > disponible:
         raise SoldeInsuffisantError(disponible, montant)
 

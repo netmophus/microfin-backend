@@ -49,7 +49,7 @@ from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
 from app.modules.tiers.parts_operations import TYPE_SOUSCRIPTION_COMPTANT, poser_ecriture_parts
-from tests.integration.test_caisse_transferts import alimenter_compte
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -140,7 +140,7 @@ def _poste_assigne_et_session_ouverte(
     db.flush()
     db.add(PosteAssignation(poste_id=poste.id, user_id=user_id))
     db.flush()
-    ouvrir_session(
+    session_caisse = ouvrir_session(
         db,
         UtilisateurCourant(
             user_id=user_id, roles=(), permissions=frozenset(),
@@ -148,6 +148,7 @@ def _poste_assigne_et_session_ouverte(
         ),
         poste_id=poste.id, fonds_initial=0,
     )
+    alimenter_compte(db, session_caisse.compte_caisse_id)
 
 
 # --- Décaissement et remboursement (même dossier, deux étapes) --------------------------------

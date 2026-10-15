@@ -56,14 +56,14 @@ from app.modules.caisse.transferts import (
     initier_transfert,
     receptionner_transfert,
 )
-from app.modules.comptabilite import ecritures, journee
+from app.modules.comptabilite import journee
 from app.modules.comptabilite.comptes import CompteInvalideRattachementError
-from app.modules.comptabilite.ecritures import LigneSaisie
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
 from app.modules.security.jwt import creer_access_token
 from app.modules.security.models import Role, User, UserRole
 from app.modules.security.password import hasher_mot_de_passe
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -127,33 +127,6 @@ def _solde(db: Session, compte_id: uuid.UUID) -> int:
         ),
         {"c": compte_id},
     ).scalar_one()
-
-
-FONDS_SOURCE = 10_000_000
-
-
-def alimenter_compte(
-    db: Session, compte_id: uuid.UUID, montant: int = FONDS_SOURCE, jour: object = None
-) -> None:
-    """Pose une pièce VALIDÉE D compte / C 1141 : depuis le contrôle de solde des transferts, une
-    source doit contenir au grand livre ce qu'on en envoie. Contrepartie 1141 (liaison) : peu
-    importe, seule la source est lue."""
-    journal_id = db.execute(
-        text("SELECT journal_id FROM comptabilite.entry_schemas WHERE code = :c"),
-        {"c": "caisse.transfert.envoi"},
-    ).scalar_one()
-    entree = ecritures.creer_brouillon(
-        db,
-        journal_id=journal_id,
-        entry_date=jour or journee.date_comptable_courante(db),  # type: ignore[arg-type]
-        description="Alimentation de test",
-        lignes=[
-            LigneSaisie(account_id=compte_id, side="D", amount=montant),
-            LigneSaisie(account_id=_cid(db, "1141"), side="C", amount=montant),
-        ],
-        par=None,
-    )
-    ecritures.valider(db, entree, None)
 
 
 def _lignes(db: Session, entry_id: uuid.UUID) -> list[tuple[str, int]]:

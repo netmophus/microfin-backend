@@ -39,6 +39,7 @@ from app.modules.credit.models import Installment, Product
 from app.modules.credit.reclassification import jours_de_retard
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -177,7 +178,7 @@ def test_decaissement_reel_stocke_la_date_reportee_et_la_souffrance_la_lit(db: S
     db.flush()
     db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
     db.flush()
-    ouvrir_session(
+    session_caisse = ouvrir_session(
         db,
         UtilisateurCourant(
             user_id=uid, roles=(), permissions=frozenset(),
@@ -185,6 +186,7 @@ def test_decaissement_reel_stocke_la_date_reportee_et_la_souffrance_la_lit(db: S
         ),
         poste_id=poste.id, fonds_initial=0,
     )
+    alimenter_compte(db, session_caisse.compte_caisse_id)
 
     decaisser(db, demande, par=uid)
 
@@ -239,7 +241,7 @@ def test_echeance_non_encore_due_un_dimanche_nest_pas_comptee_en_retard(db: Sess
     db.flush()
     db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
     db.flush()
-    ouvrir_session(
+    session_caisse = ouvrir_session(
         db,
         UtilisateurCourant(
             user_id=uid, roles=(), permissions=frozenset(),
@@ -247,6 +249,7 @@ def test_echeance_non_encore_due_un_dimanche_nest_pas_comptee_en_retard(db: Sess
         ),
         poste_id=poste.id, fonds_initial=0,
     )
+    alimenter_compte(db, session_caisse.compte_caisse_id)
 
     decaisser(db, demande, par=uid)
 

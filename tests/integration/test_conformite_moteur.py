@@ -49,6 +49,7 @@ from app.modules.credit.demandes import creer_demande, decider
 from app.modules.credit.models import Product
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -518,7 +519,7 @@ def _decaisser_pour(
     if session_ouverte is not None:
         decaisser(db, demande, par=uid)
         return
-    ouvrir_session(
+    session_caisse = ouvrir_session(
         db,
         UtilisateurCourant(
             user_id=uid,
@@ -531,6 +532,7 @@ def _decaisser_pour(
         poste_id=poste_id,
         fonds_initial=0,
     )
+    alimenter_compte(db, session_caisse.compte_caisse_id)
     decaisser(db, demande, par=uid)
 
 

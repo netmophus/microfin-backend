@@ -42,7 +42,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.modules.audit.service import CONTEXTE_VIDE, ContexteRequete, ecrire_audit
-from app.modules.caisse.service import resoudre_session_active
+from app.modules.caisse.service import resoudre_session_active, solde_grand_livre
 from app.modules.comptabilite import calendrier
 from app.modules.comptabilite.journee import date_comptable_obligatoire
 from app.modules.comptabilite.models import JournalEntry
@@ -125,6 +125,21 @@ def _dater_echeances(
         date_reportee = calendrier.prochain_jour_ouvre(db, echeance_date)
         resultat.append((echeance, date_reportee))
     return resultat
+
+
+class SoldeCaisseInsuffisantError(CreditError):
+    """La caisse de la session ne contient pas le montant à décaisser."""
+
+    def __init__(self, disponible: int, demande: int) -> None:
+        super().__init__(
+            "Solde de caisse insuffisant pour ce décaissement : "
+            f"disponible {_francs(disponible)} F, à décaisser {_francs(demande)} F. "
+            "Faites alimenter votre caisse puis recommencez."
+        )
+
+
+def _francs(montant: int) -> str:
+    return f"{montant:,}".replace(",", "\u00a0")
 
 
 def decaisser(
@@ -226,6 +241,10 @@ def decaisser(
         # l'écriture, jamais celui de l'agence. Ne concerne QUE ce mode : mode='epargne'
         # (ci-dessus) est un virement comptable interne, aucun compte de caisse en jeu.
         compte_destination = resoudre_session_active(db, par).compte_caisse_id
+        disponible = solde_grand_livre(db, compte_destination)
+        assert demande.montant_decide is not None  # une demande approuvée a toujours son montant
+        if demande.montant_decide > disponible:
+            raise SoldeCaisseInsuffisantError(disponible, demande.montant_decide)
         code_ecriture = CODE_DECAISSEMENT
         description = f"Décaissement crédit {demande.application_number}"
 

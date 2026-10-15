@@ -40,6 +40,7 @@ from app.modules.epargne.models import Product as EpargneProduct
 from app.modules.epargne.models import SavingsAccount, SavingsMovement
 from app.modules.parameters.models import Agency
 from app.modules.security.autorisation import UtilisateurCourant
+from tests.integration.aides_caisse import alimenter_compte
 
 pytestmark = pytest.mark.integration
 
@@ -186,7 +187,8 @@ def _caissier(db: Session, agence: Agency) -> UtilisateurCourant:
         db.flush()
         db.add(PosteAssignation(poste_id=poste.id, user_id=uid))
         db.flush()
-        ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+        session_caisse = ouvrir_session(db, courant, poste_id=poste.id, fonds_initial=0)
+        alimenter_compte(db, session_caisse.compte_caisse_id)
     return courant
 
 

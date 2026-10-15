@@ -112,6 +112,25 @@ def rechercher_remboursables(db: Session, courant: UtilisateurCourant, q: str) -
     ).all()
 
 
+def rechercher_decaissables(db: Session, courant: UtilisateurCourant, q: str) -> Sequence[Any]:
+    """Demandes APPROUVÉES (prêtes à décaisser) du périmètre dont le numéro de dossier, le numéro
+    de tiers ou le nom correspond à `q` — recherche du guichet de décaissement."""
+    motif = f"%{q}%"
+    return db.execute(
+        _requete_demandes(courant)
+        .where(
+            Application.status == "approuve",
+            or_(
+                Application.application_number.ilike(motif),
+                _T.c.tier_number.ilike(motif),
+                _nom_tier().ilike(motif),
+            ),
+        )
+        .order_by(Application.created_at.desc())
+        .limit(20)
+    ).all()
+
+
 def lire_echeancier(
     db: Session, courant: UtilisateurCourant, application_id: uuid.UUID
 ) -> Sequence[Installment]:

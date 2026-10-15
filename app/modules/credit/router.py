@@ -55,6 +55,7 @@ from app.modules.credit import consultation, delinquency_parametres, gestion_pro
 from app.modules.credit.decaissement import (
     DemandeNonApprouveeError,
     RattachementManquantError,
+    SoldeCaisseInsuffisantError,
     decaisser,
     generer_apercu,
 )
@@ -107,6 +108,7 @@ from app.modules.credit.schemas import (
     DemandeDecaissee,
     DemandeDetail,
     DemandeResume,
+    DossierDecaissable,
     DossierRemboursable,
     EcheanceApercuLigne,
     EcheanceDue,
@@ -674,6 +676,7 @@ def decaisser_endpoint(
         CompteInvalideError,
         AucuneSessionOuverteError,
         AucuneJourneeOuverteError,
+        SoldeCaisseInsuffisantError,
     ) as erreur:
         db.rollback()
         raise HTTPException(
@@ -743,6 +746,73 @@ def lire_echeancier_endpoint(
             solde_du=e.total - e.montant_paye,
         )
         for e in consultation.lire_echeancier(db, courant, application_id)
+    ]
+
+
+@router.get("/credit/recherche-decaissement", response_model=list[DossierDecaissable])
+def rechercher_decaissement_endpoint(
+    q: str,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.decaissement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DossierDecaissable]:
+    """Trouve les dossiers APPROUVÉS du périmètre, par numéro de dossier, numéro de tiers ou nom
+    (recherche du guichet de décaissement). Gardée sur `credit.decaissement.create`, pas sur
+    `credit.demande.read` : le caissier ne voit que ce qu'il peut décaisser, comme pour la
+    recherche de remboursement."""
+    return [
+        DossierDecaissable(
+            id=demande.id,
+            application_number=demande.application_number,
+            tier_number=tier_number,
+            tier_nom=tier_nom,
+            product_name=produit.name,
+            montant_decide=demande.montant_decide or 0,
+            duree_echeances=demande.duree_echeances,
+        )
+        for demande, produit, tier_number, tier_nom, _is_member in (
+            consultation.rechercher_decaissables(db, courant, q.strip())
+        )
+    ]
+
+
+@router.get(
+    "/credit/recherche-decaissement/{application_id}/echeancier-apercu",
+    response_model=list[EcheanceApercuLigne],
+)
+def apercu_decaissement_guichet_endpoint(
+    application_id: uuid.UUID,
+    courant: Annotated[UtilisateurCourant, Depends(exige("credit.decaissement.create"))],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[EcheanceApercuLigne]:
+    """Aperçu de l'échéancier d'un dossier APPROUVÉ pour le guichet de décaissement. Gardé sur
+    `credit.decaissement.create` ; un dossier hors périmètre ou non approuvé est introuvable."""
+    ligne = consultation.lire_demande(db, courant, application_id)
+    if ligne is None or ligne[0].status != "approuve":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=MESSAGE_DEMANDE_INTROUVABLE
+        )
+    try:
+        echeances = generer_apercu(db, ligne[0])
+    except (
+        DemandeNonApprouveeError,
+        ProduitIntrouvableError,
+        EcheancierImpossibleError,
+        AucuneJourneeOuverteError,
+    ) as erreur:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(erreur)
+        ) from None
+    return [
+        EcheanceApercuLigne(
+            numero=e.numero,
+            due_date=e.due_date,
+            capital=e.capital,
+            interets=e.interets,
+            tva=e.tva,
+            total=e.total,
+            capital_restant_du=e.capital_restant_du,
+        )
+        for e in echeances
     ]
 
 
