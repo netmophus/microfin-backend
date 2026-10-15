@@ -87,8 +87,12 @@ def test_la_souscription_comptant_archive_son_recu(db: Session, client: TestClie
     texte = _texte(archive)
     assert len(_pdf(archive).pages) == 1
     for attendu in (
-        "Reçu de souscription de parts sociales", f"Reçu n° {corps['entry_number']}",
-        "Nombre de parts", "5 000 F", "50 000 F", "cinquante mille francs CFA",
+        "Reçu de souscription de parts sociales",
+        f"Reçu n° {corps['entry_number']}",
+        "Nombre de parts",
+        "5 000 F",
+        "50 000 F",
+        "cinquante mille francs CFA",
         "Signature du client (facultative)",
     ):
         assert attendu in texte, attendu
@@ -134,7 +138,8 @@ def test_le_remboursement_archive_son_recu_signature_obligatoire(
     responsable = _entete(db, agence, "RESPONSABLE_AGENCE")
     _ouvrir_session_caisse(db, agence, responsable)
     client.post(
-        f"/tiers/{tier_id}/parts/souscription-comptant", json={"shares_count": 10},
+        f"/tiers/{tier_id}/parts/souscription-comptant",
+        json={"shares_count": 10},
         headers=responsable,
     )
 
@@ -196,9 +201,11 @@ def test_la_lettre_est_archivee_une_seule_fois(db: Session, client: TestClient) 
 
     assert premiere.status_code == 200, premiere.text
     assert seconde.json() == premiere.json()  # la 2e demande rend l'archive, ne régénère pas
-    archives = db.execute(
-        select(Archive).where(Archive.type == "lettre_explication_ecart")
-    ).scalars().all()
+    archives = (
+        db.execute(select(Archive).where(Archive.type == "lettre_explication_ecart"))
+        .scalars()
+        .all()
+    )
     assert len(archives) == 1
     archive = archives[0]
     assert (archive.module, archive.statut) == ("caisse", "ok")
@@ -210,8 +217,14 @@ def test_la_lettre_est_archivee_une_seule_fois(db: Session, client: TestClient) 
     texte = _texte(archive)
     assert len(_pdf(archive).pages) == 1
     for attendu in (
-        "Lettre de demande d'explication", "Souley Awa", "10 000 F", "4 000 F", "6 000 F",
-        "Écart (manquant)", "48 heures", "RÉPONSE DU CAISSIER",
+        "Lettre de demande d'explication",
+        "Souley Awa",
+        "10 000 F",
+        "4 000 F",
+        "6 000 F",
+        "Écart (manquant)",
+        "48 heures",
+        "RÉPONSE DU CAISSIER",
         "Signature et cachet du responsable",
     ):
         assert attendu in texte, attendu
@@ -224,7 +237,8 @@ def test_pas_de_lettre_pour_une_session_sans_manquant(db: Session, client: TestC
         select(CaisseSession).where(CaisseSession.caissier_id == c.caissier.id)
     ).scalar_one()
     client.post(
-        f"/caisse/sessions/{session.id}/fermeture", json={"montant_reel": 10_000},
+        f"/caisse/sessions/{session.id}/fermeture",
+        json={"montant_reel": 10_000},
         headers=c.entete,
     )
 

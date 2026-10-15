@@ -3,7 +3,6 @@ fabrique plus de document). Table de cas de référence en français correct (tr
 pluriels de « vingt » et « cent »).
 """
 
-
 import pytest
 
 from app.modules.documents.montant_en_lettres import montant_en_lettres
@@ -57,7 +56,6 @@ CAS: list[tuple[int, str]] = [
         "neuf cent quatre-vingt-dix-neuf mille neuf cent quatre-vingt-dix-neuf francs CFA",
     ),
 ]
-
 
 
 @pytest.mark.parametrize(("montant", "lettres"), CAS)

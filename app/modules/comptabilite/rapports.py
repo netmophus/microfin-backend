@@ -13,8 +13,9 @@ un compte de passif (toujours "négatif" en brut alors qu'il porte un solde cré
 import uuid
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
-from sqlalchemy import case, func, select
+from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.comptabilite.models import Account, Journal, JournalEntry, JournalLine
@@ -43,7 +44,7 @@ class LigneGrandLivreResultat:
     entry_number: str | None
     journal_code: str
     label: str
-    side: str
+    side: Literal["D", "C"]
     amount: int
     solde_cumule: int
 
@@ -56,10 +57,22 @@ class GrandLivreResultat:
     total: int
 
 
+def _cote(valeur: str) -> Literal["D", "C"]:
+    """Sens d'une ligne d'écriture (colonne CHAR(1)) ; toute autre valeur est refusée."""
+    if valeur == "D":
+        return "D"
+    if valeur == "C":
+        return "C"
+    raise ValueError(f"Sens d'écriture inattendu : {valeur!r}")
+
+
 def _conditions_lignes(
     compte_id: uuid.UUID, date_debut: date | None, date_fin: date | None
-) -> list:
-    conditions: list = [JournalLine.account_id == compte_id, JournalEntry.status == "validee"]
+) -> list[ColumnElement[bool]]:
+    conditions: list[ColumnElement[bool]] = [
+        JournalLine.account_id == compte_id,
+        JournalEntry.status == "validee",
+    ]
     if date_debut is not None:
         conditions.append(JournalEntry.entry_date >= date_debut)
     if date_fin is not None:
@@ -160,7 +173,7 @@ def grand_livre(
                 entry_number=entree.entry_number,
                 journal_code=journal.code,
                 label=ligne.label or entree.description,
-                side=ligne.side,
+                side=_cote(ligne.side),
                 amount=ligne.amount,
                 solde_cumule=solde,
             )
@@ -190,7 +203,9 @@ class BalanceResultat:
     total_credit: int
 
 
-def _agreger_par_compte(db: Session, conditions: list) -> dict[uuid.UUID, tuple[int, int]]:
+def _agreger_par_compte(
+    db: Session, conditions: list[ColumnElement[bool]]
+) -> dict[uuid.UUID, tuple[int, int]]:
     """Σdébit / Σcrédit BRUTS par compte, sous les conditions données."""
     stmt = (
         select(
@@ -223,7 +238,7 @@ def balance(
     Par défaut, seuls les comptes AYANT eu un mouvement sur la période apparaissent
     (`inclure_sans_mouvement=False`) : sinon la balance afficherait ~380 lignes à zéro.
     """
-    conditions_periode: list = [JournalEntry.status == "validee"]
+    conditions_periode: list[ColumnElement[bool]] = [JournalEntry.status == "validee"]
     if date_debut is not None:
         conditions_periode.append(JournalEntry.entry_date >= date_debut)
     if date_fin is not None:

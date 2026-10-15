@@ -94,6 +94,9 @@ from app.modules.tiers.parts import (
     rembourser,
     souscrire,
 )
+from app.modules.tiers.parts import (
+    ResultatParts as ResultatPartsService,
+)
 from app.modules.tiers.parts import TierIntrouvableError as PartsTierIntrouvable
 from app.modules.tiers.parts import (
     consulter as consulter_parts,
@@ -553,7 +556,9 @@ def lire_parts_endpoint(
     )
 
 
-def _resultat_parts(resultat: object, document: Archive | None = None) -> ResultatParts:
+def _resultat_parts(
+    resultat: ResultatPartsService, document: Archive | None = None
+) -> ResultatParts:
     return ResultatParts(
         is_member=resultat.is_member,
         shares_liberees=resultat.shares_liberees,
